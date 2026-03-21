@@ -3,25 +3,30 @@ package service
 import (
 	"context"
 	"fmt"
+	"go-llm-demo/internal/server/infra/provider"
 	"strings"
 
 	"go-llm-demo/internal/server/domain"
 )
 
 type chatServiceImpl struct {
-	memorySvc domain.MemoryService
-	roleSvc   domain.RoleService
-	provider  domain.ChatProvider
+	memorySvc  domain.MemoryService
+	workingSvc domain.WorkingMemoryService
+	roleSvc    domain.RoleService
+	//provider   domain.ChatProvider
 }
 
-func NewChatService(memorySvc domain.MemoryService, roleSvc domain.RoleService, provider domain.ChatProvider) domain.ChatGateway {
+// NewChatService 使用记忆、角色和模型提供方依赖创建聊天服务。
+func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, roleSvc domain.RoleService, provider domain.ChatProvider) domain.ChatGateway {
 	return &chatServiceImpl{
-		memorySvc: memorySvc,
-		roleSvc:   roleSvc,
-		provider:  provider,
+		memorySvc:  memorySvc,
+		workingSvc: workingSvc,
+		roleSvc:    roleSvc,
+		//provider:   provider,
 	}
 }
 
+// Send 为消息补充角色和记忆上下文后发起流式回复。
 func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan string, error) {
 	messages := req.Messages
 
@@ -43,21 +48,40 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 	}
 
 	userInput := s.latestUserInput(messages)
+	workingContext := ""
+	if s.workingSvc != nil {
+		workingContext, err = s.workingSvc.BuildContext(ctx, messages)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if userInput != "" {
 		memoryContext, err := s.memorySvc.BuildContext(ctx, userInput)
 		if err != nil {
 			return nil, err
 		}
-		if memoryContext != "" {
+		combinedContext := joinContextBlocks(workingContext, memoryContext)
+		if combinedContext != "" {
 			if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
-				messages[0].Content = rolePrompt + "\n\n" + memoryContext
+				messages[0].Content = rolePrompt + "\n\n" + combinedContext
 			} else {
-				messages = append([]domain.Message{{Role: "system", Content: memoryContext}}, messages...)
+				messages = append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
 			}
+		}
+	} else if workingContext != "" {
+		if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
+			messages[0].Content = rolePrompt + "\n\n" + workingContext
+		} else {
+			messages = append([]domain.Message{{Role: "system", Content: workingContext}}, messages...)
 		}
 	}
 
-	out, err := s.provider.Chat(ctx, messages)
+	chatProvider, err := provider.NewChatProvider(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	out, err := chatProvider.Chat(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +96,15 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 			resultChan <- chunk
 		}
 
-		if userInput != "" && replyBuilder.Len() > 0 {
-			if err := s.memorySvc.Save(context.Background(), userInput, replyBuilder.String()); err != nil {
+		if s.latestUserInput(messages) != "" && replyBuilder.Len() > 0 {
+			if s.workingSvc != nil {
+				updatedMessages := append([]domain.Message{}, req.Messages...)
+				updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
+				if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
+					fmt.Printf("工作记忆刷新失败：%v\n", err)
+				}
+			}
+			if err := s.memorySvc.Save(context.Background(), s.latestUserInput(messages), replyBuilder.String()); err != nil {
 				fmt.Printf("记忆保存失败：%v\n", err)
 			}
 		}
@@ -89,4 +120,16 @@ func (s *chatServiceImpl) latestUserInput(messages []domain.Message) string {
 		}
 	}
 	return ""
+}
+
+func joinContextBlocks(blocks ...string) string {
+	filtered := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		filtered = append(filtered, block)
+	}
+	return strings.Join(filtered, "\n\n")
 }
