@@ -3,26 +3,25 @@ package service
 import (
 	"context"
 	"fmt"
-	"go-llm-demo/internal/server/infra/provider"
 	"strings"
 
 	"go-llm-demo/internal/server/domain"
 )
 
 type chatServiceImpl struct {
-	memorySvc  domain.MemoryService
-	workingSvc domain.WorkingMemoryService
-	roleSvc    domain.RoleService
-	//provider   domain.ChatProvider
+	memorySvc    domain.MemoryService
+	workingSvc   domain.WorkingMemoryService
+	roleSvc      domain.RoleService
+	chatProvider domain.ChatProvider
 }
 
 // NewChatService 使用记忆、角色和模型提供方依赖创建聊天服务。
-func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, roleSvc domain.RoleService, provider domain.ChatProvider) domain.ChatGateway {
+func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, roleSvc domain.RoleService, chatProvider domain.ChatProvider) domain.ChatGateway {
 	return &chatServiceImpl{
-		memorySvc:  memorySvc,
-		workingSvc: workingSvc,
-		roleSvc:    roleSvc,
-		//provider:   provider,
+		memorySvc:    memorySvc,
+		workingSvc:   workingSvc,
+		roleSvc:      roleSvc,
+		chatProvider: chatProvider,
 	}
 }
 
@@ -76,12 +75,7 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		}
 	}
 
-	chatProvider, err := provider.NewChatProvider(req.Model)
-	if err != nil {
-		return nil, err
-	}
-
-	out, err := chatProvider.Chat(ctx, messages)
+	out, err := s.chatProvider.Chat(ctx, messages)
 	if err != nil {
 		return nil, err
 	}

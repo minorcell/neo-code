@@ -1,211 +1,108 @@
 package core
 
 import (
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"go-llm-demo/internal/tui/components"
 )
 
 func (m Model) View() string {
-	var content string
-
-	switch m.mode {
-	case ModeHelp:
-		content = RenderHelp(m.width)
-	default:
-		content = m.chatView()
+	if m.width < 20 || m.height < 6 {
+		return "窗口太小"
 	}
 
 	statusHeight := 1
-	inputHeight := 2
 	helpHeight := 0
-
 	if m.mode == ModeHelp {
-		helpHeight = 20
+		helpHeight = minInt(20, m.height-statusHeight-3)
 	}
 
-	availableHeight := m.height - statusHeight - inputHeight - helpHeight
-	if availableHeight < 5 {
-		availableHeight = 5
+	inputContent := m.renderInputArea()
+	inputHeight := countLines(inputContent)
+	if inputHeight < 4 {
+		inputHeight = 4
+	}
+
+	contentHeight := m.height - statusHeight - inputHeight - helpHeight
+	if contentHeight < 3 {
+		contentHeight = 3
 	}
 
 	statusBar := lipgloss.NewStyle().
 		Height(statusHeight).
 		Width(m.width).
-		Render(RenderStatusBar(m.activeModel, m.memoryStats.TotalItems, m.generating, m.width))
+		Render(components.StatusBar{
+			Model:      m.activeModel,
+			MemoryCnt:  m.memoryStats.TotalItems,
+			Generating: m.generating,
+			Width:      m.width,
+		}.Render())
 
-	padding := availableHeight - countLines(content)
-	if padding > 0 {
-		content += lipgloss.NewStyle().
-			Height(padding).
-			Render("")
-	}
+	viewportView := m.viewport
+	viewportView.SetContent(m.renderChatContent())
+	chatArea := lipgloss.NewStyle().
+		Width(m.width).
+		Height(contentHeight).
+		Render(viewportView.View())
 
 	inputArea := lipgloss.NewStyle().
-		Height(inputHeight).
 		Width(m.width).
-		Render(RenderInput(m.inputBuffer, m.waitingCode, m.codeDelim, m.codeLines, m.width))
+		Render(inputContent)
 
-	return statusBar + content + inputArea
-}
+	if m.mode == ModeHelp {
+		help := lipgloss.NewStyle().
+			Width(m.width).
+			Height(helpHeight).
+			Render(RenderHelp(m.width))
+		return lipgloss.JoinVertical(lipgloss.Left, statusBar, chatArea, help, inputArea)
+	}
 
-func (m Model) chatView() string {
-	return RenderMessages(m.messages, m.width)
+	return lipgloss.JoinVertical(lipgloss.Left, statusBar, chatArea, inputArea)
 }
 
 func countLines(s string) int {
 	if s == "" {
 		return 0
 	}
-	count := 1
-	for _, c := range s {
-		if c == '\n' {
-			count++
-		}
-	}
-	return count
+	return strings.Count(s, "\n") + 1
 }
 
-func RenderMessages(messages []Message, width int) string {
-	if len(messages) == 0 {
-		return ""
+func (m Model) renderInputArea() string {
+	helpText := "[Enter换行 F5/F8发送 PgUp/PgDn滚动]"
+	if !m.generating {
+		helpText = "[Enter换行 F5/F8发送 Ctrl+V粘贴 PgUp/PgDn滚动]"
 	}
 
-	var b strings.Builder
+	footer := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#5C6370")).
+		Render(helpText)
 
-	visibleMessages := messages
-	startIdx := 0
-	if len(messages) > 50 {
-		startIdx = len(messages) - 50
-		visibleMessages = messages[startIdx:]
-	}
-
-	for _, msg := range visibleMessages {
-		idx := startIdx
-		switch msg.Role {
-		case "user":
-			b.WriteString(userMsgStyle.Render(fmt.Sprintf("[%d] 你:", idx)))
-			b.WriteString(" ")
-			b.WriteString(msg.Content)
-			b.WriteString("\n\n")
-
-		case "assistant":
-			b.WriteString(assistantMsgStyle.Render(fmt.Sprintf("[%d] Neo:", idx)))
-			b.WriteString("\n")
-			b.WriteString(renderContent(msg.Content))
-			b.WriteString("\n\n")
-
-		case "system":
-			b.WriteString(systemMsgStyle.Render("[系统]"))
-			b.WriteString(" ")
-			b.WriteString(msg.Content)
-			b.WriteString("\n\n")
-		}
-
-		startIdx++
-	}
-
-	return b.String()
+	return m.textarea.View() + "\n" + footer
 }
 
-func renderContent(content string) string {
-	if content == "" {
-		return "..."
-	}
-
-	lines := strings.Split(content, "\n")
-	var b strings.Builder
-
-	inCodeBlock := false
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			if !inCodeBlock {
-				inCodeBlock = true
-				b.WriteString(codeBlockStyle.Render("\n" + line + "\n"))
-			} else {
-				inCodeBlock = false
-				b.WriteString(codeBlockStyle.Render(line + "\n"))
-			}
-			continue
-		}
-
-		if inCodeBlock {
-			b.WriteString(codeBlockStyle.Render(line))
-			b.WriteString("\n")
-		} else {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
+func (m Model) renderChatContent() string {
+	return components.MessageList{Messages: m.toComponentMessages(), Width: m.viewport.Width}.Render()
 }
 
-func RenderInput(buffer string, waitingCode bool, codeDelim string, codeLines []string, width int) string {
-	var b strings.Builder
-
-	if waitingCode {
-		b.WriteString(helpStyle.Render(fmt.Sprintf("┌─ 代码输入 (%s ... %s) ─┐", codeDelim, codeDelim)))
-		b.WriteString("\n")
-
-		for i, line := range codeLines {
-			b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
+func (m Model) toComponentMessages() []components.Message {
+	messages := make([]components.Message, len(m.messages))
+	for i, msg := range m.messages {
+		messages[i] = components.Message{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+			Streaming: msg.Streaming,
 		}
-
-		b.WriteString("│    │ " + lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF")).Render(buffer))
-		b.WriteString("\n")
-		b.WriteString("└─ Ctrl+D 发送 · Ctrl+C 取消 ─┘")
-	} else {
-		prompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#61AFEF")).
-			Bold(true).Render("› ")
-
-		b.WriteString(prompt)
-		b.WriteString(buffer)
-		b.WriteString("█")
 	}
-
-	return b.String()
+	return messages
 }
 
-func RenderStatusBar(model string, memoryItems int, generating bool, width int) string {
-	var b strings.Builder
-
-	modelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#98C379")).
-		Background(lipgloss.Color("#282C34")).
-		Padding(0, 1)
-
-	memStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#C678DD")).
-		Background(lipgloss.Color("#282C34")).
-		Padding(0, 1)
-
-	status := "●"
-	if generating {
-		status = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E5C07B")).
-			Render("◐")
+func minInt(a, b int) int {
+	if a < b {
+		return a
 	}
-
-	timeStr := time.Now().Format("15:04")
-
-	b.WriteString(modelStyle.Render(model))
-	b.WriteString("  ")
-	b.WriteString(memStyle.Render(fmt.Sprintf("记忆: %d", memoryItems)))
-	b.WriteString("  ")
-	b.WriteString(status)
-
-	space := width - len(model) - len(fmt.Sprintf("记忆: %d", memoryItems)) - len(timeStr) - 10
-	if space > 0 {
-		b.WriteString(strings.Repeat(" ", space))
-	}
-
-	b.WriteString(timestampStyle.Render(timeStr))
-
-	return b.String()
+	return b
 }
 
 func RenderHelp(width int) string {
@@ -224,8 +121,10 @@ func RenderHelp(width int) string {
 		desc string
 	}{
 		{"/help", "显示帮助"},
+		{"/apikey <env_name>", "切换 API Key 变量名"},
+		{"/provider <name>", "切换模型提供商"},
 		{"/switch <model>", "切换模型"},
-		{"/models", "列出可用模型"},
+		{"/models", "查看当前提供商模型列表"},
 		{"/run <code>", "执行代码"},
 		{"/explain <code>", "解释代码"},
 		{"/memory", "显示记忆统计"},
@@ -241,6 +140,12 @@ func RenderHelp(width int) string {
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#ABB2BF"))
 
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#5C6370"))
+
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#61AFEF"))
+
 	for _, c := range commands {
 		b.WriteString(cmdStyle.Render(c.cmd))
 		b.WriteString(descStyle.Render(c.desc))
@@ -248,14 +153,14 @@ func RenderHelp(width int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("多行输入: ''' / \"\"\" / ``` 包裹代码"))
+	b.WriteString(helpStyle.Render("输入框支持光标、粘贴、滚动，F5/F8 发送"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("发送: Enter 发送单行, Ctrl+D 发送代码块"))
+	b.WriteString(helpStyle.Render("聊天区支持 PgUp/PgDn 和鼠标滚轮"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
 
 	b.WriteString("\n\n")
 	b.WriteString(dimStyle.Render("按 Esc 或 /help 关闭"))
 
-	return b.String()
+	return lipgloss.NewStyle().MaxWidth(width).Render(b.String())
 }
