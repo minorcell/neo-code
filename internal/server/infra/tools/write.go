@@ -2,8 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
 type WriteTool struct{}
@@ -36,10 +34,7 @@ func (w *WriteTool) Run(params map[string]interface{}) *ToolResult {
 		return errRes
 	}
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return &ToolResult{ToolName: w.Definition().Name, Success: false, Error: fmt.Sprintf("创建目录失败: %v", err)}
-	}
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+	if err := AtomicWrite(filePath, []byte(content)); err != nil {
 		return &ToolResult{ToolName: w.Definition().Name, Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
 	}
 	return &ToolResult{ToolName: w.Definition().Name, Success: true, Output: fmt.Sprintf("成功写入 %s", filePath), Metadata: map[string]interface{}{"filePath": filePath, "bytesWritten": len(content)}}

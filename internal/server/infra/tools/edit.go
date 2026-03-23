@@ -67,7 +67,7 @@ func (e *EditTool) Run(params map[string]interface{}) *ToolResult {
 		replacements = strings.Count(fileContent, oldString)
 		newContent = strings.ReplaceAll(fileContent, oldString, newString)
 	}
-	if err := os.WriteFile(filePath, []byte(newContent), 0o644); err != nil {
+	if err := AtomicWrite(filePath, []byte(newContent)); err != nil {
 		return &ToolResult{ToolName: e.Definition().Name, Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
 	}
 	return &ToolResult{ToolName: e.Definition().Name, Success: true, Output: fmt.Sprintf("成功替换 %d 处匹配项", replacements), Metadata: map[string]interface{}{"filePath": filePath, "oldString": oldString, "newString": newString, "replaceAll": replaceAll, "replacements": replacements, "bytesWritten": len(newContent)}}
