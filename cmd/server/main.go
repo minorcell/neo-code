@@ -6,10 +6,21 @@ import (
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/infra/provider"
 	"go-llm-demo/internal/server/infra/repository"
+	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/server/service"
 )
 
 func main() {
+	workspaceRoot, err := tools.ResolveWorkspaceRoot("")
+	if err != nil {
+		fmt.Printf("解析工作区失败：%v\n", err)
+		return
+	}
+	if err := tools.SetWorkspaceRoot(workspaceRoot); err != nil {
+		fmt.Printf("设置工作区失败：%v\n", err)
+		return
+	}
+
 	if err := configs.LoadAppConfig("config.yaml"); err != nil {
 		fmt.Printf("加载配置失败：%v\n", err)
 		return
@@ -28,7 +39,7 @@ func main() {
 		cfg.Memory.StoragePath,
 		cfg.Memory.PersistTypes,
 	)
-	workingSvc := service.NewWorkingMemoryService(workingRepo, cfg.History.ShortTermTurns)
+	workingSvc := service.NewWorkingMemoryService(workingRepo, cfg.History.ShortTermTurns, tools.GetWorkspaceRoot())
 
 	roleRepo := repository.NewFileRoleStore("./data/roles.json")
 	roleSvc := service.NewRoleService(roleRepo, cfg.Persona.FilePath)

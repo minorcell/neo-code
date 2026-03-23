@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/infra/provider"
+	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/core"
 	"go-llm-demo/internal/tui/infra"
 
@@ -19,7 +21,20 @@ import (
 )
 
 func main() {
+	workspaceFlag := flag.String("workspace", "", "指定工作区根目录")
+	flag.Parse()
+
 	setUTF8Mode()
+
+	workspaceRoot, err := tools.ResolveWorkspaceRoot(*workspaceFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析工作区失败: %v\n", err)
+		os.Exit(1)
+	}
+	if err := tools.SetWorkspaceRoot(workspaceRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "设置工作区失败: %v\n", err)
+		os.Exit(1)
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	ready, err := ensureAPIKeyInteractive(context.Background(), scanner, "config.yaml")
@@ -51,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	model := core.NewModel(client, persona, historyTurns, "config.yaml")
+	model := core.NewModel(client, persona, historyTurns, "config.yaml", workspaceRoot)
 	p := tea.NewProgram(model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
