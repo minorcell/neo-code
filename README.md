@@ -23,7 +23,7 @@
 - `ai.api_key` 填写的是环境变量名；留空时会回退到 `AI_API_KEY`
 - 如果 Key 校验失败，可使用 `/apikey <env_name>` 或 `/provider <name>` 调整配置
 - 如果网络异常导致无法确认 Key 是否有效，可使用 `/retry`、`/continue`、`/apikey <env_name>`、`/provider <name>`、`/models`、`/switch <model>` 或 `/exit`
-- 支持的 provider：`modelscope`、`deepseek`、`siliconflow`、`豆包大模型`、`openai`
+- 支持的 provider：`modelscope`、`deepseek`、`openll`、`siliconflow`、`豆包大模型`、`openai`
 - 只有 `modelscope` 会通过 `/models` 显示内置模型列表；其他 provider 需要手动设置 `ai.model`
 
 ## API Key 配置
@@ -112,7 +112,7 @@ models:
 说明：
 
 - `ai.api_key`：API Key 对应的环境变量名；为空时回退到 `AI_API_KEY`
-- `ai.provider`：当前模型提供商，支持 `modelscope`、`deepseek`、`siliconflow`、`豆包大模型`、`openai`
+- `ai.provider`：当前模型提供商，支持 `modelscope`、`deepseek`、`openll`、`siliconflow`、`豆包大模型`、`openai`
 - `ai.model`：当前 provider 使用的模型名；非 `modelscope` 需要手动填写或通过 `/switch <model>` 设置
 - `memory.storage_path`：长期结构化记忆文件
 - `memory.persist_types`：允许持久化的结构化记忆类型
