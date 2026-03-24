@@ -10,6 +10,7 @@
 
 # Code coverage profiles and other test artifacts
 cover
+coverage
 *.out
 coverage.*
 *.coverprofile
