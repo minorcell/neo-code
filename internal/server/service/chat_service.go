@@ -63,26 +63,17 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		todoContext = buildTodoContext(todos)
 	}
 
+	blocks := []string{workingContext, todoContext}
 	if userInput != "" {
-		memoryContext, err := s.memorySvc.BuildContext(ctx, userInput)
-		if err != nil {
-			return nil, err
+		memoryContext, ctxErr := s.memorySvc.BuildContext(ctx, userInput)
+		if ctxErr != nil {
+			return nil, ctxErr
 		}
-		combinedContext := joinContextBlocks(workingContext, todoContext, memoryContext)
-		if combinedContext != "" {
-			if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
-				messages[0].Content = rolePrompt + "\n\n" + combinedContext
-			} else {
-				messages = append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
-			}
-		}
-	} else if workingContext != "" || todoContext != "" {
-		combinedContext := joinContextBlocks(workingContext, todoContext)
-		if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
-			messages[0].Content = rolePrompt + "\n\n" + combinedContext
-		} else {
-			messages = append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
-		}
+		blocks = append(blocks, memoryContext)
+	}
+	combinedContext := joinContextBlocks(blocks...)
+	if combinedContext != "" {
+		messages = injectSystemContext(messages, rolePrompt, combinedContext)
 	}
 
 	out, err := s.chatProvider.Chat(ctx, messages)
@@ -138,6 +129,14 @@ func buildTodoContext(todos []domain.Todo) string {
 		sb.WriteString(fmt.Sprintf("- %s: %s (status: %s, priority: %s)\n", todo.ID, todo.Content, todo.Status, todo.Priority))
 	}
 	return sb.String()
+}
+
+func injectSystemContext(messages []domain.Message, rolePrompt, combinedContext string) []domain.Message {
+	if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
+		messages[0].Content = rolePrompt + "\n\n" + combinedContext
+		return messages
+	}
+	return append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
 }
 
 func joinContextBlocks(blocks ...string) string {
