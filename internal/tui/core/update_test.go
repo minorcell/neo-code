@@ -283,7 +283,7 @@ func TestHandleCommandAPIKeyRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/apikey TEST_ENV")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandAPIKeyEnvStillMissing(t *testing.T) {
@@ -461,7 +461,7 @@ func TestHandleCommandProviderRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/provider openai")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandProviderWriteFailure(t *testing.T) {
@@ -562,7 +562,7 @@ func TestHandleCommandSwitchRequiresLoadedConfig(t *testing.T) {
 
 	updated, _ := m.handleCommand("/switch gpt-5.4")
 	got := updated.(Model)
-	assertLastMessageContains(t, got, "配置")
+	assertLastMessageContains(t, got, "configuration")
 }
 
 func TestHandleCommandSwitchWriteFailure(t *testing.T) {

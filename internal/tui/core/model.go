@@ -57,7 +57,7 @@ func NewModel(client services.ChatClient, persona string, historyTurns int, conf
 	blurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAB2C0"))
 	input.FocusedStyle = focusedStyle
 	input.BlurredStyle = blurredStyle
-	input.Placeholder = "输入消息..."
+	input.Placeholder = "Type a message..."
 	input.Focus()
 	input.ShowLineNumbers = false
 	input.SetHeight(3)
