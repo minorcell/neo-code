@@ -82,7 +82,7 @@ func NewChatProvider(model string) (domain.ChatProvider, error) {
 // ValidateChatAPIKey 按当前提供方配置校验运行时 API Key。
 func ValidateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) error {
 	if cfg == nil {
-		return fmt.Errorf("配置不能为空")
+		return fmt.Errorf("config cannot be nil")
 	}
 
 	providerName := providerNameFromConfig(cfg)
