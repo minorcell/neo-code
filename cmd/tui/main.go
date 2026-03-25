@@ -94,7 +94,7 @@ func runWithDeps(workspaceFlag string, deps runDeps) error {
 	}
 
 	if err := initializeSecurity(filepath.Join(workspaceRoot, "configs", "security")); err != nil {
-		return fmt.Errorf("鍒濆鍖栧畨鍏ㄧ瓥鐣ュけ璐? %w", err)
+		return fmt.Errorf("安全策略初始化失败：%w", err)
 	}
 
 	scanner := bufio.NewScanner(deps.stdin)
