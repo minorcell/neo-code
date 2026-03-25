@@ -2,10 +2,13 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
@@ -104,5 +107,112 @@ func TestChatCompletionProviderChatReturnsErrorOnBadStatus(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "model not found") {
 		t.Fatalf("expected model error in message, got: %v", err)
+	}
+}
+
+func TestChatCompletionProviderChatStreamsFallbackMessageOnMalformedChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {invalid json}\n"))
+	}))
+	defer server.Close()
+
+	p := &ChatCompletionProvider{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+
+	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("expected stream request to succeed, got error: %v", err)
+	}
+
+	var output strings.Builder
+	for chunk := range stream {
+		output.WriteString(chunk)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "[STREAM_ERROR]") {
+		t.Fatalf("expected fallback stream error marker, got: %q", got)
+	}
+	if !strings.Contains(got, "chat stream decode failed") {
+		t.Fatalf("expected decode failure details, got: %q", got)
+	}
+}
+
+func TestChatCompletionProviderChatStreamsFallbackMessageOnUnexpectedEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := &ChatCompletionProvider{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "test-model",
+	}
+
+	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("expected stream request to succeed, got error: %v", err)
+	}
+
+	var output strings.Builder
+	for chunk := range stream {
+		output.WriteString(chunk)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "[STREAM_ERROR]") {
+		t.Fatalf("expected fallback stream error marker, got: %q", got)
+	}
+	if !strings.Contains(got, "unexpectedly before completion") {
+		t.Fatalf("expected EOF fallback details, got: %q", got)
+	}
+}
+
+func TestEmitStreamErrorMessageIgnoresNilError(t *testing.T) {
+	out := make(chan string, 1)
+	emitStreamErrorMessage(context.Background(), out, nil)
+
+	select {
+	case got := <-out:
+		t.Fatalf("expected no message for nil error, got %q", got)
+	default:
+	}
+}
+
+func TestEmitStreamErrorMessageReturnsWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out := make(chan string)
+	done := make(chan struct{})
+
+	go func() {
+		emitStreamErrorMessage(ctx, out, errors.New("stream failed"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("emitStreamErrorMessage should return quickly when context is canceled")
+	}
+}
+
+func TestStreamReadErrorForNilAndGenericError(t *testing.T) {
+	if got := streamReadError(nil); got != nil {
+		t.Fatalf("expected nil for nil input, got %v", got)
+	}
+
+	got := streamReadError(io.ErrUnexpectedEOF)
+	if got == nil {
+		t.Fatal("expected wrapped stream read error")
+	}
+	if !strings.Contains(got.Error(), "chat stream read failed") {
+		t.Fatalf("expected generic stream read failure, got %v", got)
 	}
 }
