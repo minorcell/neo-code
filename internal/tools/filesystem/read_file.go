@@ -26,7 +26,7 @@ func New(root string) *ReadFileTool {
 }
 
 func (t *ReadFileTool) Name() string {
-	return "filesystem_read_file"
+	return readFileToolName
 }
 
 func (t *ReadFileTool) Description() string {
@@ -52,13 +52,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 		return tools.ToolResult{Name: t.Name()}, err
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New("filesystem_read_file: path is required")
+		return tools.ToolResult{Name: t.Name()}, errors.New(readFileToolName + ": path is required")
 	}
 
-	base := strings.TrimSpace(input.Workdir)
-	if base == "" {
-		base = t.root
-	}
+	base := effectiveRoot(t.root, input.Workdir)
 
 	target, err := resolvePath(base, args.Path)
 	if err != nil {
@@ -97,7 +94,7 @@ func resolvePath(root string, requested string) (string, error) {
 
 	target := strings.TrimSpace(requested)
 	if target == "" {
-		return "", errors.New("filesystem_read_file: path is required")
+		return "", errors.New(readFileToolName + ": path is required")
 	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
@@ -113,7 +110,7 @@ func resolvePath(root string, requested string) (string, error) {
 		return "", err
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", errors.New("filesystem_read_file: path escapes workspace root")
+		return "", errors.New(readFileToolName + ": path escapes workspace root")
 	}
 
 	return target, nil

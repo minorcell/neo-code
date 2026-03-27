@@ -25,7 +25,7 @@ func NewWrite(root string) *WriteFileTool {
 }
 
 func (t *WriteFileTool) Name() string {
-	return "filesystem_write_file"
+	return writeFileToolName
 }
 
 func (t *WriteFileTool) Description() string {
@@ -55,16 +55,13 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		return tools.ToolResult{Name: t.Name()}, err
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New("filesystem_write_file: path is required")
+		return tools.ToolResult{Name: t.Name()}, errors.New(writeFileToolName + ": path is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return tools.ToolResult{Name: t.Name()}, err
 	}
 
-	base := strings.TrimSpace(input.Workdir)
-	if base == "" {
-		base = t.root
-	}
+	base := effectiveRoot(t.root, input.Workdir)
 
 	target, err := resolvePath(base, args.Path)
 	if err != nil {

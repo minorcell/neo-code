@@ -9,6 +9,29 @@ import (
 	"strings"
 )
 
+const (
+	ProviderOpenAI    = "openai"
+	ProviderAnthropic = "anthropic"
+	ProviderGemini    = "gemini"
+
+	DefaultOpenAIBaseURL    = "https://api.openai.com/v1"
+	DefaultAnthropicBaseURL = "https://api.anthropic.com"
+	DefaultGeminiBaseURL    = "https://generativelanguage.googleapis.com"
+
+	DefaultOpenAIModel    = "gpt-4.1"
+	DefaultAnthropicModel = "claude-3-7-sonnet-latest"
+	DefaultGeminiModel    = "gemini-2.5-pro"
+
+	DefaultOpenAIAPIKeyEnv    = "OPENAI_API_KEY"
+	DefaultAnthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
+	DefaultGeminiAPIKeyEnv    = "GEMINI_API_KEY"
+
+	DefaultSelectedProvider = ProviderOpenAI
+	DefaultWorkdir          = "."
+	DefaultMaxLoops         = 8
+	DefaultToolTimeoutSec   = 20
+)
+
 type Config struct {
 	Providers        []ProviderConfig `yaml:"providers"`
 	SelectedProvider string           `yaml:"selected_provider"`
@@ -32,38 +55,54 @@ type ResolvedProviderConfig struct {
 	APIKey string `yaml:"-"`
 }
 
+type ModelOption struct {
+	Name        string
+	Description string
+}
+
 func Default() *Config {
 	return &Config{
 		Providers: []ProviderConfig{
 			{
-				Name:      "openai",
-				Type:      "openai",
-				BaseURL:   "https://api.openai.com/v1",
-				Model:     "gpt-4.1",
-				APIKeyEnv: "OPENAI_API_KEY",
+				Name:      ProviderOpenAI,
+				Type:      ProviderOpenAI,
+				BaseURL:   DefaultOpenAIBaseURL,
+				Model:     DefaultOpenAIModel,
+				APIKeyEnv: DefaultOpenAIAPIKeyEnv,
 			},
 			{
-				Name:      "anthropic",
-				Type:      "anthropic",
-				BaseURL:   "https://api.anthropic.com",
-				Model:     "claude-3-7-sonnet-latest",
-				APIKeyEnv: "ANTHROPIC_API_KEY",
+				Name:      ProviderAnthropic,
+				Type:      ProviderAnthropic,
+				BaseURL:   DefaultAnthropicBaseURL,
+				Model:     DefaultAnthropicModel,
+				APIKeyEnv: DefaultAnthropicAPIKeyEnv,
 			},
 			{
-				Name:      "gemini",
-				Type:      "gemini",
-				BaseURL:   "https://generativelanguage.googleapis.com",
-				Model:     "gemini-2.5-pro",
-				APIKeyEnv: "GEMINI_API_KEY",
+				Name:      ProviderGemini,
+				Type:      ProviderGemini,
+				BaseURL:   DefaultGeminiBaseURL,
+				Model:     DefaultGeminiModel,
+				APIKeyEnv: DefaultGeminiAPIKeyEnv,
 			},
 		},
-		SelectedProvider: "openai",
-		CurrentModel:     "gpt-4.1",
-		Workdir:          ".",
+		SelectedProvider: DefaultSelectedProvider,
+		CurrentModel:     DefaultOpenAIModel,
+		Workdir:          DefaultWorkdir,
 		Shell:            defaultShell(),
-		MaxLoops:         8,
-		ToolTimeoutSec:   20,
+		MaxLoops:         DefaultMaxLoops,
+		ToolTimeoutSec:   DefaultToolTimeoutSec,
 	}
+}
+
+func BuiltinModelCatalog() []ModelOption {
+	return append([]ModelOption(nil),
+		ModelOption{Name: DefaultOpenAIModel, Description: "Stable OpenAI default model"},
+		ModelOption{Name: "gpt-4o", Description: "Fast general-purpose OpenAI model"},
+		ModelOption{Name: "gpt-5.4", Description: "Frontier reasoning and coding model"},
+		ModelOption{Name: "gpt-5.3-codex", Description: "Code-focused GPT-5.3 variant"},
+		ModelOption{Name: DefaultAnthropicModel, Description: "Balanced Anthropic coding model"},
+		ModelOption{Name: DefaultGeminiModel, Description: "Default Gemini reasoning model"},
+	)
 }
 
 func (c *Config) Clone() Config {
