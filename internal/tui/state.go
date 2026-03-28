@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	agentruntime "github.com/dust/neo-code/internal/runtime"
+	agentruntime "neo-code/internal/runtime"
 )
 
 type panel int
@@ -20,6 +20,14 @@ const (
 	panelTranscript
 	panelActivity
 	panelInput
+)
+
+type pickerMode int
+
+const (
+	pickerNone pickerMode = iota
+	pickerProvider
+	pickerModel
 )
 
 type UIState struct {
@@ -36,7 +44,7 @@ type UIState struct {
 	CurrentModel       string
 	CurrentWorkdir     string
 	ShowHelp           bool
-	ShowModelPicker    bool
+	ActivePicker       pickerMode
 	Focus              panel
 }
 
@@ -58,6 +66,7 @@ func (s sessionItem) FilterValue() string {
 }
 
 type modelItem struct {
+	id          string
 	name        string
 	description string
 }
@@ -71,7 +80,25 @@ func (m modelItem) Description() string {
 }
 
 func (m modelItem) FilterValue() string {
-	return strings.ToLower(m.name + " " + m.description)
+	return strings.ToLower(m.id + " " + m.name + " " + m.description)
+}
+
+type providerItem struct {
+	id          string
+	name        string
+	description string
+}
+
+func (p providerItem) Title() string {
+	return p.name
+}
+
+func (p providerItem) Description() string {
+	return p.description
+}
+
+func (p providerItem) FilterValue() string {
+	return strings.ToLower(p.id + " " + p.name + " " + p.description)
 }
 
 type sessionDelegate struct {
@@ -108,19 +135,22 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		prefix = ">"
 	}
 
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		fmt.Sprintf("%s %s", prefix, title),
-		d.styles.sessionMeta.Render("  "+meta),
-	)
-
 	style := d.styles.sessionRow
+	metaStyle := d.styles.sessionMeta
 	if session.Active {
 		style = d.styles.sessionRowActive
+		metaStyle = d.styles.sessionMetaActive
 	}
 	if index == m.Index() {
 		style = d.styles.sessionRowFocused
+		metaStyle = d.styles.sessionMetaFocus
 	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		fmt.Sprintf("%s %s", prefix, title),
+		metaStyle.Render("  "+meta),
+	)
 
 	fmt.Fprint(w, style.Width(width).Render(content))
 }

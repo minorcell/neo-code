@@ -1,5 +1,9 @@
 package provider
 
+import (
+	"errors"
+)
+
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
@@ -37,4 +41,28 @@ type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+}
+
+var (
+	ErrProviderNotFound = errors.New("provider not found")
+	ErrModelNotFound    = errors.New("model not found")
+	ErrDriverNotFound   = errors.New("provider driver not found")
+)
+
+type ModelDescriptor struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type ProviderCatalogItem struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Models      []ModelDescriptor `json:"models,omitempty"`
+}
+
+type ProviderSelection struct {
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id"`
 }

@@ -3,16 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	"github.com/dust/neo-code/internal/provider/anthropic"
-	"github.com/dust/neo-code/internal/provider/gemini"
-	"github.com/dust/neo-code/internal/provider/openai"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	"neo-code/internal/tools"
 )
 
 const maxContextTurns = 10
@@ -20,6 +17,7 @@ const maxContextTurns = 10
 // Runtime coordinates agent execution, session persistence, and event delivery.
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
+	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	LoadSession(ctx context.Context, id string) (Session, error)
@@ -34,10 +32,8 @@ type UserInput struct {
 }
 
 type ProviderFactory interface {
-	Build(cfg config.Config) (provider.Provider, error)
+	Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error)
 }
-
-type DefaultProviderFactory struct{}
 
 type Service struct {
 	configManager   *config.Manager
@@ -45,15 +41,15 @@ type Service struct {
 	toolRegistry    *tools.Registry
 	providerFactory ProviderFactory
 	events          chan RuntimeEvent
-}
-
-func New(configManager *config.Manager, toolRegistry *tools.Registry, sessionStore Store) *Service {
-	return NewWithFactory(configManager, toolRegistry, sessionStore, DefaultProviderFactory{})
+	runMu           sync.Mutex
+	activeRunToken  uint64
+	nextRunToken    uint64
+	activeRunCancel context.CancelFunc
 }
 
 func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry, sessionStore Store, providerFactory ProviderFactory) *Service {
 	if providerFactory == nil {
-		providerFactory = DefaultProviderFactory{}
+		providerFactory = provider.NewRegistry()
 	}
 
 	return &Service{
@@ -66,6 +62,14 @@ func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry,
 }
 
 func (s *Service) Run(ctx context.Context, input UserInput) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	runToken := s.startRun(cancel)
+	defer func() {
+		cancel()
+		s.finishRun(runToken)
+	}()
+	ctx = runCtx
+
 	if strings.TrimSpace(input.Content) == "" {
 		return errors.New("runtime: input content is empty")
 	}
@@ -102,7 +106,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return err
 		}
 
-		modelProvider, err := s.providerFactory.Build(cfg)
+		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
+		if err != nil {
+			s.emit(EventError, input.RunID, session.ID, err.Error())
+			return err
+		}
+
+		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
 		if err != nil {
 			s.emit(EventError, input.RunID, session.ID, err.Error())
 			return err
@@ -209,6 +219,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 }
 
+func (s *Service) CancelActiveRun() bool {
+	s.runMu.Lock()
+	cancel := s.activeRunCancel
+	s.runMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+
+	cancel()
+	return true
+}
+
 func (s *Service) Events() <-chan RuntimeEvent {
 	return s.events
 }
@@ -249,6 +271,29 @@ func (s *Service) forwardProviderEvents(runID string, sessionID string, input <-
 			s.emit(EventAgentChunk, runID, sessionID, event.Text)
 		}
 	}
+}
+
+func (s *Service) startRun(cancel context.CancelFunc) uint64 {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	s.nextRunToken++
+	token := s.nextRunToken
+	s.activeRunToken = token
+	s.activeRunCancel = cancel
+	return token
+}
+
+func (s *Service) finishRun(token uint64) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	if s.activeRunToken != token {
+		return
+	}
+
+	s.activeRunToken = 0
+	s.activeRunCancel = nil
 }
 
 func (s *Service) handleRunError(runID string, sessionID string, err error) error {
@@ -305,22 +350,4 @@ Be concise and accurate.
 Use tools when necessary.
 When a tool fails, inspect the error and continue safely.
 Stay within the workspace and avoid destructive behavior unless clearly requested.`
-}
-
-func (DefaultProviderFactory) Build(cfg config.Config) (provider.Provider, error) {
-	selected, err := cfg.SelectedProviderConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	switch strings.ToLower(strings.TrimSpace(selected.Type)) {
-	case "openai":
-		return openai.New(selected)
-	case "anthropic":
-		return anthropic.New(selected), nil
-	case "gemini":
-		return gemini.New(selected), nil
-	default:
-		return nil, fmt.Errorf("runtime: unsupported provider type %q", selected.Type)
-	}
 }

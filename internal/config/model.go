@@ -11,27 +11,9 @@ import (
 )
 
 const (
-	ProviderOpenAI    = "openai"
-	ProviderAnthropic = "anthropic"
-	ProviderGemini    = "gemini"
-
-	DefaultOpenAIBaseURL    = "https://api.openai.com/v1"
-	DefaultAnthropicBaseURL = "https://api.anthropic.com"
-	DefaultGeminiBaseURL    = "https://generativelanguage.googleapis.com"
-
-	DefaultOpenAIModel    = "gpt-4.1"
-	DefaultAnthropicModel = "claude-3-7-sonnet-latest"
-	DefaultGeminiModel    = "gemini-2.5-pro"
-
-	DefaultOpenAIAPIKeyEnv    = "OPENAI_API_KEY"
-	DefaultAnthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
-	DefaultGeminiAPIKeyEnv    = "GEMINI_API_KEY"
-
-	DefaultSelectedProvider = ProviderOpenAI
-	DefaultWorkdir          = "."
-	DefaultMaxLoops         = 8
-	DefaultToolTimeoutSec   = 20
-	// DefaultWebFetchMaxResponseBytes bounds the amount of web content returned to the model.
+	DefaultWorkdir                        = "."
+	DefaultMaxLoops                       = 8
+	DefaultToolTimeoutSec                 = 20
 	DefaultWebFetchMaxResponseBytes int64 = 256 * 1024
 )
 
@@ -45,7 +27,7 @@ var defaultWebFetchSupportedContentTypes = []string{
 }
 
 type Config struct {
-	Providers        []ProviderConfig `yaml:"providers"`
+	Providers        []ProviderConfig `yaml:"-"`
 	SelectedProvider string           `yaml:"selected_provider"`
 	CurrentModel     string           `yaml:"current_model"`
 	Workdir          string           `yaml:"workdir"`
@@ -56,11 +38,12 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Name      string `yaml:"name"`
-	Type      string `yaml:"type"`
-	BaseURL   string `yaml:"base_url"`
-	Model     string `yaml:"model"`
-	APIKeyEnv string `yaml:"api_key_env"`
+	Name      string   `yaml:"name"`
+	Driver    string   `yaml:"type"`
+	BaseURL   string   `yaml:"base_url"`
+	Model     string   `yaml:"model"`
+	Models    []string `yaml:"models,omitempty"`
+	APIKeyEnv string   `yaml:"api_key_env"`
 }
 
 type ResolvedProviderConfig struct {
@@ -68,73 +51,29 @@ type ResolvedProviderConfig struct {
 	APIKey string `yaml:"-"`
 }
 
-type ModelOption struct {
-	Name        string
-	Description string
-}
-
-// ToolsConfig stores tool-specific configuration values.
 type ToolsConfig struct {
 	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
 }
 
-// WebFetchConfig controls response filtering and limits for the webfetch tool.
 type WebFetchConfig struct {
 	MaxResponseBytes      int64    `yaml:"max_response_bytes,omitempty"`
 	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
 }
 
-// DefaultWebFetchSupportedContentTypes returns the default media types accepted by webfetch.
 func DefaultWebFetchSupportedContentTypes() []string {
 	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
 
 func Default() *Config {
 	return &Config{
-		Providers: []ProviderConfig{
-			{
-				Name:      ProviderOpenAI,
-				Type:      ProviderOpenAI,
-				BaseURL:   DefaultOpenAIBaseURL,
-				Model:     DefaultOpenAIModel,
-				APIKeyEnv: DefaultOpenAIAPIKeyEnv,
-			},
-			{
-				Name:      ProviderAnthropic,
-				Type:      ProviderAnthropic,
-				BaseURL:   DefaultAnthropicBaseURL,
-				Model:     DefaultAnthropicModel,
-				APIKeyEnv: DefaultAnthropicAPIKeyEnv,
-			},
-			{
-				Name:      ProviderGemini,
-				Type:      ProviderGemini,
-				BaseURL:   DefaultGeminiBaseURL,
-				Model:     DefaultGeminiModel,
-				APIKeyEnv: DefaultGeminiAPIKeyEnv,
-			},
-		},
-		SelectedProvider: DefaultSelectedProvider,
-		CurrentModel:     DefaultOpenAIModel,
-		Workdir:          DefaultWorkdir,
-		Shell:            defaultShell(),
-		MaxLoops:         DefaultMaxLoops,
-		ToolTimeoutSec:   DefaultToolTimeoutSec,
+		Workdir:        DefaultWorkdir,
+		Shell:          defaultShell(),
+		MaxLoops:       DefaultMaxLoops,
+		ToolTimeoutSec: DefaultToolTimeoutSec,
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
 		},
 	}
-}
-
-func BuiltinModelCatalog() []ModelOption {
-	return append([]ModelOption(nil),
-		ModelOption{Name: DefaultOpenAIModel, Description: "Stable OpenAI default model"},
-		ModelOption{Name: "gpt-4o", Description: "Fast general-purpose OpenAI model"},
-		ModelOption{Name: "gpt-5.4", Description: "Frontier reasoning and coding model"},
-		ModelOption{Name: "gpt-5.3-codex", Description: "Code-focused GPT-5.3 variant"},
-		ModelOption{Name: DefaultAnthropicModel, Description: "Balanced Anthropic coding model"},
-		ModelOption{Name: DefaultGeminiModel, Description: "Default Gemini reasoning model"},
-	)
 }
 
 func (c *Config) Clone() Config {
@@ -143,45 +82,48 @@ func (c *Config) Clone() Config {
 	}
 
 	clone := *c
-	clone.Providers = append([]ProviderConfig(nil), c.Providers...)
+	clone.Providers = cloneProviders(c.Providers)
 	clone.Tools = c.Tools.Clone()
 	return clone
 }
 
-func (c *Config) ApplyDefaults() {
+func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	if c == nil {
 		return
 	}
 
-	def := Default()
-
 	if len(c.Providers) == 0 {
-		c.Providers = append([]ProviderConfig(nil), def.Providers...)
+		c.Providers = cloneProviders(defaults.Providers)
 	} else {
-		c.Providers = applyProviderDefaults(c.Providers, def.Providers)
+		c.Providers = applyProviderDefaults(c.Providers, defaults.Providers)
 	}
 
 	if strings.TrimSpace(c.SelectedProvider) == "" {
-		c.SelectedProvider = def.SelectedProvider
+		c.SelectedProvider = defaults.SelectedProvider
 	}
 	if strings.TrimSpace(c.CurrentModel) == "" {
 		if selected, err := c.SelectedProviderConfig(); err == nil {
 			c.CurrentModel = selected.Model
+		} else if strings.TrimSpace(defaults.CurrentModel) != "" {
+			c.CurrentModel = defaults.CurrentModel
 		}
 	}
+	if selected, err := c.SelectedProviderConfig(); err == nil && !containsModelID(selected.SupportedModels(), c.CurrentModel) {
+		c.CurrentModel = selected.Model
+	}
 	if strings.TrimSpace(c.Workdir) == "" {
-		c.Workdir = def.Workdir
+		c.Workdir = defaults.Workdir
 	}
 	if strings.TrimSpace(c.Shell) == "" {
-		c.Shell = def.Shell
+		c.Shell = defaults.Shell
 	}
 	if c.MaxLoops <= 0 {
-		c.MaxLoops = def.MaxLoops
+		c.MaxLoops = defaults.MaxLoops
 	}
 	if c.ToolTimeoutSec <= 0 {
-		c.ToolTimeoutSec = def.ToolTimeoutSec
+		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
-	c.Tools.ApplyDefaults(def.Tools)
+	c.Tools.ApplyDefaults(defaults.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -226,6 +168,9 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}
+	if !containsModelID(selected.SupportedModels(), c.CurrentModel) {
+		return fmt.Errorf("config: current_model %q is not supported by provider %q", c.CurrentModel, selected.Name)
+	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
 	}
@@ -259,8 +204,8 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("provider name is empty")
 	}
-	if strings.TrimSpace(p.Type) == "" {
-		return fmt.Errorf("provider %q type is empty", p.Name)
+	if strings.TrimSpace(p.Driver) == "" {
+		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
@@ -271,7 +216,28 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
+	if models := normalizeModelIDs(p.Models); len(p.Models) > 0 {
+		if len(models) == 0 {
+			return fmt.Errorf("provider %q models is empty", p.Name)
+		}
+		if !containsModelID(models, p.Model) {
+			return fmt.Errorf("provider %q default model %q is not in models", p.Name, strings.TrimSpace(p.Model))
+		}
+	}
 	return nil
+}
+
+func (p ProviderConfig) SupportedModels() []string {
+	models := normalizeModelIDs(p.Models)
+	if len(models) > 0 {
+		return models
+	}
+
+	model := strings.TrimSpace(p.Model)
+	if model == "" {
+		return nil
+	}
+	return []string{model}
 }
 
 func (p ProviderConfig) ResolveAPIKey() (string, error) {
@@ -317,14 +283,17 @@ func mergeProviderDefaults(provider ProviderConfig, defaults []ProviderConfig) P
 	if strings.TrimSpace(provider.Name) == "" {
 		provider.Name = base.Name
 	}
-	if strings.TrimSpace(provider.Type) == "" {
-		provider.Type = base.Type
+	if strings.TrimSpace(provider.Driver) == "" {
+		provider.Driver = base.Driver
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		provider.BaseURL = base.BaseURL
 	}
 	if strings.TrimSpace(provider.Model) == "" {
 		provider.Model = base.Model
+	}
+	if len(provider.Models) == 0 {
+		provider.Models = cloneModelIDs(base.Models)
 	}
 	if strings.TrimSpace(provider.APIKeyEnv) == "" {
 		provider.APIKeyEnv = base.APIKeyEnv
@@ -335,15 +304,12 @@ func mergeProviderDefaults(provider ProviderConfig, defaults []ProviderConfig) P
 
 func matchDefaultProvider(provider ProviderConfig, defaults []ProviderConfig) (ProviderConfig, bool) {
 	name := strings.ToLower(strings.TrimSpace(provider.Name))
-	kind := strings.ToLower(strings.TrimSpace(provider.Type))
+	if name == "" {
+		return ProviderConfig{}, false
+	}
 
 	for _, candidate := range defaults {
-		if name != "" && strings.ToLower(candidate.Name) == name {
-			return candidate, true
-		}
-	}
-	for _, candidate := range defaults {
-		if kind != "" && strings.ToLower(candidate.Type) == kind {
+		if strings.ToLower(candidate.Name) == name {
 			return candidate, true
 		}
 	}
@@ -395,12 +361,12 @@ func (c ToolsConfig) Clone() ToolsConfig {
 	}
 }
 
-func (c *ToolsConfig) ApplyDefaults(def ToolsConfig) {
+func (c *ToolsConfig) ApplyDefaults(defaults ToolsConfig) {
 	if c == nil {
 		return
 	}
 
-	c.WebFetch.ApplyDefaults(def.WebFetch)
+	c.WebFetch.ApplyDefaults(defaults.WebFetch)
 }
 
 func (c ToolsConfig) Validate() error {
@@ -416,15 +382,15 @@ func (c WebFetchConfig) Clone() WebFetchConfig {
 	return clone
 }
 
-func (c *WebFetchConfig) ApplyDefaults(def WebFetchConfig) {
+func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
 	if c == nil {
 		return
 	}
 
 	if c.MaxResponseBytes <= 0 {
-		c.MaxResponseBytes = def.MaxResponseBytes
+		c.MaxResponseBytes = defaults.MaxResponseBytes
 	}
-	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, def.SupportedContentTypes)
+	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, defaults.SupportedContentTypes)
 }
 
 func (c WebFetchConfig) Validate() error {
@@ -480,4 +446,75 @@ func normalizeContentType(value string) string {
 		return strings.TrimSpace(trimmed[:index])
 	}
 	return trimmed
+}
+
+func cloneProviders(providers []ProviderConfig) []ProviderConfig {
+	if len(providers) == 0 {
+		return nil
+	}
+
+	cloned := make([]ProviderConfig, 0, len(providers))
+	for _, provider := range providers {
+		next := provider
+		next.Models = cloneModelIDs(provider.Models)
+		cloned = append(cloned, next)
+	}
+	return cloned
+}
+
+func cloneModelIDs(models []string) []string {
+	normalized := normalizeModelIDs(models)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return append([]string(nil), normalized...)
+}
+
+func normalizeModelIDs(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		id := strings.TrimSpace(model)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, id)
+	}
+	return normalized
+}
+
+func equalModelIDs(left []string, right []string) bool {
+	left = normalizeModelIDs(left)
+	right = normalizeModelIDs(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !strings.EqualFold(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsModelID(models []string, model string) bool {
+	target := strings.ToLower(strings.TrimSpace(model))
+	if target == "" {
+		return false
+	}
+	for _, candidate := range normalizeModelIDs(models) {
+		if strings.EqualFold(candidate, target) {
+			return true
+		}
+	}
+	return false
 }

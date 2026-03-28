@@ -1,4 +1,4 @@
-package openai
+package openll
 
 import (
 	"bufio"
@@ -23,11 +23,11 @@ type Provider struct {
 }
 
 const (
-	Name             = "openai"
+	Name             = "openll"
 	DriverName       = "openai"
-	DefaultBaseURL   = "https://api.openai.com/v1"
+	DefaultBaseURL   = "https://www.openll.top/v1"
 	DefaultModel     = "gpt-4.1"
-	DefaultAPIKeyEnv = "OPENAI_API_KEY"
+	DefaultAPIKeyEnv = "AI_API_KEY"
 )
 
 var builtinModels = []string{

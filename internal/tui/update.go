@@ -2,17 +2,20 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	agentruntime "github.com/dust/neo-code/internal/runtime"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/tools"
 )
 
 type RuntimeMsg struct{ Event agentruntime.RuntimeEvent }
@@ -56,9 +59,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.IsAgentRunning = false
 			a.state.StreamingReply = false
 			a.state.CurrentTool = ""
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
-			a.appendInlineMessage(roleError, typed.err.Error())
+			if errors.Is(typed.err, context.Canceled) {
+				a.state.ExecutionError = ""
+				a.state.StatusText = statusCanceled
+			} else {
+				a.state.ExecutionError = typed.err.Error()
+				a.state.StatusText = typed.err.Error()
+				a.appendInlineMessage(roleError, typed.err.Error())
+			}
 		}
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
@@ -74,7 +82,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.StatusText = typed.notice
 			cfg := a.configManager.Get()
 			a.syncConfigState(cfg)
-			a.selectCurrentModel(cfg.CurrentModel)
+			if err := a.refreshProviderPicker(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendInlineMessage(roleError, err.Error())
+			}
+			if err := a.refreshModelPicker(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendInlineMessage(roleError, err.Error())
+			} else {
+				a.selectCurrentProvider(cfg.SelectedProvider)
+				a.selectCurrentModel(cfg.CurrentModel)
+			}
 			a.appendInlineMessage(roleSystem, typed.notice)
 		}
 		a.rebuildTranscript()
@@ -89,8 +109,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.resizeComponents()
 			return a, tea.Batch(cmds...)
 		}
-		if a.state.ShowModelPicker {
-			return a.updateModelPicker(typed)
+		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
+			if a.runtime.CancelActiveRun() {
+				a.state.StatusText = statusCanceling
+			}
+			a.rebuildTranscript()
+			return a, tea.Batch(cmds...)
+		}
+		if a.state.ActivePicker != pickerNone {
+			return a.updatePicker(typed)
 		}
 		if key.Matches(typed, a.keys.NextPanel) {
 			a.focusNext()
@@ -122,7 +149,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch a.focus {
 		case panelSessions:
-			if key.Matches(typed, a.keys.OpenSession) && !a.isFilteringSessions() {
+			if key.Matches(typed, a.keys.OpenSession) && !a.sessions.SettingFilter() {
 				if err := a.activateSelectedSession(); err != nil {
 					a.state.StatusText = err.Error()
 					a.state.ExecutionError = err.Error()
@@ -135,6 +162,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			a.sessions, cmd = a.sessions.Update(msg)
+			a.sessions.SetShowFilter(a.sessions.FilterState() != list.Unfiltered)
 			cmds = append(cmds, cmd)
 			return a, tea.Batch(cmds...)
 		case panelTranscript:
@@ -159,14 +187,34 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		a.state.InputText = ""
 
 		switch strings.ToLower(input) {
+		case slashCommandProviderPick:
+			if err := a.refreshProviderPicker(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendInlineMessage(roleError, err.Error())
+				a.rebuildTranscript()
+				return a, tea.Batch(cmds...)
+			}
+			a.openProviderPicker()
+			return a, tea.Batch(cmds...)
 		case slashCommandModelPicker:
+			if err := a.refreshModelPicker(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendInlineMessage(roleError, err.Error())
+				a.rebuildTranscript()
+				return a, tea.Batch(cmds...)
+			}
 			a.openModelPicker()
 			return a, tea.Batch(cmds...)
 		}
 
 		if strings.HasPrefix(input, slashPrefix) {
-			a.state.StatusText = statusApplyingCommand
-			cmds = append(cmds, runLocalCommand(a.configManager, input))
+			err := fmt.Sprintf("unknown command %q", input)
+			a.state.ExecutionError = err
+			a.state.StatusText = err
+			a.appendInlineMessage(roleError, err)
+			a.rebuildTranscript()
 			return a, tea.Batch(cmds...)
 		}
 
@@ -189,22 +237,37 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	return a, tea.Batch(cmds...)
 }
 
-func (a App) updateModelPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, a.keys.FocusInput):
-		a.closeModelPicker()
+		a.closePicker()
 		return a, nil
 	case msg.String() == "enter":
-		item, ok := a.modelPicker.SelectedItem().(modelItem)
-		a.closeModelPicker()
-		if !ok {
-			return a, nil
+		switch a.state.ActivePicker {
+		case pickerProvider:
+			item, ok := a.providerPicker.SelectedItem().(providerItem)
+			a.closePicker()
+			if !ok {
+				return a, nil
+			}
+			return a, runProviderSelection(a.providerSvc, item.name)
+		case pickerModel:
+			item, ok := a.modelPicker.SelectedItem().(modelItem)
+			a.closePicker()
+			if !ok {
+				return a, nil
+			}
+			return a, runModelSelection(a.providerSvc, item.id)
 		}
-		return a, runModelSelection(a.configManager, item.name)
 	}
 
 	var cmd tea.Cmd
-	a.modelPicker, cmd = a.modelPicker.Update(msg)
+	switch a.state.ActivePicker {
+	case pickerProvider:
+		a.providerPicker, cmd = a.providerPicker.Update(msg)
+	case pickerModel:
+		a.modelPicker, cmd = a.modelPicker.Update(msg)
+	}
 	return a, cmd
 }
 
@@ -339,6 +402,13 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
 			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
 		}
+	case agentruntime.EventRunCanceled:
+		a.state.IsAgentRunning = false
+		a.state.StreamingReply = false
+		a.state.CurrentTool = ""
+		a.state.ExecutionError = ""
+		a.state.StatusText = statusCanceled
+		a.appendInlineMessage(roleSystem, "Canceled current run.")
 	case agentruntime.EventError:
 		a.state.StatusText = statusError
 		a.state.IsAgentRunning = false
@@ -436,7 +506,7 @@ func (a *App) focusPrev() {
 
 func (a *App) applyFocus() {
 	a.state.Focus = a.focus
-	if a.focus == panelInput && !a.state.ShowModelPicker {
+	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
 		a.input.Focus()
 		return
 	}
@@ -446,12 +516,18 @@ func (a *App) applyFocus() {
 func (a *App) resizeComponents() {
 	lay := a.computeLayout()
 	a.help.ShowAll = a.state.ShowHelp
-	a.sessions.SetSize(max(20, lay.sidebarWidth-4), max(4, lay.sidebarHeight-4))
+	sidebarFrameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
+	sidebarFrameHeight := a.styles.panelFocused.GetVerticalFrameSize()
+	sidebarBodyWidth := max(14, lay.sidebarWidth-sidebarFrameWidth)
+	sidebarBodyHeight := max(4, lay.sidebarHeight-sidebarFrameHeight-lipgloss.Height(a.renderSidebarHeader(sidebarBodyWidth)))
+	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
 	a.transcript.Width = max(24, lay.rightWidth)
-	a.transcript.Height = max(6, lay.rightHeight-2-menuHeight-1)
-	a.input.SetWidth(max(24, lay.rightWidth-2))
-	a.input.SetHeight(1)
+	promptInnerWidth := max(8, lay.rightWidth-a.styles.inputBoxFocused.GetHorizontalFrameSize())
+	a.input.Width = max(4, promptInnerWidth-lipgloss.Width("> "))
+	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
+	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
+	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.rebuildTranscript()
 }

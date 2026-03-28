@@ -6,27 +6,29 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	agentruntime "github.com/dust/neo-code/internal/runtime"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	agentruntime "neo-code/internal/runtime"
 )
 
 type App struct {
 	state          UIState
 	configManager  *config.Manager
+	providerSvc    ProviderController
 	runtime        agentruntime.Runtime
 	keys           keyMap
 	help           help.Model
 	spinner        spinner.Model
 	sessions       list.Model
+	providerPicker list.Model
 	modelPicker    list.Model
 	transcript     viewport.Model
-	input          textarea.Model
+	input          textinput.Model
 	activeMessages []provider.Message
 	focus          panel
 	width          int
@@ -34,13 +36,16 @@ type App struct {
 	styles         styles
 }
 
-func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime) (App, error) {
-	if cfg == nil {
-		defaultCfg := config.Default()
-		cfg = defaultCfg
-	}
+func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
 	if configManager == nil {
 		return App{}, fmt.Errorf("tui: config manager is nil")
+	}
+	if providerSvc == nil {
+		return App{}, fmt.Errorf("tui: provider service is nil")
+	}
+	if cfg == nil {
+		snapshot := configManager.Get()
+		cfg = &snapshot
 	}
 
 	uiStyles := newStyles()
@@ -48,19 +53,25 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	delegate := sessionDelegate{styles: uiStyles}
 	sessionList := list.New([]list.Item{}, delegate, 0, 0)
 	sessionList.Title = ""
+	sessionList.SetShowTitle(false)
 	sessionList.SetShowHelp(false)
 	sessionList.SetShowStatusBar(false)
+	sessionList.SetShowFilter(false)
+	sessionList.SetShowPagination(false)
 	sessionList.SetFilteringEnabled(true)
 	sessionList.DisableQuitKeybindings()
+	sessionList.FilterInput.Prompt = "Filter: "
+	sessionList.FilterInput.Placeholder = "Type to search sessions"
 
-	input := textarea.New()
+	input := textinput.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
-	input.Prompt = "> "
+	input.Prompt = ""
 	input.CharLimit = 24000
-	input.ShowLineNumbers = false
-	input.SetHeight(1)
+	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
+	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
 	input.Focus()
-	input.KeyMap.InsertNewline.SetEnabled(false)
 
 	spin := spinner.New()
 	spin.Spinner = spinner.Line
@@ -78,19 +89,21 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,
 		},
-		configManager: configManager,
-		runtime:       runtime,
-		keys:          keys,
-		help:          h,
-		spinner:       spin,
-		sessions:      sessionList,
-		modelPicker:   newModelPicker(),
-		transcript:    viewport.New(0, 0),
-		input:         input,
-		focus:         panelInput,
-		width:         128,
-		height:        40,
-		styles:        uiStyles,
+		configManager:  configManager,
+		providerSvc:    providerSvc,
+		runtime:        runtime,
+		keys:           keys,
+		help:           h,
+		spinner:        spin,
+		sessions:       sessionList,
+		providerPicker: newProviderPicker(nil),
+		modelPicker:    newModelPicker(nil),
+		transcript:     viewport.New(0, 0),
+		input:          input,
+		focus:          panelInput,
+		width:          128,
+		height:         40,
+		styles:         uiStyles,
 	}
 
 	if err := app.refreshSessions(); err != nil {
@@ -104,11 +117,18 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	}
 	app.syncActiveSessionTitle()
 	app.syncConfigState(configManager.Get())
+	if err := app.refreshProviderPicker(); err != nil {
+		return App{}, err
+	}
+	if err := app.refreshModelPicker(); err != nil {
+		return App{}, err
+	}
+	app.selectCurrentProvider(cfg.SelectedProvider)
 	app.selectCurrentModel(cfg.CurrentModel)
 	app.resizeComponents()
 	return app, nil
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textarea.Blink, a.spinner.Tick)
+	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textinput.Blink, a.spinner.Tick)
 }

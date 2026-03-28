@@ -1,4 +1,4 @@
-package openai
+package openll
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig 
 
 	return config.ResolvedProviderConfig{
 		ProviderConfig: config.ProviderConfig{
-			Name:      DriverName,
+			Name:      Name,
 			Driver:    DriverName,
 			BaseURL:   baseURL,
 			Model:     model,
@@ -95,11 +95,17 @@ func TestBuiltinConfigIncludesProviderModels(t *testing.T) {
 	t.Parallel()
 
 	cfg := BuiltinConfig()
-	if cfg.Name != DriverName {
-		t.Fatalf("expected provider name %q, got %q", DriverName, cfg.Name)
+	if cfg.Name != Name {
+		t.Fatalf("expected provider name %q, got %q", Name, cfg.Name)
+	}
+	if cfg.Driver != DriverName {
+		t.Fatalf("expected driver %q, got %q", DriverName, cfg.Driver)
 	}
 	if cfg.BaseURL != DefaultBaseURL {
 		t.Fatalf("expected base URL %q, got %q", DefaultBaseURL, cfg.BaseURL)
+	}
+	if cfg.APIKeyEnv != DefaultAPIKeyEnv {
+		t.Fatalf("expected api key env %q, got %q", DefaultAPIKeyEnv, cfg.APIKeyEnv)
 	}
 	if len(cfg.Models) < 3 {
 		t.Fatalf("expected builtin models to be predeclared, got %+v", cfg.Models)

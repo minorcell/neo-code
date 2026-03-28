@@ -19,14 +19,39 @@ const (
 )
 
 type Loader struct {
-	baseDir string
+	baseDir  string
+	defaults Config
 }
 
-func NewLoader(baseDir string) *Loader {
+type persistedConfig struct {
+	SelectedProvider string      `yaml:"selected_provider"`
+	CurrentModel     string      `yaml:"current_model"`
+	Workdir          string      `yaml:"workdir"`
+	Shell            string      `yaml:"shell"`
+	MaxLoops         int         `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec   int         `yaml:"tool_timeout_sec,omitempty"`
+	Tools            ToolsConfig `yaml:"tools,omitempty"`
+}
+
+func NewLoader(baseDir string, defaults *Config) *Loader {
+	if defaults == nil {
+		panic("config: loader defaults are nil")
+	}
+
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = defaultBaseDir()
 	}
-	return &Loader{baseDir: baseDir}
+
+	snapshot := defaults.Clone()
+	snapshot.ApplyDefaultsFrom(*Default())
+	if err := snapshot.Validate(); err != nil {
+		panic(fmt.Sprintf("config: invalid loader defaults: %v", err))
+	}
+
+	return &Loader{
+		baseDir:  baseDir,
+		defaults: snapshot,
+	}
 }
 
 func (l *Loader) BaseDir() string {
@@ -41,6 +66,10 @@ func (l *Loader) EnvPath() string {
 	return filepath.Join(l.baseDir, envName)
 }
 
+func (l *Loader) DefaultConfig() Config {
+	return l.defaults.Clone()
+}
+
 func (l *Loader) Load(ctx context.Context) (*Config, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -52,7 +81,8 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("config: create config dir: %w", err)
 	}
 	if _, err := os.Stat(l.ConfigPath()); os.IsNotExist(err) {
-		if err := l.Save(ctx, Default()); err != nil {
+		defaultCfg := l.DefaultConfig()
+		if err := l.Save(ctx, &defaultCfg); err != nil {
 			return nil, err
 		}
 	}
@@ -62,13 +92,18 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("config: read config file: %w", err)
 	}
 
-	cfg, err := parseConfig(data)
+	cfg, err := parseConfig(data, l.defaults)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse config file: %w", err)
 	}
-	cfg.ApplyDefaults()
+	cfg.ApplyDefaultsFrom(l.defaults)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if requiresConfigRewrite(data) {
+		if err := l.Save(ctx, cfg); err != nil {
+			return nil, err
+		}
 	}
 	return cfg, nil
 }
@@ -83,12 +118,22 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 	}
 
 	snapshot := cfg.Clone()
-	snapshot.ApplyDefaults()
+	snapshot.ApplyDefaultsFrom(l.defaults)
 	if err := snapshot.Validate(); err != nil {
 		return err
 	}
 
-	data, err := yaml.Marshal(&snapshot)
+	file := persistedConfig{
+		SelectedProvider: snapshot.SelectedProvider,
+		CurrentModel:     snapshot.CurrentModel,
+		Workdir:          snapshot.Workdir,
+		Shell:            snapshot.Shell,
+		MaxLoops:         snapshot.MaxLoops,
+		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Tools:            snapshot.Tools,
+	}
+
+	data, err := yaml.Marshal(&file)
 	if err != nil {
 		return fmt.Errorf("config: marshal config: %w", err)
 	}
@@ -109,10 +154,6 @@ func (l *Loader) LoadEnvironment() {
 	_ = godotenv.Load(l.EnvPath())
 }
 
-func (l *Loader) OverloadManagedEnvironment() error {
-	return godotenv.Overload(l.EnvPath())
-}
-
 func defaultBaseDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -121,22 +162,12 @@ func defaultBaseDir() string {
 	return filepath.Join(home, dirName)
 }
 
-func parseConfig(data []byte) (*Config, error) {
+func parseConfig(data []byte, defaults Config) (*Config, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
-		return Default(), nil
+		return &Config{}, nil
 	}
 
-	cfg, currentErr := parseCurrentConfig(data)
-	if currentErr == nil {
-		return cfg, nil
-	}
-
-	legacy, legacyErr := parseLegacyConfig(data)
-	if legacyErr == nil {
-		return legacy, nil
-	}
-
-	return nil, currentErr
+	return parseCurrentConfig(data, defaults)
 }
 
 type aliasConfig struct {
@@ -144,84 +175,47 @@ type aliasConfig struct {
 	WorkspaceRoot string `yaml:"workspace_root"`
 }
 
-type legacyConfig struct {
-	SelectedProvider string                          `yaml:"selected_provider"`
-	CurrentModel     string                          `yaml:"current_model"`
-	MaxLoop          int                             `yaml:"max_loop"`
-	ToolTimeoutSec   int                             `yaml:"tool_timeout_sec"`
-	WorkspaceRoot    string                          `yaml:"workspace_root"`
-	Shell            string                          `yaml:"shell"`
-	Providers        map[string]legacyProviderConfig `yaml:"providers"`
-}
-
-type legacyProviderConfig struct {
-	Type      string   `yaml:"type"`
-	BaseURL   string   `yaml:"base_url"`
-	APIKeyEnv string   `yaml:"api_key_env"`
-	Models    []string `yaml:"models"`
-}
-
-func parseCurrentConfig(data []byte) (*Config, error) {
-	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+func parseCurrentConfig(data []byte, _ Config) (*Config, error) {
+	var file persistedConfig
+	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
 
 	var aliases aliasConfig
 	if err := yaml.Unmarshal(data, &aliases); err == nil {
-		if cfg.MaxLoops == 0 && aliases.MaxLoop > 0 {
-			cfg.MaxLoops = aliases.MaxLoop
+		if file.MaxLoops == 0 && aliases.MaxLoop > 0 {
+			file.MaxLoops = aliases.MaxLoop
 		}
-		if strings.TrimSpace(cfg.Workdir) == "" && strings.TrimSpace(aliases.WorkspaceRoot) != "" {
-			cfg.Workdir = aliases.WorkspaceRoot
+		if strings.TrimSpace(file.Workdir) == "" && strings.TrimSpace(aliases.WorkspaceRoot) != "" {
+			file.Workdir = aliases.WorkspaceRoot
 		}
+	}
+
+	cfg := &Config{
+		SelectedProvider: strings.TrimSpace(file.SelectedProvider),
+		CurrentModel:     strings.TrimSpace(file.CurrentModel),
+		Workdir:          strings.TrimSpace(file.Workdir),
+		Shell:            strings.TrimSpace(file.Shell),
+		MaxLoops:         file.MaxLoops,
+		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Tools:            file.Tools,
 	}
 
 	return cfg, nil
 }
 
-func parseLegacyConfig(data []byte) (*Config, error) {
-	var legacy legacyConfig
-	if err := yaml.Unmarshal(data, &legacy); err != nil {
-		return nil, err
+func requiresConfigRewrite(data []byte) bool {
+	text := strings.TrimSpace(string(data))
+	switch {
+	case text == "":
+		return false
+	case strings.Contains(text, "\nproviders:") || strings.HasPrefix(text, "providers:"):
+		return true
+	case strings.Contains(text, "provider_overrides:"):
+		return true
+	case strings.Contains(text, "workspace_root:") || strings.Contains(text, "max_loop:"):
+		return true
+	default:
+		return false
 	}
-
-	return convertLegacyConfig(legacy), nil
-}
-
-func convertLegacyConfig(in legacyConfig) *Config {
-	out := &Config{
-		SelectedProvider: strings.TrimSpace(in.SelectedProvider),
-		CurrentModel:     strings.TrimSpace(in.CurrentModel),
-		Workdir:          strings.TrimSpace(in.WorkspaceRoot),
-		Shell:            strings.TrimSpace(in.Shell),
-		MaxLoops:         in.MaxLoop,
-		ToolTimeoutSec:   in.ToolTimeoutSec,
-	}
-
-	for name, provider := range in.Providers {
-		model := firstNonEmpty(provider.Models...)
-		if strings.EqualFold(name, in.SelectedProvider) && strings.TrimSpace(in.CurrentModel) != "" {
-			model = strings.TrimSpace(in.CurrentModel)
-		}
-
-		out.Providers = append(out.Providers, ProviderConfig{
-			Name:      strings.TrimSpace(name),
-			Type:      strings.TrimSpace(provider.Type),
-			BaseURL:   strings.TrimSpace(provider.BaseURL),
-			Model:     strings.TrimSpace(model),
-			APIKeyEnv: strings.TrimSpace(provider.APIKeyEnv),
-		})
-	}
-
-	return out
-}
-
-func firstNonEmpty(items ...string) string {
-	for _, item := range items {
-		if strings.TrimSpace(item) != "" {
-			return strings.TrimSpace(item)
-		}
-	}
-	return ""
 }
