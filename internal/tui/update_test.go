@@ -20,13 +20,15 @@ import (
 )
 
 type stubRuntime struct {
-	runInputs []agentruntime.UserInput
-	events    chan agentruntime.RuntimeEvent
-	sessions  []agentruntime.SessionSummary
-	loads     map[string]agentruntime.Session
-	runErr    error
-	listErr   error
-	loadErr   error
+	runInputs    []agentruntime.UserInput
+	events       chan agentruntime.RuntimeEvent
+	sessions     []agentruntime.SessionSummary
+	loads        map[string]agentruntime.Session
+	runErr       error
+	listErr      error
+	loadErr      error
+	cancelCalls  int
+	cancelResult bool
 }
 
 func newStubRuntime() *stubRuntime {
@@ -43,6 +45,11 @@ func (r *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 
 func (r *stubRuntime) Events() <-chan agentruntime.RuntimeEvent {
 	return r.events
+}
+
+func (r *stubRuntime) CancelActiveRun() bool {
+	r.cancelCalls++
+	return r.cancelResult
 }
 
 func (r *stubRuntime) ListSessions(ctx context.Context) ([]agentruntime.SessionSummary, error) {
@@ -215,6 +222,26 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				last := app.activeMessages[len(app.activeMessages)-1]
 				if last.Content != "final" {
 					t.Fatalf("expected final assistant message, got %+v", last)
+				}
+			},
+		},
+		{
+			name: "runtime canceled clears running state without error",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime) {
+				app.state.IsAgentRunning = true
+				app.state.ActiveSessionID = "session-cancel"
+			},
+			msg: RuntimeMsg{Event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventRunCanceled,
+				SessionID: "session-cancel",
+			}},
+			assert: func(t *testing.T, runtime *stubRuntime, app App, msgs []tea.Msg) {
+				t.Helper()
+				if app.state.IsAgentRunning {
+					t.Fatalf("expected agent to stop running")
+				}
+				if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
+					t.Fatalf("expected canceled status without error, got %+v", app.state)
 				}
 			},
 		},
@@ -511,6 +538,20 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			},
 		},
 		{
+			name: "run finished canceled is not surfaced as error",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.state.IsAgentRunning = true
+				app.state.StatusText = statusCanceling
+			},
+			msg: runFinishedMsg{err: context.Canceled},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if app.state.IsAgentRunning || app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
+					t.Fatalf("expected canceled run to stop without error, got %+v", app.state)
+				}
+			},
+		},
+		{
 			name: "run finished error is surfaced",
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.state.IsAgentRunning = true
@@ -540,6 +581,25 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				t.Helper()
 				if app.state.ExecutionError == "" || app.state.StatusText == "" {
 					t.Fatalf("expected local command error state")
+				}
+			},
+		},
+		{
+			name: "cancel shortcut interrupts running agent",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.state.IsAgentRunning = true
+				app.state.StatusText = statusThinking
+				runtime.cancelResult = true
+				app.keys.CancelAgent.SetKeys("ctrl+@")
+			},
+			msg: tea.KeyMsg{Type: tea.KeyCtrlAt},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if runtime.cancelCalls != 1 {
+					t.Fatalf("expected cancel to be called once, got %d", runtime.cancelCalls)
+				}
+				if app.state.StatusText != statusCanceling {
+					t.Fatalf("expected canceling status, got %q", app.state.StatusText)
 				}
 			},
 		},
@@ -770,8 +830,23 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	if len(app.providerPicker.Items()) < 2 {
 		t.Fatalf("expected provider picker catalog")
 	}
-	selected := app.providerPicker.Items()[1].(providerItem).id
-	app.providerPicker.Select(1)
+	selectedIndex := -1
+	selected := ""
+	for idx, item := range app.providerPicker.Items() {
+		candidate, ok := item.(providerItem)
+		if !ok {
+			continue
+		}
+		if candidate.id == "openai-alt" {
+			selectedIndex = idx
+			selected = candidate.id
+			break
+		}
+	}
+	if selectedIndex < 0 {
+		t.Fatalf("expected provider picker to include openai-alt")
+	}
+	app.providerPicker.Select(selectedIndex)
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(App)
@@ -887,6 +962,21 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				t.Helper()
 				if app.state.ExecutionError != "boom" || app.state.IsAgentRunning {
 					t.Fatalf("unexpected error state: %+v", app.state)
+				}
+			},
+		},
+		{
+			name: "run canceled event clears current tool and error state",
+			setup: func(app *App) {
+				app.state.IsAgentRunning = true
+				app.state.CurrentTool = "filesystem_edit"
+				app.state.ExecutionError = "old"
+			},
+			event: agentruntime.RuntimeEvent{Type: agentruntime.EventRunCanceled, SessionID: "s1"},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.IsAgentRunning || app.state.CurrentTool != "" || app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
+					t.Fatalf("unexpected canceled state: %+v", app.state)
 				}
 			},
 		},

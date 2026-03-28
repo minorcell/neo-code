@@ -36,6 +36,8 @@ const (
 	statusReady          = "Ready"
 	statusRuntimeClosed  = "Runtime closed"
 	statusThinking       = "Thinking"
+	statusCanceling      = "Canceling"
+	statusCanceled       = "Canceled"
 	statusRunningTool    = "Running tool"
 	statusToolFinished   = "Tool finished"
 	statusToolError      = "Tool error"

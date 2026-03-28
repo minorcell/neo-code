@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"neo-code/internal/config"
@@ -16,6 +17,7 @@ const maxContextTurns = 10
 // Runtime coordinates agent execution, session persistence, and event delivery.
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
+	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	LoadSession(ctx context.Context, id string) (Session, error)
@@ -39,6 +41,10 @@ type Service struct {
 	toolRegistry    *tools.Registry
 	providerFactory ProviderFactory
 	events          chan RuntimeEvent
+	runMu           sync.Mutex
+	activeRunToken  uint64
+	nextRunToken    uint64
+	activeRunCancel context.CancelFunc
 }
 
 func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry, sessionStore Store, providerFactory ProviderFactory) *Service {
@@ -56,6 +62,14 @@ func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry,
 }
 
 func (s *Service) Run(ctx context.Context, input UserInput) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	runToken := s.startRun(cancel)
+	defer func() {
+		cancel()
+		s.finishRun(runToken)
+	}()
+	ctx = runCtx
+
 	if strings.TrimSpace(input.Content) == "" {
 		return errors.New("runtime: input content is empty")
 	}
@@ -205,6 +219,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 }
 
+func (s *Service) CancelActiveRun() bool {
+	s.runMu.Lock()
+	cancel := s.activeRunCancel
+	s.runMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+
+	cancel()
+	return true
+}
+
 func (s *Service) Events() <-chan RuntimeEvent {
 	return s.events
 }
@@ -245,6 +271,29 @@ func (s *Service) forwardProviderEvents(runID string, sessionID string, input <-
 			s.emit(EventAgentChunk, runID, sessionID, event.Text)
 		}
 	}
+}
+
+func (s *Service) startRun(cancel context.CancelFunc) uint64 {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	s.nextRunToken++
+	token := s.nextRunToken
+	s.activeRunToken = token
+	s.activeRunCancel = cancel
+	return token
+}
+
+func (s *Service) finishRun(token uint64) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+
+	if s.activeRunToken != token {
+		return
+	}
+
+	s.activeRunToken = 0
+	s.activeRunCancel = nil
 }
 
 func (s *Service) handleRunError(runID string, sessionID string, err error) error {

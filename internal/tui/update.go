@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -58,9 +59,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.IsAgentRunning = false
 			a.state.StreamingReply = false
 			a.state.CurrentTool = ""
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
-			a.appendInlineMessage(roleError, typed.err.Error())
+			if errors.Is(typed.err, context.Canceled) {
+				a.state.ExecutionError = ""
+				a.state.StatusText = statusCanceled
+			} else {
+				a.state.ExecutionError = typed.err.Error()
+				a.state.StatusText = typed.err.Error()
+				a.appendInlineMessage(roleError, typed.err.Error())
+			}
 		}
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
@@ -101,6 +107,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.ShowHelp = !a.state.ShowHelp
 			a.help.ShowAll = a.state.ShowHelp
 			a.resizeComponents()
+			return a, tea.Batch(cmds...)
+		}
+		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
+			if a.runtime.CancelActiveRun() {
+				a.state.StatusText = statusCanceling
+			}
+			a.rebuildTranscript()
 			return a, tea.Batch(cmds...)
 		}
 		if a.state.ActivePicker != pickerNone {
@@ -389,6 +402,13 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
 			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
 		}
+	case agentruntime.EventRunCanceled:
+		a.state.IsAgentRunning = false
+		a.state.StreamingReply = false
+		a.state.CurrentTool = ""
+		a.state.ExecutionError = ""
+		a.state.StatusText = statusCanceled
+		a.appendInlineMessage(roleSystem, "Canceled current run.")
 	case agentruntime.EventError:
 		a.state.StatusText = statusError
 		a.state.IsAgentRunning = false

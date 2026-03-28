@@ -609,6 +609,49 @@ func TestServiceRunErrorPaths(t *testing.T) {
 	}
 }
 
+func TestServiceCancelActiveRun(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	started := make(chan struct{})
+	scripted := &scriptedProvider{
+		name: "cancel-active-run-provider",
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+			close(started)
+			<-ctx.Done()
+			return provider.ChatResponse{}, ctx.Err()
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	errCh := make(chan error, 1)
+	input := UserInput{RunID: "run-cancel-active", Content: "hello"}
+
+	go func() {
+		errCh <- service.Run(context.Background(), input)
+	}()
+
+	<-started
+	if !service.CancelActiveRun() {
+		t.Fatalf("expected active run cancel to return true")
+	}
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+	if service.CancelActiveRun() {
+		t.Fatalf("expected no active run after cancellation")
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventRunCanceled})
+	assertNoEventType(t, events, EventError)
+	assertEventsRunID(t, events, input.RunID)
+}
+
 func TestServiceRunCanceledByProvider(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()

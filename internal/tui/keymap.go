@@ -4,6 +4,7 @@ import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
 	Send        key.Binding
+	CancelAgent key.Binding
 	NewSession  key.Binding
 	NextPanel   key.Binding
 	PrevPanel   key.Binding
@@ -25,6 +26,10 @@ func newKeyMap() keyMap {
 			key.WithKeys("enter", "ctrl+s"),
 			key.WithHelp("Enter/Ctrl+S", "发送（输入框）"),
 		),
+		CancelAgent: key.NewBinding(
+			key.WithKeys("ctrl+w"),
+			key.WithHelp("Ctrl+w", "中止"),
+		),
 		NewSession: key.NewBinding(
 			key.WithKeys("ctrl+n"),
 			key.WithHelp("Ctrl+N", "新会话"),
@@ -43,7 +48,7 @@ func newKeyMap() keyMap {
 		),
 		OpenSession: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("Enter", "打开会话（会话列表）"),
+			key.WithHelp("Enter", "打开会话"),
 		),
 		ToggleHelp: key.NewBinding(
 			key.WithKeys("ctrl+q"),
@@ -55,11 +60,11 @@ func newKeyMap() keyMap {
 		),
 		ScrollUp: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "向上滚动"),
+			key.WithHelp("Up/k", "向上滚动"),
 		),
 		ScrollDown: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "向下滚动"),
+			key.WithHelp("Down/j", "向下滚动"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "b"),
@@ -81,14 +86,14 @@ func newKeyMap() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.NewSession, k.NextPanel, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Send, k.CancelAgent, k.NewSession, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Send, k.NewSession, k.OpenSession, k.FocusInput},
-		{k.NextPanel, k.PrevPanel, k.ToggleHelp, k.Quit},
-		{k.ScrollUp, k.ScrollDown, k.PageUp, k.PageDown},
-		{k.Top, k.Bottom},
+		{k.Send, k.CancelAgent, k.NewSession, k.OpenSession},
+		{k.FocusInput, k.NextPanel, k.PrevPanel, k.ToggleHelp},
+		{k.Quit, k.ScrollUp, k.ScrollDown, k.PageUp},
+		{k.PageDown, k.Top, k.Bottom},
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
+	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
 )
 
@@ -121,19 +122,29 @@ func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders() error = %v", err)
 	}
-	if len(items) != 1 {
+	expectedModels := map[string]int{
+		openai.Name: len(openai.BuiltinConfig().Models),
+		gemini.Name: len(gemini.BuiltinConfig().Models),
+	}
+	if len(items) != len(expectedModels) {
 		t.Fatalf("expected only supported providers, got %d", len(items))
 	}
 
-	item := items[0]
-	if item.ID != openai.DriverName {
-		t.Fatalf("expected supported provider %q, got %q", openai.DriverName, item.ID)
+	for _, item := range items {
+		wantModels, ok := expectedModels[item.ID]
+		if !ok {
+			t.Fatalf("unexpected supported provider %q", item.ID)
+		}
+		if item.Description != "" {
+			t.Fatalf("expected provider description to stay empty for hidden metadata, got %q", item.Description)
+		}
+		if len(item.Models) != wantModels {
+			t.Fatalf("expected provider models to come from config, got %+v", item.Models)
+		}
+		delete(expectedModels, item.ID)
 	}
-	if item.Description != "" {
-		t.Fatalf("expected provider description to stay empty for hidden metadata, got %q", item.Description)
-	}
-	if len(item.Models) != len(openai.BuiltinConfig().Models) {
-		t.Fatalf("expected provider models to come from config, got %+v", item.Models)
+	if len(expectedModels) != 0 {
+		t.Fatalf("missing supported providers from catalog: %+v", expectedModels)
 	}
 }
 

@@ -5,13 +5,19 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
+	"neo-code/internal/provider/openll"
 )
 
 func DefaultConfig() *config.Config {
 	cfg := config.Default()
 	defaultProvider := openai.BuiltinConfig()
-	cfg.Providers = []config.ProviderConfig{defaultProvider}
+	cfg.Providers = []config.ProviderConfig{
+		defaultProvider,
+		gemini.BuiltinConfig(),
+		openll.BuiltinConfig(),
+	}
 	cfg.SelectedProvider = defaultProvider.Name
 	cfg.CurrentModel = defaultProvider.Model
 	return cfg

@@ -356,6 +356,8 @@ func (a App) statusBadge(text string) string {
 	switch {
 	case strings.Contains(lower, "error") || strings.Contains(lower, "failed"):
 		return a.styles.badgeError.Render(text)
+	case strings.Contains(lower, "cancel"):
+		return a.styles.badgeWarning.Render(text)
 	case a.state.IsAgentRunning || strings.Contains(lower, "running") || strings.Contains(lower, "thinking"):
 		return a.styles.badgeWarning.Render(text)
 	default:
