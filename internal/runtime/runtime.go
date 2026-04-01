@@ -136,19 +136,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
-			Messages: session.Messages,
-			Workdir:  cfg.Workdir,
-		})
-		if err != nil {
-			return s.handleRunError(ctx, input.RunID, session.ID, err)
-		}
-
-		systemPrompt := builtContext.SystemPrompt
-		if systemPrompt == "" {
-			systemPrompt = s.systemPrompt()
-		}
-
 		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
 
 			Model:        cfg.CurrentModel,
