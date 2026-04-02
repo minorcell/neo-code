@@ -1538,6 +1538,41 @@ func TestRenderMessageContentUsesMarkdownRenderer(t *testing.T) {
 	}
 }
 
+func TestRenderMessageBlockUserContentAlignsWithUserTag(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	rendered := stripANSI(app.renderMessageBlock(provider.Message{Role: roleUser, Content: "nihao"}, 80))
+	lines := strings.Split(rendered, "\n")
+
+	tagLine := ""
+	bodyLine := ""
+	for _, line := range lines {
+		if strings.Contains(line, messageTagUser) {
+			tagLine = line
+		}
+		if strings.Contains(line, "nihao") {
+			bodyLine = line
+		}
+	}
+	if tagLine == "" || bodyLine == "" {
+		t.Fatalf("expected user tag and body lines, got %q", rendered)
+	}
+
+	tagCol := strings.Index(tagLine, messageTagUser)
+	bodyCol := strings.Index(bodyLine, "nihao")
+	if tagCol < 0 || bodyCol < 0 {
+		t.Fatalf("expected valid columns for user tag/body, got tag=%d body=%d", tagCol, bodyCol)
+	}
+	if bodyCol+6 < tagCol {
+		t.Fatalf("expected user body to align near user tag, got tagCol=%d bodyCol=%d rendered=%q", tagCol, bodyCol, rendered)
+	}
+}
+
 func TestRenderMessageContentShowsPlaceholderWhenMarkdownFails(t *testing.T) {
 	manager := newTestConfigManager(t)
 	runtime := newStubRuntime()

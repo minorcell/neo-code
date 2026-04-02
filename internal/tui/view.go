@@ -258,9 +258,6 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 	}
 
 	contentBlock := a.renderMessageContent(content, maxMessageWidth-2, bodyStyle)
-	if message.Role == roleUser {
-		contentBlock = lipgloss.PlaceHorizontal(maxMessageWidth, lipgloss.Right, contentBlock)
-	}
 
 	block := lipgloss.JoinVertical(
 		blockAlign,
