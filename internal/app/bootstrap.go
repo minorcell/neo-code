@@ -20,6 +20,8 @@ import (
 )
 
 func NewProgram(ctx context.Context) (*tea.Program, error) {
+	ensureConsoleUTF8()
+
 	loader := config.NewLoader("", builtin.DefaultConfig())
 	manager := config.NewManager(loader)
 	cfg, err := manager.Load(ctx)

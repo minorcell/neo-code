@@ -1,6 +1,12 @@
 package tui
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
+
+var markdownTestANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func TestNewMarkdownRendererAndRender(t *testing.T) {
 	rendererAny, err := newMarkdownRenderer()
@@ -71,5 +77,23 @@ func TestMarkdownRendererCachesByWidth(t *testing.T) {
 	}
 	if len(renderer.renderers) != 2 {
 		t.Fatalf("expected width-specific renderer cache, got %d", len(renderer.renderers))
+	}
+}
+
+func TestMarkdownRendererPreservesChineseText(t *testing.T) {
+	rendererAny, err := newMarkdownRenderer()
+	if err != nil {
+		t.Fatalf("newMarkdownRenderer() error = %v", err)
+	}
+	renderer := rendererAny.(*glamourMarkdownRenderer)
+
+	output, err := renderer.Render("中文标题\n\n- 第一项\n- 第二项", 40)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	visible := markdownTestANSIPattern.ReplaceAllString(output, "")
+	if !strings.Contains(visible, "中文标题") || !strings.Contains(visible, "第一项") || !strings.Contains(visible, "第二项") {
+		t.Fatalf("expected chinese markdown content to be preserved, got %q", visible)
 	}
 }

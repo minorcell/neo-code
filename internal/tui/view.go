@@ -170,7 +170,7 @@ func (a App) renderPrompt(width int) string {
 		box = a.styles.inputBoxFocused
 	}
 
-	// 计算边框和内边距占用的空间
+	// Account for frame and padding when sizing the composer container.
 	boxWidth := a.composerBoxWidth(width)
 
 	return box.Width(boxWidth).Render(a.input.View())
@@ -342,7 +342,7 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	// 确保帮助视图填充整个宽度，避免边框断裂
+	// Keep help content stretched to full width to avoid clipping at borders.
 	return a.styles.footer.Width(width).Render(helpContent)
 }
 
