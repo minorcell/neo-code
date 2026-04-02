@@ -363,7 +363,27 @@ func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.
 	if err != nil {
 		return bodyStyle.Render(emptyMessageText)
 	}
-	return bodyStyle.Render(rendered)
+	return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width)))
+}
+
+func normalizeBlockRightEdge(content string, maxWidth int) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	targetWidth := 0
+	for _, line := range lines {
+		targetWidth = max(targetWidth, lipgloss.Width(line))
+	}
+	targetWidth = clamp(targetWidth, 1, maxWidth)
+
+	padStyle := lipgloss.NewStyle().Width(targetWidth)
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		normalized = append(normalized, padStyle.Render(line))
+	}
+	return strings.Join(normalized, "\n")
 }
 
 func (a App) statusBadge(text string) string {

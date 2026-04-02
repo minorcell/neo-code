@@ -1573,6 +1573,32 @@ func TestRenderMessageBlockUserContentAlignsWithUserTag(t *testing.T) {
 	}
 }
 
+func TestRenderMessageContentNormalizesRightEdge(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.markdownRenderer = &stubMarkdownRenderer{
+		output: "very long line\nshort\nmid",
+	}
+
+	rendered := stripANSI(app.renderMessageContent("ignored", 40, app.styles.messageBody))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected multiline output, got %q", rendered)
+	}
+
+	firstWidth := len([]rune(lines[0]))
+	for i, line := range lines[1:] {
+		if len([]rune(line)) != firstWidth {
+			t.Fatalf("expected aligned right edge, line %d width=%d first=%d rendered=%q", i+1, len([]rune(line)), firstWidth, rendered)
+		}
+	}
+}
+
 func TestRenderMessageContentShowsPlaceholderWhenMarkdownFails(t *testing.T) {
 	manager := newTestConfigManager(t)
 	runtime := newStubRuntime()
