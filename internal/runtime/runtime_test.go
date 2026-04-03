@@ -1389,7 +1389,7 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		t.Fatalf("set env: %v", err)
 	}
 
-	defaults := builtin.DefaultConfig()
+	defaults := config.DefaultConfig()
 	selected := config.NormalizeProviderName(defaults.SelectedProvider)
 	for i := range defaults.Providers {
 		if config.NormalizeProviderName(defaults.Providers[i].Name) == selected {
