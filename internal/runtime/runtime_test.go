@@ -13,7 +13,6 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/builtin"
 	"neo-code/internal/tools"
 )
 
@@ -1404,7 +1403,6 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		t.Fatalf("load config: %v", err)
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Workdir = t.TempDir()
 		cfg.ToolTimeoutSec = 1
 		cfg.MaxLoops = 4
 		return nil
