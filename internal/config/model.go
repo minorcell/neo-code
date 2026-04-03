@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	DefaultWorkdir                            = "."
-	DefaultMaxLoops                           = 8
-	DefaultToolTimeoutSec                     = 20
-	DefaultWebFetchMaxResponseBytes     int64 = 256 * 1024
-	DefaultCompactManualKeepRecentSpans       = 6
-	DefaultCompactMaxSummaryChars             = 1200
+	DefaultWorkdir                               = "."
+	DefaultMaxLoops                              = 8
+	DefaultToolTimeoutSec                        = 20
+	DefaultWebFetchMaxResponseBytes        int64 = 256 * 1024
+	DefaultCompactManualKeepRecentMessages       = 10
+	DefaultCompactMaxSummaryChars                = 1200
 )
 
 const (
@@ -67,9 +67,9 @@ type ContextConfig struct {
 }
 
 type CompactConfig struct {
-	ManualStrategy        string `yaml:"manual_strategy,omitempty"`
-	ManualKeepRecentSpans int    `yaml:"manual_keep_recent_spans,omitempty"`
-	MaxSummaryChars       int    `yaml:"max_summary_chars,omitempty"`
+	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
 }
 
 type WebFetchConfig struct {
@@ -337,9 +337,9 @@ func defaultContextConfig() ContextConfig {
 
 func defaultCompactConfig() CompactConfig {
 	return CompactConfig{
-		ManualStrategy:        CompactManualStrategyKeepRecent,
-		ManualKeepRecentSpans: DefaultCompactManualKeepRecentSpans,
-		MaxSummaryChars:       DefaultCompactMaxSummaryChars,
+		ManualStrategy:           CompactManualStrategyKeepRecent,
+		ManualKeepRecentMessages: DefaultCompactManualKeepRecentMessages,
+		MaxSummaryChars:          DefaultCompactMaxSummaryChars,
 	}
 }
 
@@ -414,8 +414,8 @@ func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
 	if strings.TrimSpace(c.ManualStrategy) == "" {
 		c.ManualStrategy = defaults.ManualStrategy
 	}
-	if c.ManualKeepRecentSpans <= 0 {
-		c.ManualKeepRecentSpans = defaults.ManualKeepRecentSpans
+	if c.ManualKeepRecentMessages <= 0 {
+		c.ManualKeepRecentMessages = defaults.ManualKeepRecentMessages
 	}
 	if c.MaxSummaryChars <= 0 {
 		c.MaxSummaryChars = defaults.MaxSummaryChars
@@ -439,8 +439,8 @@ func (c WebFetchConfig) Validate() error {
 }
 
 func (c CompactConfig) Validate() error {
-	if c.ManualKeepRecentSpans <= 0 {
-		return errors.New("manual_keep_recent_spans must be greater than 0")
+	if c.ManualKeepRecentMessages <= 0 {
+		return errors.New("manual_keep_recent_messages must be greater than 0")
 	}
 	if c.MaxSummaryChars <= 0 {
 		return errors.New("max_summary_chars must be greater than 0")
