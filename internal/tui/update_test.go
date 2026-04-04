@@ -699,15 +699,18 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 		t.Fatalf("expected model picker rendering")
 	}
 	app.state.ActivePicker = pickerNone
+	app.refreshCommandMenu()
 	if app.renderCommandMenu(80) == "" {
 		app.input.SetValue("/")
 		app.state.InputText = "/"
+		app.refreshCommandMenu()
 		if app.renderCommandMenu(80) == "" {
 			t.Fatalf("expected slash command menu when input starts with slash")
 		}
 	}
 	app.input.SetValue("/status")
 	app.state.InputText = "/status"
+	app.refreshCommandMenu()
 	if menu := app.renderCommandMenu(80); menu != "" {
 		t.Fatalf("expected complete slash command to hide menu, got %q", menu)
 	}
@@ -751,7 +754,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	}
 	app.input.SetValue("one")
 	app.state.InputText = "one"
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	if app.input.Height() != 1 {
 		t.Fatalf("expected single-line composer height 1, got %d", app.input.Height())
 	}
@@ -760,7 +763,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	}
 	app.input.SetValue("one\ntwo")
 	app.state.InputText = app.input.Value()
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	if app.input.Height() != 2 {
 		t.Fatalf("expected two-line composer height 2, got %d", app.input.Height())
 	}
@@ -769,7 +772,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	}
 	app.input.SetValue(strings.Join([]string{"1", "2", "3", "4", "5", "6"}, "\n"))
 	app.state.InputText = app.input.Value()
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	if app.input.Height() != composerMaxHeight {
 		t.Fatalf("expected composer height capped at %d, got %d", composerMaxHeight, app.input.Height())
 	}
@@ -788,18 +791,19 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	if app.statusBadge("error: boom") == "" || app.statusBadge("running now") == "" {
 		t.Fatalf("expected status badge variants")
 	}
-	if app.renderMessageBlock(provider.Message{Role: roleError, Content: "boom"}, 80) == "" {
+	if rendered, _ := app.renderMessageBlockWithCopy(provider.Message{Role: roleError, Content: "boom"}, 80, 1); rendered == "" {
 		t.Fatalf("expected error message block")
 	}
-	if app.renderMessageBlock(provider.Message{
+	if rendered, _ := app.renderMessageBlockWithCopy(provider.Message{
 		Role: roleAssistant,
 		ToolCalls: []provider.ToolCall{
 			{Name: "filesystem_edit"},
 		},
-	}, 80) == "" {
+	}, 80, 1); rendered == "" {
 		t.Fatalf("expected tool call message block")
 	}
-	if app.renderMessageContent("```go\nfmt.Println(\"x\")\n```", 80, app.styles.messageBody) == "" {
+	renderedCodeOnly, _ := app.renderMessageContentWithCopy("```go\nfmt.Println(\"x\")\n```", 80, app.styles.messageBody, 1)
+	if renderedCodeOnly == "" {
 		t.Fatalf("expected code block rendering")
 	}
 	if app.computeLayout().contentWidth == 0 {
@@ -845,7 +849,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 		t.Fatalf("unexpected session item filter value")
 	}
 
-	mItem := modelItem{name: "gpt-5.4", description: "Frontier"}
+	mItem := selectionItem{name: "gpt-5.4", description: "Frontier"}
 	if mItem.Title() == "" || mItem.Description() == "" || mItem.FilterValue() == "" {
 		t.Fatalf("expected model item helpers to return values")
 	}
@@ -858,7 +862,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 		t.Fatalf("expected delegate update to return nil")
 	}
 	var buf bytes.Buffer
-	model := newModelPicker([]provider.ModelDescriptor{{ID: "gpt-4.1", Name: "gpt-4.1"}})
+	model := newSelectionPickerItems(mapModelItems([]provider.ModelDescriptor{{ID: "gpt-4.1", Name: "gpt-4.1"}}))
 	sessionList := []list.Item{sItem}
 	listModel := list.New(sessionList, delegate, 30, 10)
 	delegate.Render(&buf, listModel, 0, sItem)
@@ -1018,7 +1022,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				app.applyFocus()
 				app.input.SetValue("func main() {\n")
 				app.state.InputText = app.input.Value()
-				app.resizeComponents()
+				app.applyComponentLayout(true)
 			},
 			msg: tea.KeyMsg{Type: tea.KeyTab},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1039,7 +1043,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			msg:  tea.KeyMsg{Type: tea.KeyShiftTab},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
-				if app.focus != panelTranscript {
+				if app.focus != panelActivity {
 					t.Fatalf("expected focus to move backward, got %v", app.focus)
 				}
 			},
@@ -1113,7 +1117,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.input.SetValue("inspect repo")
 				app.state.InputText = "inspect repo"
-				app.resizeComponents()
+				app.applyComponentLayout(true)
 			},
 			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1141,7 +1145,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.input.SetValue("line1\nline2")
 				app.state.InputText = app.input.Value()
-				app.resizeComponents()
+				app.applyComponentLayout(true)
 			},
 			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1212,7 +1216,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.input.SetValue(" \n ")
 				app.state.InputText = " \n "
-				app.resizeComponents()
+				app.applyComponentLayout(true)
 			},
 			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1233,7 +1237,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.input.SetValue("line1\n")
 				app.state.InputText = app.input.Value()
-				app.resizeComponents()
+				app.applyComponentLayout(true)
 			},
 			msg: tea.KeyMsg{Type: tea.KeyBackspace},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1508,7 +1512,7 @@ func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
 	if len(app.modelPicker.Items()) == 0 {
 		t.Fatalf("expected model picker catalog")
 	}
-	selected := app.modelPicker.Items()[0].(modelItem).id
+	selected := app.modelPicker.Items()[0].(selectionItem).id
 	app.modelPicker.Select(0)
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1553,7 +1557,7 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	selectedIndex := -1
 	selected := ""
 	for idx, item := range app.providerPicker.Items() {
-		candidate, ok := item.(providerItem)
+		candidate, ok := item.(selectionItem)
 		if !ok {
 			continue
 		}
@@ -1843,7 +1847,7 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 	app.transcript.Height = 4
 	app.transcript.SetContent(strings.Repeat("line\n", 20))
 	app.transcript.GotoBottom()
-	app.resizeComposerLayout()
+	app.applyComponentLayout(false)
 	if app.transcript.Width <= 0 || app.transcript.Height <= 0 {
 		t.Fatalf("expected resizeComposerLayout to keep transcript dimensions positive")
 	}
@@ -1885,7 +1889,7 @@ func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
 		t.Fatalf("expected width<=0 to return original text, got %q", got)
 	}
 
-	rendered := app.renderMessageContent("```\n```", 20, app.styles.messageBody)
+	rendered, _ := app.renderMessageContentWithCopy("```\n```", 20, app.styles.messageBody, 1)
 	if !strings.Contains(stripANSI(rendered), emptyMessageText) {
 		t.Fatalf("expected empty code block placeholder, got %q", rendered)
 	}
@@ -1934,7 +1938,7 @@ func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
 
 	app.width = 128
 	app.height = 40
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	app.transcript.SetContent(strings.Repeat("line\n", 160))
 	app.transcript.GotoTop()
 
@@ -1987,7 +1991,7 @@ func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
 
 	app.width = 100
 	app.height = 32
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	stackX, stackY, _, stackH := app.transcriptBounds()
 	if stackH <= 0 || !app.isMouseWithinTranscript(tea.MouseMsg{X: stackX + 1, Y: stackY + 1}) {
 		t.Fatalf("expected stacked layout transcript bounds to accept mouse hits")
@@ -2010,7 +2014,7 @@ func TestInputMouseWheelScrollsComposer(t *testing.T) {
 		"line11", "line12",
 	}, "\n"))
 	app.state.InputText = app.input.Value()
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	app.focus = panelTranscript
 	app.applyFocus()
 
@@ -2095,6 +2099,8 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 		{Time: fixed, Kind: "provider", Title: "third", Detail: "retry"},
 		{Time: fixed, Kind: "run", Title: "fourth", Detail: "done"},
 	}
+	app.applyComponentLayout(true)
+	app.rebuildActivity()
 	app.focus = panelActivity
 	if app.focusLabel() != focusLabelActivity {
 		t.Fatalf("expected activity focus label, got %q", app.focusLabel())
@@ -2105,10 +2111,10 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 
 	preview := app.renderActivityPreview(64)
 	if !strings.Contains(preview, "second") || !strings.Contains(preview, "third") || !strings.Contains(preview, "fourth") {
-		t.Fatalf("expected last activity entries in preview, got %q", preview)
+		t.Fatalf("expected latest activity rows in preview, got %q", preview)
 	}
 	if strings.Contains(preview, "first") {
-		t.Fatalf("expected oldest activity entry to be trimmed from preview, got %q", preview)
+		t.Fatalf("expected oldest activity row to be clipped from current viewport, got %q", preview)
 	}
 
 	line := app.renderActivityLine(activityEntry{Time: fixed, Kind: "", Title: "single line", Detail: ""}, 80)
@@ -2116,7 +2122,7 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 		t.Fatalf("expected fallback kind without detail suffix, got %q", line)
 	}
 
-	rendered := app.renderMessageContent("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody)
+	rendered, _ := app.renderMessageContentWithCopy("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody, 1)
 	rendered = stripANSI(rendered)
 	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(") || !strings.Contains(rendered, "1)") || !strings.Contains(rendered, "after") {
 		t.Fatalf("expected mixed prose and code to render, got %q", rendered)
@@ -2148,7 +2154,7 @@ func TestRenderMessageContentUsesMarkdownRenderer(t *testing.T) {
 	stub := &stubMarkdownRenderer{output: "markdown-rendered"}
 	app.markdownRenderer = stub
 
-	rendered := app.renderMessageContent("# Title\n\n- item", 40, app.styles.messageBody)
+	rendered, _ := app.renderMessageContentWithCopy("# Title\n\n- item", 40, app.styles.messageBody, 1)
 	if !strings.Contains(rendered, "markdown-rendered") {
 		t.Fatalf("expected markdown renderer output, got %q", rendered)
 	}
@@ -2165,7 +2171,8 @@ func TestRenderMessageBlockUserContentAlignsWithUserTag(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	rendered := stripANSI(app.renderMessageBlock(provider.Message{Role: roleUser, Content: "nihao"}, 80))
+	renderedMessage, _ := app.renderMessageBlockWithCopy(provider.Message{Role: roleUser, Content: "nihao"}, 80, 1)
+	rendered := stripANSI(renderedMessage)
 	lines := strings.Split(rendered, "\n")
 
 	tagLine := ""
@@ -2204,7 +2211,8 @@ func TestRenderMessageContentNormalizesRightEdge(t *testing.T) {
 		output: "very long line\nshort\nmid",
 	}
 
-	rendered := stripANSI(app.renderMessageContent("ignored", 40, app.styles.messageBody))
+	renderedRaw, _ := app.renderMessageContentWithCopy("ignored", 40, app.styles.messageBody, 1)
+	rendered := stripANSI(renderedRaw)
 	lines := strings.Split(rendered, "\n")
 	if len(lines) < 3 {
 		t.Fatalf("expected multiline output, got %q", rendered)
@@ -2229,7 +2237,7 @@ func TestRenderMessageContentShowsPlaceholderWhenMarkdownFails(t *testing.T) {
 	app.markdownRenderer = &stubMarkdownRenderer{err: errors.New("render failed")}
 
 	content := "before\n```go\nfmt.Println(1)\n```\nafter"
-	rendered := app.renderMessageContent(content, 50, app.styles.messageBody)
+	rendered, _ := app.renderMessageContentWithCopy(content, 50, app.styles.messageBody, 1)
 	if !strings.Contains(rendered, "fmt.Println(1)") {
 		t.Fatalf("expected code block to keep rendering when markdown prose fails, got %q", rendered)
 	}
@@ -2248,7 +2256,7 @@ func TestRenderMessageContentShowsPlaceholderWhenRendererMissing(t *testing.T) {
 
 	app.markdownRenderer = nil
 
-	rendered := app.renderMessageContent("content", 50, app.styles.messageBody)
+	rendered, _ := app.renderMessageContentWithCopy("content", 50, app.styles.messageBody, 1)
 	if !strings.Contains(rendered, emptyMessageText) {
 		t.Fatalf("expected placeholder when markdown renderer is missing, got %q", rendered)
 	}
@@ -2302,6 +2310,7 @@ func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 	app.fileCandidates = []string{"README.md", "internal/tui/update.go", "internal/tui/view.go"}
 	app.input.SetValue("inspect @internal/tui/upd")
 	app.state.InputText = app.input.Value()
+	app.refreshCommandMenu()
 	menu := app.renderCommandMenu(80)
 	if !strings.Contains(menu, fileMenuTitle) || !strings.Contains(menu, "@internal/tui/update.go") {
 		t.Fatalf("expected file suggestion menu, got %q", menu)
@@ -2324,6 +2333,7 @@ func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 
 	app.input.SetValue("& go test ./...")
 	app.state.InputText = app.input.Value()
+	app.refreshCommandMenu()
 	menu = app.renderCommandMenu(80)
 	if !strings.Contains(menu, shellMenuTitle) || !strings.Contains(menu, workspaceCommandUsage) {
 		t.Fatalf("expected shell hint menu, got %q", menu)

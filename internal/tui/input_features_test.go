@@ -174,12 +174,13 @@ func TestWorkspaceFileHelpers(t *testing.T) {
 		app.fileCandidates = []string{"README.md", "internal/tui/update.go", "internal/tui/view.go"}
 		app.input.SetValue("inspect @internal/tui/upd")
 		app.state.InputText = app.input.Value()
+		app.refreshCommandMenu()
 
-		suggestions := app.matchingFileReferences(app.input.Value())
-		if len(suggestions) == 0 || suggestions[0] != "internal/tui/update.go" {
+		_, _, _, suggestions, ok := app.resolveFileReferenceSuggestions(app.input.Value())
+		if !ok || len(suggestions) == 0 || suggestions[0] != "internal/tui/update.go" {
 			t.Fatalf("unexpected suggestions %v", suggestions)
 		}
-		if !app.applyTopFileSuggestion() {
+		if !app.applySelectedCommandSuggestion() {
 			t.Fatalf("expected top suggestion to be applied")
 		}
 		if app.state.InputText != "inspect @internal/tui/update.go" {
@@ -188,8 +189,9 @@ func TestWorkspaceFileHelpers(t *testing.T) {
 
 		app.input.SetValue("inspect plain-text")
 		app.state.InputText = app.input.Value()
-		if app.applyTopFileSuggestion() {
-			t.Fatalf("expected applyTopFileSuggestion to fail without @ token")
+		app.refreshCommandMenu()
+		if app.applySelectedCommandSuggestion() {
+			t.Fatalf("expected applySelectedCommandSuggestion to fail without @ token")
 		}
 	})
 }
