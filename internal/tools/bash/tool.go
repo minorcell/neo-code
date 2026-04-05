@@ -35,7 +35,7 @@ func New(root string, shell string, timeout time.Duration) *Tool {
 }
 
 func (t *Tool) Name() string {
-	return "bash"
+	return tools.ToolNameBash
 }
 
 func (t *Tool) Description() string {

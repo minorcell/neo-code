@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -201,6 +202,59 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	}
 	if got.Messages[6].Content != "latest webfetch result" {
 		t.Fatalf("expected latest tool result to stay visible, got %q", got.Messages[6].Content)
+	}
+}
+
+func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+		},
+	}
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "older user"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "current reply"},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: messages,
+		Compact: CompactOptions{
+			DisableMicroCompact: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.Messages, messages) {
+		t.Fatalf("expected messages to remain unchanged when micro compact is disabled, got %+v", got.Messages)
+	}
+	if &got.Messages[2] == &messages[2] {
+		t.Fatalf("expected disabled path to still clone message slice")
 	}
 }
 

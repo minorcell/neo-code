@@ -1,6 +1,10 @@
 package context
 
-import "context"
+import (
+	"context"
+
+	"neo-code/internal/provider"
+)
 
 // DefaultBuilder preserves the current runtime context-building behavior.
 type DefaultBuilder struct {
@@ -43,6 +47,14 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt: composeSystemPrompt(sections...),
-		Messages:     microCompactMessages(trimPolicy.Trim(input.Messages)),
+		Messages:     applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.Compact),
 	}, nil
+}
+
+// applyReadTimeContextProjection 负责在 provider 请求前按开关应用只读上下文投影，避免改写原始会话消息。
+func applyReadTimeContextProjection(messages []provider.Message, options CompactOptions) []provider.Message {
+	if options.DisableMicroCompact {
+		return cloneContextMessages(messages)
+	}
+	return microCompactMessages(messages)
 }

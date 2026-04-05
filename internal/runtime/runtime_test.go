@@ -477,6 +477,9 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if builder.lastInput.Metadata.Model == "" {
 		t.Fatalf("expected model to be forwarded to builder metadata")
 	}
+	if builder.lastInput.Compact.DisableMicroCompact {
+		t.Fatalf("expected micro compact to stay enabled by default")
+	}
 	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
 	}
@@ -488,6 +491,47 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 	if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
+	}
+}
+
+func TestServiceRunCanDisableMicroCompactViaConfig(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Compact.MicroCompactDisabled = true
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt: "delegated prompt",
+				Messages:     append([]provider.Message(nil), input.Messages...),
+			}, nil
+		},
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{{
+			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
+			FinishReason: "stop",
+		}},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-disable-micro-compact", Content: "hello"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if !builder.lastInput.Compact.DisableMicroCompact {
+		t.Fatalf("expected config to disable micro compact in build input")
 	}
 }
 

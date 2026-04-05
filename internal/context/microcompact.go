@@ -5,6 +5,7 @@ import (
 
 	"neo-code/internal/context/internalcompact"
 	"neo-code/internal/provider"
+	"neo-code/internal/tools"
 )
 
 const (
@@ -15,13 +16,13 @@ const (
 )
 
 var microCompactableTools = map[string]struct{}{
-	"bash":                  {},
-	"webfetch":              {},
-	"filesystem_read_file":  {},
-	"filesystem_grep":       {},
-	"filesystem_glob":       {},
-	"filesystem_edit":       {},
-	"filesystem_write_file": {},
+	tools.ToolNameBash:                {},
+	tools.ToolNameWebFetch:            {},
+	tools.ToolNameFilesystemReadFile:  {},
+	tools.ToolNameFilesystemGrep:      {},
+	tools.ToolNameFilesystemGlob:      {},
+	tools.ToolNameFilesystemEdit:      {},
+	tools.ToolNameFilesystemWriteFile: {},
 }
 
 // microCompactMessages 对裁剪后的消息做只读投影式微压缩，仅清理旧工具结果内容。
