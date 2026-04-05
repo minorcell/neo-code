@@ -59,30 +59,24 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 
 	// 使用流式事件通道收集 compact 摘要响应。
 	streamEvents := make(chan provider.StreamEvent, 32)
-	streamDone := make(chan struct{})
+	streamDone := make(chan error, 1)
 	acc := newStreamAccumulator()
 
 	go func() {
-		defer close(streamDone)
+		var streamErr error
+		defer func() {
+			streamDone <- streamErr
+		}()
+
 		for {
 			select {
 			case event, ok := <-streamEvents:
 				if !ok {
 					return
 				}
-				switch event.Type {
-				case provider.StreamEventTextDelta:
-					if payload, ok := event.Payload.(provider.TextDeltaPayload); ok {
-						acc.accumulateTextDelta(payload.Text)
-					}
-				case provider.StreamEventToolCallStart:
-					if payload, ok := event.Payload.(provider.ToolCallStartPayload); ok {
-						acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
-					}
-				case provider.StreamEventToolCallDelta:
-					if payload, ok := event.Payload.(provider.ToolCallDeltaPayload); ok {
-						acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
-					}
+				if err := handleProviderStreamEvent(event, acc, nil, nil); err != nil && streamErr == nil {
+					// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
+					streamErr = err
 				}
 			case <-ctx.Done():
 				return
@@ -99,13 +93,19 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 		}},
 	}, streamEvents)
 	close(streamEvents)
-	<-streamDone
+	streamErr := <-streamDone
 
 	if err != nil {
 		return "", err
 	}
+	if streamErr != nil {
+		return "", streamErr
+	}
 
-	message := acc.buildMessage()
+	message, err := acc.buildMessage()
+	if err != nil {
+		return "", err
+	}
 	if len(message.ToolCalls) > 0 {
 		return "", errors.New("runtime: compact summary response must not contain tool calls")
 	}

@@ -637,36 +637,36 @@ func drainStreamEvents(events <-chan domain.StreamEvent) []domain.StreamEvent {
 
 func requireTextDeltaPayload(t *testing.T, event domain.StreamEvent) domain.TextDeltaPayload {
 	t.Helper()
-	payload, ok := event.Payload.(domain.TextDeltaPayload)
-	if !ok {
-		t.Fatalf("expected TextDeltaPayload, got %T", event.Payload)
+	payload, err := event.TextDeltaValue()
+	if err != nil {
+		t.Fatalf("TextDeltaValue() error = %v", err)
 	}
 	return payload
 }
 
 func requireToolCallStartPayload(t *testing.T, event domain.StreamEvent) domain.ToolCallStartPayload {
 	t.Helper()
-	payload, ok := event.Payload.(domain.ToolCallStartPayload)
-	if !ok {
-		t.Fatalf("expected ToolCallStartPayload, got %T", event.Payload)
+	payload, err := event.ToolCallStartValue()
+	if err != nil {
+		t.Fatalf("ToolCallStartValue() error = %v", err)
 	}
 	return payload
 }
 
 func requireToolCallDeltaPayload(t *testing.T, event domain.StreamEvent) domain.ToolCallDeltaPayload {
 	t.Helper()
-	payload, ok := event.Payload.(domain.ToolCallDeltaPayload)
-	if !ok {
-		t.Fatalf("expected ToolCallDeltaPayload, got %T", event.Payload)
+	payload, err := event.ToolCallDeltaValue()
+	if err != nil {
+		t.Fatalf("ToolCallDeltaValue() error = %v", err)
 	}
 	return payload
 }
 
 func requireMessageDonePayload(t *testing.T, event domain.StreamEvent) domain.MessageDonePayload {
 	t.Helper()
-	payload, ok := event.Payload.(domain.MessageDonePayload)
-	if !ok {
-		t.Fatalf("expected MessageDonePayload, got %T", event.Payload)
+	payload, err := event.MessageDoneValue()
+	if err != nil {
+		t.Fatalf("MessageDoneValue() error = %v", err)
 	}
 	return payload
 }

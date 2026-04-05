@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
 	contextcompact "neo-code/internal/context/compact"
@@ -131,5 +132,69 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "must not contain tool calls") {
 		t.Fatalf("expected tool call rejection, got %v", err)
+	}
+}
+
+func TestCompactSummaryGeneratorRejectsMalformedStreamEvent(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventTextDelta},
+			},
+		},
+	}
+	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
+
+	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
+		Mode:   contextcompact.ModeManual,
+		Config: manager.Get().Context.Compact,
+	})
+	if err == nil || !strings.Contains(err.Error(), "text_delta event payload is nil") {
+		t.Fatalf("expected malformed stream event rejection, got %v", err)
+	}
+}
+
+func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+
+	stream := []provider.StreamEvent{{Type: provider.StreamEventTextDelta}}
+	for i := 0; i < 40; i++ {
+		stream = append(stream, provider.NewTextDeltaStreamEvent("ignored"))
+	}
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{stream},
+	}
+	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, genErr := generator.Generate(context.Background(), contextcompact.SummaryInput{
+			Mode:   contextcompact.ModeManual,
+			Config: manager.Get().Context.Compact,
+		})
+		errCh <- genErr
+	}()
+
+	select {
+	case genErr := <-errCh:
+		if genErr == nil || !strings.Contains(genErr.Error(), "text_delta event payload is nil") {
+			t.Fatalf("expected malformed stream event rejection, got %v", genErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected compact generation to fail instead of deadlocking on malformed stream event")
 	}
 }

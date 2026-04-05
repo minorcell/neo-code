@@ -1,6 +1,9 @@
 package provider
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // --- Role 常量 ---
 
@@ -56,9 +59,9 @@ func TestNewTextDeltaStreamEvent(t *testing.T) {
 		t.Fatalf("expected type %q, got %q", StreamEventTextDelta, event.Type)
 	}
 
-	payload, ok := event.Payload.(TextDeltaPayload)
-	if !ok {
-		t.Fatal("expected TextDeltaPayload type")
+	payload, err := event.TextDeltaValue()
+	if err != nil {
+		t.Fatalf("TextDeltaValue() error = %v", err)
 	}
 	if payload.Text != "hello" {
 		t.Fatalf("expected text %q, got %q", "hello", payload.Text)
@@ -75,9 +78,9 @@ func TestNewToolCallStartStreamEvent(t *testing.T) {
 		t.Fatalf("expected type %q, got %q", StreamEventToolCallStart, event.Type)
 	}
 
-	payload, ok := event.Payload.(ToolCallStartPayload)
-	if !ok {
-		t.Fatal("expected ToolCallStartPayload type")
+	payload, err := event.ToolCallStartValue()
+	if err != nil {
+		t.Fatalf("ToolCallStartValue() error = %v", err)
 	}
 	if payload.Index != 3 || payload.ID != "call_1" || payload.Name != "edit_file" {
 		t.Fatalf("unexpected payload: %+v", payload)
@@ -94,9 +97,9 @@ func TestNewToolCallDeltaStreamEvent(t *testing.T) {
 		t.Fatalf("expected type %q, got %q", StreamEventToolCallDelta, event.Type)
 	}
 
-	payload, ok := event.Payload.(ToolCallDeltaPayload)
-	if !ok {
-		t.Fatal("expected ToolCallDeltaPayload type")
+	payload, err := event.ToolCallDeltaValue()
+	if err != nil {
+		t.Fatalf("ToolCallDeltaValue() error = %v", err)
 	}
 	if payload.Index != 1 || payload.ID != "call_2" || payload.ArgumentsDelta != `{"path":"main.go"}` {
 		t.Fatalf("unexpected payload: %+v", payload)
@@ -116,9 +119,9 @@ func TestNewMessageDoneStreamEvent(t *testing.T) {
 			t.Fatalf("expected type %q, got %q", StreamEventMessageDone, event.Type)
 		}
 
-		payload, ok := event.Payload.(MessageDonePayload)
-		if !ok {
-			t.Fatal("expected MessageDonePayload type")
+		payload, err := event.MessageDoneValue()
+		if err != nil {
+			t.Fatalf("MessageDoneValue() error = %v", err)
 		}
 		if payload.FinishReason != "stop" {
 			t.Fatalf("expected finish reason %q, got %q", "stop", payload.FinishReason)
@@ -131,9 +134,9 @@ func TestNewMessageDoneStreamEvent(t *testing.T) {
 	t.Run("nil usage", func(t *testing.T) {
 		event := NewMessageDoneStreamEvent("tool_calls", nil)
 
-		payload, ok := event.Payload.(MessageDonePayload)
-		if !ok {
-			t.Fatal("expected MessageDonePayload type")
+		payload, err := event.MessageDoneValue()
+		if err != nil {
+			t.Fatalf("MessageDoneValue() error = %v", err)
 		}
 		if payload.FinishReason != "tool_calls" {
 			t.Fatalf("expected finish reason %q, got %q", "tool_calls", payload.FinishReason)
@@ -146,9 +149,9 @@ func TestNewMessageDoneStreamEvent(t *testing.T) {
 	t.Run("empty finish reason", func(t *testing.T) {
 		event := NewMessageDoneStreamEvent("", nil)
 
-		payload, ok := event.Payload.(MessageDonePayload)
-		if !ok {
-			t.Fatal("expected MessageDonePayload type")
+		payload, err := event.MessageDoneValue()
+		if err != nil {
+			t.Fatalf("MessageDoneValue() error = %v", err)
 		}
 		if payload.FinishReason != "" {
 			t.Fatalf("expected empty finish reason, got %q", payload.FinishReason)
@@ -220,10 +223,45 @@ func TestStreamEventStructFields(t *testing.T) {
 	t.Parallel()
 
 	event := StreamEvent{
-		Type:    StreamEventTextDelta,
-		Payload: TextDeltaPayload{Text: "hi"},
+		Type:      StreamEventTextDelta,
+		TextDelta: &TextDeltaPayload{Text: "hi"},
 	}
 	if event.Type != StreamEventTextDelta {
 		t.Fatalf("event type not as expected: %s", event.Type)
+	}
+	if event.TextDelta == nil || event.TextDelta.Text != "hi" {
+		t.Fatalf("event text_delta not as expected: %+v", event.TextDelta)
+	}
+}
+
+func TestStreamEventJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	original := NewToolCallDeltaStreamEvent(2, "call-7", `{"path":"main.go"}`)
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var decoded StreamEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	payload, err := decoded.ToolCallDeltaValue()
+	if err != nil {
+		t.Fatalf("ToolCallDeltaValue() error = %v", err)
+	}
+	if payload.Index != 2 || payload.ID != "call-7" || payload.ArgumentsDelta != `{"path":"main.go"}` {
+		t.Fatalf("unexpected round-trip payload: %+v", payload)
+	}
+}
+
+func TestStreamEventValueAccessorsRejectMissingPayload(t *testing.T) {
+	t.Parallel()
+
+	event := StreamEvent{Type: StreamEventTextDelta}
+	if _, err := event.TextDeltaValue(); err == nil {
+		t.Fatal("expected TextDeltaValue() to reject missing payload")
 	}
 }

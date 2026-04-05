@@ -383,6 +383,142 @@ func TestServiceRun(t *testing.T) {
 	}
 }
 
+func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	tool := &stubTool{name: "filesystem_edit", content: "tool output"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				provider.NewToolCallDeltaStreamEvent(0, "", `{"path":"main.go"`),
+				provider.NewToolCallStartStreamEvent(0, "call-late", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-late", `}`),
+			},
+			{provider.NewTextDeltaStreamEvent("done")},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-late-tool-metadata", Content: "edit"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if tool.callCount != 1 {
+		t.Fatalf("expected tool to execute once, got %d", tool.callCount)
+	}
+	if tool.lastInput.ID != "call-late" {
+		t.Fatalf("expected merged tool call id %q, got %q", "call-late", tool.lastInput.ID)
+	}
+	if tool.lastInput.Name != "filesystem_edit" {
+		t.Fatalf("expected merged tool name %q, got %q", "filesystem_edit", tool.lastInput.Name)
+	}
+	if got := string(tool.lastInput.Arguments); got != `{"path":"main.go"}` {
+		t.Fatalf("expected merged tool arguments %q, got %q", `{"path":"main.go"}`, got)
+	}
+
+	session := onlySession(t, store)
+	if len(session.Messages) < 3 {
+		t.Fatalf("expected assistant/tool follow-up messages, got %+v", session.Messages)
+	}
+	if len(session.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected persisted assistant tool call, got %+v", session.Messages[1])
+	}
+	if session.Messages[1].ToolCalls[0].ID != "call-late" || session.Messages[1].ToolCalls[0].Name != "filesystem_edit" {
+		t.Fatalf("expected merged assistant tool call metadata, got %+v", session.Messages[1].ToolCalls[0])
+	}
+	if session.Messages[2].ToolCallID != "call-late" {
+		t.Fatalf("expected tool result to reference merged tool call id, got %+v", session.Messages[2])
+	}
+}
+
+func TestServiceRunRejectsToolCallWithoutID(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	tool := &stubTool{name: "filesystem_edit", content: "tool output"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				provider.NewToolCallStartStreamEvent(0, "", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "", `{}`),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	err := service.Run(context.Background(), UserInput{RunID: "run-missing-tool-id", Content: "edit"})
+	if err == nil || !containsError(err, "without id") {
+		t.Fatalf("expected missing tool id error, got %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected tool execution to be blocked, got %d calls", tool.callCount)
+	}
+}
+
+func TestServiceRunRejectsMalformedProviderStreamEvent(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventTextDelta},
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	err := service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-event", Content: "hello"})
+	if err == nil || !containsError(err, "text_delta event payload is nil") {
+		t.Fatalf("expected malformed stream event error, got %v", err)
+	}
+}
+
+func TestServiceRunMalformedProviderStreamEventDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	stream := []provider.StreamEvent{{Type: provider.StreamEventTextDelta}}
+	for i := 0; i < 40; i++ {
+		stream = append(stream, provider.NewTextDeltaStreamEvent("ignored"))
+	}
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{stream},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-no-deadlock", Content: "hello"})
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil || !containsError(err, "text_delta event payload is nil") {
+			t.Fatalf("expected malformed stream event error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to fail instead of deadlocking on malformed stream event")
+	}
+}
+
 type stubCompactRunner struct {
 	runFn  func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error)
 	calls  []contextcompact.Input

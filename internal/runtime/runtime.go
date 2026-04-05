@@ -49,28 +49,38 @@ func (a *streamAccumulator) accumulateTextDelta(text string) {
 	a.content.WriteString(text)
 }
 
+// ensureToolCall 返回指定索引的工具调用条目，不存在时会先创建占位对象。
+func (a *streamAccumulator) ensureToolCall(index int) *provider.ToolCall {
+	call, exists := a.toolCalls[index]
+	if !exists {
+		call = &provider.ToolCall{}
+		a.toolCalls[index] = call
+	}
+	return call
+}
+
 // accumulateToolCallStart 记录新发现的工具调用（首次出现时创建条目）。
 func (a *streamAccumulator) accumulateToolCallStart(index int, id, name string) {
-	if _, exists := a.toolCalls[index]; !exists {
-		a.toolCalls[index] = &provider.ToolCall{ID: id, Name: name}
+	call := a.ensureToolCall(index)
+	if strings.TrimSpace(id) != "" {
+		call.ID = id
+	}
+	if strings.TrimSpace(name) != "" {
+		call.Name = name
 	}
 }
 
 // accumulateToolCallDelta 累积工具调用参数增量。
 func (a *streamAccumulator) accumulateToolCallDelta(index int, id, argumentsDelta string) {
-	call, exists := a.toolCalls[index]
-	if !exists {
-		call = &provider.ToolCall{ID: id}
-		a.toolCalls[index] = call
-	}
-	if name := call.Name; strings.TrimSpace(name) == "" && call.ID != "" {
-		// 首次出现 delta 时可能还未收到 start 事件，仅记录 ID
+	call := a.ensureToolCall(index)
+	if strings.TrimSpace(id) != "" {
+		call.ID = id
 	}
 	call.Arguments += argumentsDelta
 }
 
-// buildMessage 从累积状态构建最终的 assistant Message 对象。
-func (a *streamAccumulator) buildMessage() provider.Message {
+// buildMessage 从累积状态构建最终的 assistant Message 对象，并校验工具调用元数据是否完整。
+func (a *streamAccumulator) buildMessage() (provider.Message, error) {
 	ordered := make([]int, 0, len(a.toolCalls))
 	for index := range a.toolCalls {
 		ordered = append(ordered, index)
@@ -86,9 +96,15 @@ func (a *streamAccumulator) buildMessage() provider.Message {
 		if call == nil {
 			continue
 		}
+		if strings.TrimSpace(call.ID) == "" {
+			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without id", index)
+		}
+		if strings.TrimSpace(call.Name) == "" {
+			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without name", index)
+		}
 		message.ToolCalls = append(message.ToolCalls, *call)
 	}
-	return message
+	return message, nil
 }
 
 var runtimeSessionWorkdirs = struct {
@@ -248,7 +264,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		session.Provider = cfg.SelectedProvider
 		session.Model = cfg.CurrentModel
 
-		assistant := acc.buildMessage()
+		assistant, err := acc.buildMessage()
+		if err != nil {
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
+		}
 		if strings.TrimSpace(assistant.Role) == "" {
 			assistant.Role = provider.RoleAssistant
 		}
@@ -479,37 +498,88 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	}
 }
 
+// handleProviderStreamEvent 解析并应用单条 provider 流式事件，缺失载荷或未知类型时返回错误。
+func handleProviderStreamEvent(
+	event provider.StreamEvent,
+	acc *streamAccumulator,
+	onTextDelta func(string),
+	onToolCallStart func(provider.ToolCallStartPayload),
+) error {
+	switch event.Type {
+	case provider.StreamEventTextDelta:
+		payload, err := event.TextDeltaValue()
+		if err != nil {
+			return err
+		}
+		if onTextDelta != nil {
+			onTextDelta(payload.Text)
+		}
+		if acc != nil {
+			acc.accumulateTextDelta(payload.Text)
+		}
+	case provider.StreamEventToolCallStart:
+		payload, err := event.ToolCallStartValue()
+		if err != nil {
+			return err
+		}
+		if onToolCallStart != nil {
+			onToolCallStart(payload)
+		}
+		if acc != nil {
+			acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
+		}
+	case provider.StreamEventToolCallDelta:
+		payload, err := event.ToolCallDeltaValue()
+		if err != nil {
+			return err
+		}
+		if acc != nil {
+			acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
+		}
+	case provider.StreamEventMessageDone:
+		if _, err := event.MessageDoneValue(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("runtime: unsupported provider stream event type %q", event.Type)
+	}
+	return nil
+}
+
 // forwardProviderEvents 将 provider 流式事件转发为 runtime 事件，同时向 accumulator 累积消息状态。
 // 使用 select 同时监听输入通道和 context 取消信号，确保 goroutine 不会因通道阻塞而泄漏。
-func (s *Service) forwardProviderEvents(ctx context.Context, runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}, acc *streamAccumulator) {
-	defer close(done)
+func (s *Service) forwardProviderEvents(
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	input <-chan provider.StreamEvent,
+	done chan<- error,
+	acc *streamAccumulator,
+) {
+	var forwardErr error
+	defer func() {
+		done <- forwardErr
+	}()
+
 	for {
 		select {
 		case event, ok := <-input:
 			if !ok {
 				return
 			}
-			switch event.Type {
-			case provider.StreamEventTextDelta:
-				if payload, ok := event.Payload.(provider.TextDeltaPayload); ok {
-					s.emit(ctx, EventAgentChunk, runID, sessionID, payload.Text)
-					if acc != nil {
-						acc.accumulateTextDelta(payload.Text)
-					}
-				}
-			case provider.StreamEventToolCallStart:
-				if payload, ok := event.Payload.(provider.ToolCallStartPayload); ok {
+			err := handleProviderStreamEvent(
+				event,
+				acc,
+				func(text string) {
+					s.emit(ctx, EventAgentChunk, runID, sessionID, text)
+				},
+				func(payload provider.ToolCallStartPayload) {
 					s.emit(ctx, EventToolCallThinking, runID, sessionID, payload.Name)
-					if acc != nil {
-						acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
-					}
-				}
-			case provider.StreamEventToolCallDelta:
-				if payload, ok := event.Payload.(provider.ToolCallDeltaPayload); ok {
-					if acc != nil {
-						acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
-					}
-				}
+				},
+			)
+			if err != nil && forwardErr == nil {
+				// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
+				forwardErr = err
 			}
 		case <-ctx.Done():
 			return
@@ -606,12 +676,18 @@ func (s *Service) callProviderWithRetry(
 		}
 
 		streamEvents := make(chan provider.StreamEvent, 32)
-		streamDone := make(chan struct{})
+		streamDone := make(chan error, 1)
 		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone, acc)
 
 		err = modelProvider.Chat(ctx, req, streamEvents)
 		close(streamEvents)
-		<-streamDone
+		forwardErr := <-streamDone
+		if forwardErr != nil {
+			if err != nil {
+				return nil, fmt.Errorf("runtime: provider stream handling failed after provider error: %v: %w", err, forwardErr)
+			}
+			return nil, forwardErr
+		}
 
 		if err == nil {
 			return acc, nil
