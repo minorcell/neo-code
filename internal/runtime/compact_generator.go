@@ -56,22 +56,61 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 	if err != nil {
 		return "", err
 	}
-	resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
+
+	// 使用流式事件通道收集 compact 摘要响应。
+	streamEvents := make(chan provider.StreamEvent, 32)
+	streamDone := make(chan struct{})
+	acc := newStreamAccumulator()
+
+	go func() {
+		defer close(streamDone)
+		for {
+			select {
+			case event, ok := <-streamEvents:
+				if !ok {
+					return
+				}
+				switch event.Type {
+				case provider.StreamEventTextDelta:
+					if payload, ok := event.Payload.(provider.TextDeltaPayload); ok {
+						acc.accumulateTextDelta(payload.Text)
+					}
+				case provider.StreamEventToolCallStart:
+					if payload, ok := event.Payload.(provider.ToolCallStartPayload); ok {
+						acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
+					}
+				case provider.StreamEventToolCallDelta:
+					if payload, ok := event.Payload.(provider.ToolCallDeltaPayload); ok {
+						acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	err = modelProvider.Chat(ctx, provider.ChatRequest{
 		Model:        g.model,
 		SystemPrompt: prompt.SystemPrompt,
 		Messages: []provider.Message{{
 			Role:    provider.RoleUser,
 			Content: prompt.UserPrompt,
 		}},
-	}, nil)
+	}, streamEvents)
+	close(streamEvents)
+	<-streamDone
+
 	if err != nil {
 		return "", err
 	}
-	if len(resp.Message.ToolCalls) > 0 {
+
+	message := acc.buildMessage()
+	if len(message.ToolCalls) > 0 {
 		return "", errors.New("runtime: compact summary response must not contain tool calls")
 	}
 
-	summary := strings.TrimSpace(resp.Message.Content)
+	summary := strings.TrimSpace(message.Content)
 	if summary == "" {
 		return "", errors.New("runtime: compact summary response is empty")
 	}

@@ -1,11 +1,14 @@
 package provider
 
-// Role 常量定义消息角色标识。
 const (
-	RoleSystem    = "system"
-	RoleUser      = "user"
+	// RoleSystem 标识系统消息。
+	RoleSystem = "system"
+	// RoleUser 标识用户消息。
+	RoleUser = "user"
+	// RoleAssistant 标识助手消息。
 	RoleAssistant = "assistant"
-	RoleTool      = "tool"
+	// RoleTool 标识工具结果消息。
+	RoleTool = "tool"
 )
 
 // Message 表示对话中的单条消息。
@@ -39,13 +42,6 @@ type ChatRequest struct {
 	Tools        []ToolSpec `json:"tools,omitempty"`
 }
 
-// ChatResponse 是 provider.Chat() 的返回结果。
-type ChatResponse struct {
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
-	Usage        Usage   `json:"usage"`
-}
-
 // Usage 记录本次请求的 token 使用统计。
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
@@ -59,38 +55,19 @@ type StreamEventType string
 const (
 	// StreamEventTextDelta 表示模型输出的文本片段。
 	StreamEventTextDelta StreamEventType = "text_delta"
-	// StreamEventToolCallStart 表示模型开始请求工具调用，TUI 可据此展示过渡提示。
+	// StreamEventToolCallStart 表示模型开始请求工具调用。
 	StreamEventToolCallStart StreamEventType = "tool_call_start"
 	// StreamEventToolCallDelta 表示工具调用参数的增量片段。
 	StreamEventToolCallDelta StreamEventType = "tool_call_delta"
-	// StreamEventMessageDone 表示本轮消息完成，包含最终统计信息。
+	// StreamEventMessageDone 表示本轮消息完成，并携带最终统计信息。
 	StreamEventMessageDone StreamEventType = "message_done"
 )
 
-// StreamEvent 表示 provider 驱动层向 runtime 推送的流式事件。
-// 强制使用 NewXxxStreamEvent 构造器创建实例，禁止直接构造。
+// StreamEvent 表示 provider 向 runtime 推送的流式事件。
 type StreamEvent struct {
 	Type    StreamEventType `json:"type"`
-	Payload interface{}     `json:"payload,omitempty"` // 强类型载荷，使用类型断言访问
-
-	// --- 以下字段已弃用，保留仅用于 Phase 1 向后兼容 ---
-	// Phase 2 将由 Runtime 负责人移除，届时所有消费方应通过 Payload 类型断言访问。
-
-	// text_delta
-	Text string `json:"text,omitempty"` // 文本片段
-
-	// tool_call_start / tool_call_delta
-	ToolCallIndex      int    `json:"tool_call_index,omitempty"`      // 工具调用索引
-	ToolCallID         string `json:"tool_call_id,omitempty"`         // 工具调用 ID（tool_call_start 时使用）
-	ToolName           string `json:"tool_name,omitempty"`            // 工具名称（tool_call_start 时使用）
-	ToolArgumentsDelta string `json:"tool_arguments_delta,omitempty"` // 参数增量片段（tool_call_delta 时使用）
-
-	// message_done
-	FinishReason string `json:"finish_reason,omitempty"` // 结束原因（仅 message_done 时有效）
-	Usage        *Usage `json:"usage,omitempty"`         // 使用统计（仅 message_done 时有效）
+	Payload interface{}     `json:"payload,omitempty"`
 }
-
-// --- Payload 强类型定义 ---
 
 // TextDeltaPayload 表示文本增量事件的载荷。
 type TextDeltaPayload struct {
@@ -117,15 +94,11 @@ type MessageDonePayload struct {
 	Usage        *Usage `json:"usage"`
 }
 
-// --- 构造器 ---
-
 // NewTextDeltaStreamEvent 创建文本增量流事件。
 func NewTextDeltaStreamEvent(text string) StreamEvent {
 	return StreamEvent{
 		Type:    StreamEventTextDelta,
 		Payload: TextDeltaPayload{Text: text},
-		// 兼容层：同步填充弃用字段
-		Text: text,
 	}
 }
 
@@ -134,10 +107,6 @@ func NewToolCallStartStreamEvent(index int, id, name string) StreamEvent {
 	return StreamEvent{
 		Type:    StreamEventToolCallStart,
 		Payload: ToolCallStartPayload{Index: index, ID: id, Name: name},
-		// 兼容层：同步填充弃用字段
-		ToolCallIndex: index,
-		ToolCallID:    id,
-		ToolName:      name,
 	}
 }
 
@@ -146,10 +115,6 @@ func NewToolCallDeltaStreamEvent(index int, id, argumentsDelta string) StreamEve
 	return StreamEvent{
 		Type:    StreamEventToolCallDelta,
 		Payload: ToolCallDeltaPayload{Index: index, ID: id, ArgumentsDelta: argumentsDelta},
-		// 兼容层：同步填充弃用字段
-		ToolCallIndex:      index,
-		ToolCallID:         id,
-		ToolArgumentsDelta: argumentsDelta,
 	}
 }
 
@@ -158,8 +123,5 @@ func NewMessageDoneStreamEvent(finishReason string, usage *Usage) StreamEvent {
 	return StreamEvent{
 		Type:    StreamEventMessageDone,
 		Payload: MessageDonePayload{FinishReason: finishReason, Usage: usage},
-		// 兼容层：同步填充弃用字段
-		FinishReason: finishReason,
-		Usage:        usage,
 	}
 }

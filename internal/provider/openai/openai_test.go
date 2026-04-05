@@ -33,7 +33,7 @@ func TestWithTransport(t *testing.T) {
 	customTransport := &http.Transport{}
 	cfg := resolvedConfig("", "")
 
-	provider, err := New(cfg, WithTransport(customTransport))
+	provider, err := New(cfg, withTransport(customTransport))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -117,7 +117,8 @@ func TestEmitToolCallDelta(t *testing.T) {
 			t.Fatalf("emitToolCallDelta() error = %v", err)
 		}
 		got := <-events
-		if got.Type != domain.StreamEventToolCallDelta || got.ToolCallIndex != 3 || got.ToolArgumentsDelta != `{"path":"main.go"}` || got.ToolCallID != "call_123" {
+		payload := requireToolCallDeltaPayload(t, got)
+		if got.Type != domain.StreamEventToolCallDelta || payload.Index != 3 || payload.ArgumentsDelta != `{"path":"main.go"}` || payload.ID != "call_123" {
 			t.Fatalf("unexpected event: %+v", got)
 		}
 	})
@@ -150,7 +151,8 @@ func TestEmitMessageDone(t *testing.T) {
 			t.Fatalf("emitMessageDone() error = %v", err)
 		}
 		got := <-events
-		if got.Type != domain.StreamEventMessageDone || got.FinishReason != "stop" || got.Usage.TotalTokens != 100 {
+		payload := requireMessageDonePayload(t, got)
+		if got.Type != domain.StreamEventMessageDone || payload.FinishReason != "stop" || payload.Usage == nil || payload.Usage.TotalTokens != 100 {
 			t.Fatalf("unexpected event: %+v", got)
 		}
 	})
@@ -290,7 +292,7 @@ func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 	provider.client = server.Client()
 
 	events := make(chan domain.StreamEvent, 8)
-	response, err := provider.Chat(context.Background(), domain.ChatRequest{
+	err = provider.Chat(context.Background(), domain.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []domain.Message{
 			{Role: "user", Content: "please edit the file"},
@@ -320,38 +322,57 @@ func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 
-	if response.Message.Content != "Hello world" {
-		t.Fatalf("expected content %q, got %q", "Hello world", response.Message.Content)
-	}
-	if response.FinishReason != "tool_calls" {
-		t.Fatalf("expected finish reason tool_calls, got %q", response.FinishReason)
-	}
-	if response.Usage.TotalTokens != 15 {
-		t.Fatalf("expected total tokens 15, got %d", response.Usage.TotalTokens)
-	}
-	if len(response.Message.ToolCalls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(response.Message.ToolCalls))
+	streamEvents := drainStreamEvents(events)
+	if len(streamEvents) == 0 {
+		t.Fatal("expected streamed events")
 	}
 
-	call := response.Message.ToolCalls[0]
-	if call.ID != "call_1" || call.Name != "filesystem_edit" {
-		t.Fatalf("unexpected tool call: %+v", call)
-	}
-	if call.Arguments != `{"path":"main.go","search_string":"old","replace_string":"new"}` {
-		t.Fatalf("unexpected merged arguments: %q", call.Arguments)
-	}
+	var (
+		chunks            []string
+		toolCallStartSeen bool
+		toolCallArgs      strings.Builder
+		messageDone       *domain.MessageDonePayload
+	)
 
-	var chunks []string
-	for {
-		select {
-		case event := <-events:
-			chunks = append(chunks, event.Text)
-		default:
-			if strings.Join(chunks, "") != "Hello world" {
-				t.Fatalf("expected streamed chunks to form %q, got %q", "Hello world", strings.Join(chunks, ""))
+	for _, event := range streamEvents {
+		switch event.Type {
+		case domain.StreamEventTextDelta:
+			chunks = append(chunks, requireTextDeltaPayload(t, event).Text)
+		case domain.StreamEventToolCallStart:
+			payload := requireToolCallStartPayload(t, event)
+			toolCallStartSeen = true
+			if payload.Index != 0 || payload.ID != "call_1" || payload.Name != "filesystem_edit" {
+				t.Fatalf("unexpected tool_call_start payload: %+v", payload)
 			}
-			return
+		case domain.StreamEventToolCallDelta:
+			payload := requireToolCallDeltaPayload(t, event)
+			if payload.Index != 0 || payload.ID != "call_1" {
+				t.Fatalf("unexpected tool_call_delta payload: %+v", payload)
+			}
+			toolCallArgs.WriteString(payload.ArgumentsDelta)
+		case domain.StreamEventMessageDone:
+			payload := requireMessageDonePayload(t, event)
+			messageDone = &payload
 		}
+	}
+
+	if strings.Join(chunks, "") != "Hello world" {
+		t.Fatalf("expected streamed chunks to form %q, got %q", "Hello world", strings.Join(chunks, ""))
+	}
+	if !toolCallStartSeen {
+		t.Fatal("expected tool_call_start event")
+	}
+	if toolCallArgs.String() != `{"path":"main.go","search_string":"old","replace_string":"new"}` {
+		t.Fatalf("unexpected merged tool arguments: %q", toolCallArgs.String())
+	}
+	if messageDone == nil {
+		t.Fatal("expected message_done event")
+	}
+	if messageDone.FinishReason != "tool_calls" {
+		t.Fatalf("expected finish reason %q, got %q", "tool_calls", messageDone.FinishReason)
+	}
+	if messageDone.Usage == nil || messageDone.Usage.TotalTokens != 15 {
+		t.Fatalf("expected total tokens 15, got %+v", messageDone.Usage)
 	}
 }
 
@@ -395,7 +416,7 @@ func TestProviderChatHTTPErrorResponses(t *testing.T) {
 			}
 			provider.client = server.Client()
 
-			_, err = provider.Chat(context.Background(), domain.ChatRequest{
+			err = provider.Chat(context.Background(), domain.ChatRequest{
 				Model: config.OpenAIDefaultModel,
 			}, make(chan domain.StreamEvent, 1))
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
@@ -513,7 +534,7 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 	if err := emitTextDelta(context.Background(), eventCh, "chunk"); err != nil {
 		t.Fatalf("emitTextDelta() error = %v", err)
 	}
-	if got := <-eventCh; got.Text != "chunk" || got.Type != domain.StreamEventTextDelta {
+	if got := <-eventCh; got.Type != domain.StreamEventTextDelta || requireTextDeltaPayload(t, got).Text != "chunk" {
 		t.Fatalf("unexpected stream event: %+v", got)
 	}
 
@@ -532,10 +553,61 @@ func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = provider.consumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan domain.StreamEvent, 1))
+	err = provider.consumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan domain.StreamEvent, 1))
 	if err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
 		t.Fatalf("expected dirty JSON decode error, got %v", err)
 	}
+}
+
+func drainStreamEvents(events <-chan domain.StreamEvent) []domain.StreamEvent {
+	drained := make([]domain.StreamEvent, 0)
+	for {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				return drained
+			}
+			drained = append(drained, evt)
+		default:
+			return drained
+		}
+	}
+}
+
+func requireTextDeltaPayload(t *testing.T, event domain.StreamEvent) domain.TextDeltaPayload {
+	t.Helper()
+	payload, ok := event.Payload.(domain.TextDeltaPayload)
+	if !ok {
+		t.Fatalf("expected TextDeltaPayload, got %T", event.Payload)
+	}
+	return payload
+}
+
+func requireToolCallStartPayload(t *testing.T, event domain.StreamEvent) domain.ToolCallStartPayload {
+	t.Helper()
+	payload, ok := event.Payload.(domain.ToolCallStartPayload)
+	if !ok {
+		t.Fatalf("expected ToolCallStartPayload, got %T", event.Payload)
+	}
+	return payload
+}
+
+func requireToolCallDeltaPayload(t *testing.T, event domain.StreamEvent) domain.ToolCallDeltaPayload {
+	t.Helper()
+	payload, ok := event.Payload.(domain.ToolCallDeltaPayload)
+	if !ok {
+		t.Fatalf("expected ToolCallDeltaPayload, got %T", event.Payload)
+	}
+	return payload
+}
+
+func requireMessageDonePayload(t *testing.T, event domain.StreamEvent) domain.MessageDonePayload {
+	t.Helper()
+	payload, ok := event.Payload.(domain.MessageDonePayload)
+	if !ok {
+		t.Fatalf("expected MessageDonePayload, got %T", event.Payload)
+	}
+	return payload
 }
 
 func containsToolRoleMessage(messages []openAIMessage, toolCallID string, content string) bool {
@@ -601,7 +673,8 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 		t.Fatalf("emitToolCallStart() error = %v", err)
 	}
 	got := <-events
-	if got.Type != domain.StreamEventToolCallStart || got.ToolName != "filesystem_edit" || got.ToolCallID != "call-1" || got.ToolCallIndex != 2 {
+	payload := requireToolCallStartPayload(t, got)
+	if got.Type != domain.StreamEventToolCallStart || payload.Name != "filesystem_edit" || payload.ID != "call-1" || payload.Index != 2 {
 		t.Fatalf("unexpected event: %+v", got)
 	}
 
@@ -646,16 +719,18 @@ func TestMergeToolCallDeltaEmitsStartWhenNameArrivesLater(t *testing.T) {
 	if start.Type != domain.StreamEventToolCallStart {
 		t.Fatalf("expected tool_call_start event, got %+v", start)
 	}
-	if start.ToolCallID != "call_late_name" || start.ToolName != "filesystem_edit" {
-		t.Fatalf("unexpected tool_call_start payload: %+v", start)
+	startPayload := requireToolCallStartPayload(t, start)
+	if startPayload.ID != "call_late_name" || startPayload.Name != "filesystem_edit" {
+		t.Fatalf("unexpected tool_call_start payload: %+v", startPayload)
 	}
 
 	delta := <-events
 	if delta.Type != domain.StreamEventToolCallDelta {
 		t.Fatalf("expected tool_call_delta event, got %+v", delta)
 	}
-	if delta.ToolArgumentsDelta != `{"path":"main.go"}` {
-		t.Fatalf("unexpected tool arguments delta: %+v", delta)
+	deltaPayload := requireToolCallDeltaPayload(t, delta)
+	if deltaPayload.ArgumentsDelta != `{"path":"main.go"}` {
+		t.Fatalf("unexpected tool arguments delta: %+v", deltaPayload)
 	}
 
 	call := toolCalls[0]
@@ -703,7 +778,7 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	provider.client = server.Client()
 
 	events := make(chan domain.StreamEvent, 8)
-	_, err = provider.Chat(context.Background(), domain.ChatRequest{
+	err = provider.Chat(context.Background(), domain.ChatRequest{
 		Model:    config.OpenAIDefaultModel,
 		Messages: []domain.Message{{Role: "user", Content: "edit"}},
 		Tools: []domain.ToolSpec{
@@ -714,17 +789,16 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 
-	close(events)
-
 	var foundToolCallStart bool
-	for evt := range events {
+	for _, evt := range drainStreamEvents(events) {
 		if evt.Type == domain.StreamEventToolCallStart {
 			foundToolCallStart = true
-			if evt.ToolName != "filesystem_edit" {
-				t.Fatalf("expected ToolName %q, got %q", "filesystem_edit", evt.ToolName)
+			payload := requireToolCallStartPayload(t, evt)
+			if payload.Name != "filesystem_edit" {
+				t.Fatalf("expected ToolName %q, got %q", "filesystem_edit", payload.Name)
 			}
-			if evt.ToolCallID != "call_tool" {
-				t.Fatalf("expected ToolCallID %q, got %q", "call_tool", evt.ToolCallID)
+			if payload.ID != "call_tool" {
+				t.Fatalf("expected ToolCallID %q, got %q", "call_tool", payload.ID)
 			}
 		}
 	}
@@ -819,7 +893,7 @@ func TestProviderChatEmitsFullEventStream(t *testing.T) {
 	provider.client = server.Client()
 
 	events := make(chan domain.StreamEvent, 16)
-	_, err = provider.Chat(context.Background(), domain.ChatRequest{
+	err = provider.Chat(context.Background(), domain.ChatRequest{
 		Model:    config.OpenAIDefaultModel,
 		Messages: []domain.Message{{Role: "user", Content: "test"}},
 	}, events)
@@ -827,35 +901,35 @@ func TestProviderChatEmitsFullEventStream(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 
-	close(events)
-
 	var (
 		foundTextDelta       bool
 		foundToolCallStart   bool
 		foundToolCallDelta   bool
 		foundMessageDone     bool
 		toolCallDeltaContent string
-		messageDoneEvt       *domain.StreamEvent
+		messageDonePayload   *domain.MessageDonePayload
 	)
 
-	for evt := range events {
+	for _, evt := range drainStreamEvents(events) {
 		switch evt.Type {
 		case domain.StreamEventTextDelta:
 			foundTextDelta = true
 		case domain.StreamEventToolCallStart:
 			foundToolCallStart = true
-			if evt.ToolName != "filesystem_edit" {
-				t.Fatalf("expected ToolName %q, got %q", "filesystem_edit", evt.ToolName)
+			payload := requireToolCallStartPayload(t, evt)
+			if payload.Name != "filesystem_edit" {
+				t.Fatalf("expected ToolName %q, got %q", "filesystem_edit", payload.Name)
 			}
-			if evt.ToolCallIndex != 0 {
-				t.Fatalf("expected ToolCallIndex %d for tool_call_start, got %d", 0, evt.ToolCallIndex)
+			if payload.Index != 0 {
+				t.Fatalf("expected ToolCallIndex %d for tool_call_start, got %d", 0, payload.Index)
 			}
 		case domain.StreamEventToolCallDelta:
 			foundToolCallDelta = true
-			toolCallDeltaContent += evt.ToolArgumentsDelta
+			toolCallDeltaContent += requireToolCallDeltaPayload(t, evt).ArgumentsDelta
 		case domain.StreamEventMessageDone:
 			foundMessageDone = true
-			messageDoneEvt = &evt
+			payload := requireMessageDonePayload(t, evt)
+			messageDonePayload = &payload
 		}
 	}
 
@@ -879,16 +953,16 @@ func TestProviderChatEmitsFullEventStream(t *testing.T) {
 	}
 
 	// 验证 message_done 事件包含正确的字段
-	if messageDoneEvt == nil {
+	if messageDonePayload == nil {
 		t.Fatal("message_done event is nil")
 	}
-	if messageDoneEvt.FinishReason != "tool_calls" {
-		t.Fatalf("expected FinishReason %q, got %q", "tool_calls", messageDoneEvt.FinishReason)
+	if messageDonePayload.FinishReason != "tool_calls" {
+		t.Fatalf("expected FinishReason %q, got %q", "tool_calls", messageDonePayload.FinishReason)
 	}
-	if messageDoneEvt.Usage == nil {
+	if messageDonePayload.Usage == nil {
 		t.Fatal("expected Usage in message_done event")
 	}
-	if messageDoneEvt.Usage.TotalTokens != 150 {
-		t.Fatalf("expected TotalTokens %d, got %d", 150, messageDoneEvt.Usage.TotalTokens)
+	if messageDonePayload.Usage.TotalTokens != 150 {
+		t.Fatalf("expected TotalTokens %d, got %d", 150, messageDonePayload.Usage.TotalTokens)
 	}
 }

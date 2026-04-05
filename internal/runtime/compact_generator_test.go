@@ -20,28 +20,25 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
-			Message: provider.Message{
-				Role: provider.RoleAssistant,
-				Content: strings.Join([]string{
-					"[compact_summary]",
-					"done:",
-					"- Completed the historical task and kept the final result.",
-					"",
-					"in_progress:",
-					"- Continue from the retained recent window.",
-					"",
-					"decisions:",
-					"- Keep the existing section layout for compatibility.",
-					"",
-					"code_changes:",
-					"- Updated compact summary generation behavior.",
-					"",
-					"constraints:",
-					"- Preserve only the minimum information needed to continue the work.",
-				}, "\n"),
-			},
-		}},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent(strings.Join([]string{
+				"[compact_summary]",
+				"done:",
+				"- Completed the historical task and kept the final result.",
+				"",
+				"in_progress:",
+				"- Continue from the retained recent window.",
+				"",
+				"decisions:",
+				"- Keep the existing section layout for compatibility.",
+				"",
+				"code_changes:",
+				"- Updated compact summary generation behavior.",
+				"",
+				"constraints:",
+				"- Preserve only the minimum information needed to continue the work.",
+			}, "\n"))},
+		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
 	generator := newCompactSummaryGenerator(factory, resolvedProvider, "session-model")
@@ -116,14 +113,12 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
-			Message: provider.Message{
-				Role: provider.RoleAssistant,
-				ToolCalls: []provider.ToolCall{
-					{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
-				},
+		streams: [][]provider.StreamEvent{
+			{
+				provider.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-1", "{}"),
 			},
-		}},
+		},
 	}
 	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
 
