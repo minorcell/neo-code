@@ -150,6 +150,60 @@ func TestDefaultBuilderBuildReturnsPromptSourceError(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+		},
+	}
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "older user"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "current reply"},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(got.Messages) != len(messages) {
+		t.Fatalf("expected builder output to keep message count, got %d want %d", len(got.Messages), len(messages))
+	}
+	if got.Messages[2].Content != microCompactClearedMessage {
+		t.Fatalf("expected builder output to clear older tool result, got %q", got.Messages[2].Content)
+	}
+	if got.Messages[4].Content != "recent bash result" {
+		t.Fatalf("expected recent tool result to stay visible, got %q", got.Messages[4].Content)
+	}
+	if got.Messages[6].Content != "latest webfetch result" {
+		t.Fatalf("expected latest tool result to stay visible, got %q", got.Messages[6].Content)
+	}
+}
+
 func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 	t.Parallel()
 
