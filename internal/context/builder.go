@@ -43,6 +43,6 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt: composeSystemPrompt(sections...),
-		Messages:     trimPolicy.Trim(input.Messages),
+		Messages:     microCompactMessages(trimPolicy.Trim(input.Messages)),
 	}, nil
 }
