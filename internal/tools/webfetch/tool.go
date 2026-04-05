@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	toolName                   = "webfetch"
+	toolName                   = tools.ToolNameWebFetch
 	htmlContentType            = "text/html"
 	xhtmlContentType           = "application/xhtml+xml"
 	reasonInvalidArguments     = "invalid arguments"

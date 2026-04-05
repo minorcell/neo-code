@@ -157,6 +157,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				Provider: cfg.SelectedProvider,
 				Model:    cfg.CurrentModel,
 			},
+			Compact: agentcontext.CompactOptions{
+				DisableMicroCompact: cfg.Context.Compact.MicroCompactDisabled,
+			},
 		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)

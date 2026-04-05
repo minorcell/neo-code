@@ -45,7 +45,7 @@ func NewWithExecutor(root string, shell string, timeout time.Duration, executor 
 }
 
 func (t *Tool) Name() string {
-	return "bash"
+	return tools.ToolNameBash
 }
 
 func (t *Tool) Description() string {

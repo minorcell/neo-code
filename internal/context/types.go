@@ -15,10 +15,16 @@ type Builder interface {
 type BuildInput struct {
 	Messages []provider.Message
 	Metadata Metadata
+	Compact  CompactOptions
 }
 
 // BuildResult is the provider-facing context produced for a single round.
 type BuildResult struct {
 	SystemPrompt string
 	Messages     []provider.Message
+}
+
+// CompactOptions controls read-time compact behavior inside the context builder.
+type CompactOptions struct {
+	DisableMicroCompact bool
 }
