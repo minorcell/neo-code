@@ -614,7 +614,7 @@ func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	err = provider.consumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan domain.StreamEvent, 1))
+	err = provider.consumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan domain.StreamEvent, 1), &strings.Builder{}, new(map[int]*domain.ToolCall))
 	if err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
 		t.Fatalf("expected dirty JSON decode error, got %v", err)
 	}

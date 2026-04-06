@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 )
 
@@ -10,6 +12,11 @@ import (
 var (
 	ErrDriverNotFound          = errors.New("provider driver not found")
 	ErrDriverAlreadyRegistered = errors.New("provider: driver already registered")
+
+	// 流级哨兵错误，用于区分可恢复/不可恢复的流中断原因。
+	ErrStreamInterrupted = errors.New("provider: stream interrupted")
+	ErrLineTooLong       = errors.New("provider: SSE line exceeds max length")
+	ErrStreamTooLarge    = errors.New("provider: stream total size exceeds limit")
 )
 
 type ProviderErrorCode string
@@ -99,4 +106,44 @@ func NewTimeoutProviderError(message string) *ProviderError {
 		Message:    message,
 		Retryable:  true, // 超时默认可重试
 	}
+}
+
+// IsRecoverableStreamError 判断流读取错误是否可通过透明重连恢复。
+//
+// 不可恢复的情况：
+//   - context 取消/超时（调用方主动终止）
+//   - 缓冲区溢出（重连只会再次溢出）
+//   - 认证失败等业务错误（重连无意义）
+//
+// 可恢复的情况：
+//   - ProviderError 且 Retryable=true（5xx、429 等）
+//   - 网络层临时错误（*net.OpError）
+//   - ErrStreamInterrupted（通用流中断标记）
+func IsRecoverableStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// context 取消 → 不可恢复
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// 缓冲区溢出 → 不可恢复（重连同样会溢出）
+	if errors.Is(err, ErrLineTooLong) || errors.Is(err, ErrStreamTooLarge) {
+		return false
+	}
+	// 流中断标记 → 可恢复
+	if errors.Is(err, ErrStreamInterrupted) {
+		return true
+	}
+	// ProviderError → 依据 Retryable 字段
+	var pErr *ProviderError
+	if errors.As(err, &pErr) {
+		return pErr.Retryable
+	}
+	// 网络层临时故障（连接重置、超时等）→ 可恢复
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return false
 }
