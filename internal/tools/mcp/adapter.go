@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"neo-code/internal/tools"
 )
 
 const mcpToolNamePrefix = "mcp."
@@ -21,8 +19,8 @@ func NewAdapterFactory(registry *Registry) *AdapterFactory {
 	return &AdapterFactory{registry: registry}
 }
 
-// BuildTools 将当前所有 MCP tool 快照转换为统一 tools.Tool 列表。
-func (f *AdapterFactory) BuildTools(ctx context.Context) ([]tools.Tool, error) {
+// BuildAdapters 将当前所有 MCP tool 快照转换为 Adapter 列表。
+func (f *AdapterFactory) BuildAdapters(ctx context.Context) ([]*Adapter, error) {
 	if f == nil || f.registry == nil {
 		return nil, errors.New("mcp: adapter factory registry is nil")
 	}
@@ -35,7 +33,7 @@ func (f *AdapterFactory) BuildTools(ctx context.Context) ([]tools.Tool, error) {
 		return nil, nil
 	}
 
-	result := make([]tools.Tool, 0, len(snapshots)*2)
+	result := make([]*Adapter, 0, len(snapshots)*2)
 	for _, snapshot := range snapshots {
 		for _, descriptor := range snapshot.Tools {
 			adapter, err := NewAdapter(f.registry, snapshot.ServerID, descriptor)
@@ -48,7 +46,7 @@ func (f *AdapterFactory) BuildTools(ctx context.Context) ([]tools.Tool, error) {
 	return result, nil
 }
 
-// Adapter 将单个 MCP tool 适配为统一 tools.Tool 接口。
+// Adapter 将单个 MCP tool 适配为统一调用描述。
 type Adapter struct {
 	registry    *Registry
 	serverID    string
@@ -80,9 +78,19 @@ func NewAdapter(registry *Registry, serverID string, descriptor ToolDescriptor) 
 	}, nil
 }
 
-// Name 返回统一的 MCP tool 名称：mcp.<server_id>.<tool_name>。
-func (a *Adapter) Name() string {
+// FullName 返回统一的 MCP tool 名称：mcp.<server_id>.<tool_name>。
+func (a *Adapter) FullName() string {
 	return composeToolName(a.serverID, a.toolName)
+}
+
+// ServerID 返回 MCP server 标识。
+func (a *Adapter) ServerID() string {
+	return a.serverID
+}
+
+// ToolName 返回 MCP tool 原始名称。
+func (a *Adapter) ToolName() string {
+	return a.toolName
 }
 
 // Description 返回工具描述，不存在时回退到稳定默认文案。
@@ -98,44 +106,15 @@ func (a *Adapter) Schema() map[string]any {
 	return cloneSchema(a.schema)
 }
 
-// MicroCompactPolicy 返回 MCP tool 历史结果默认 micro compact 策略。
-func (a *Adapter) MicroCompactPolicy() tools.MicroCompactPolicy {
-	return tools.MicroCompactPolicyCompact
-}
-
-// Execute 分发 MCP tool 调用并收敛为统一 ToolResult。
-func (a *Adapter) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
+// Call 分发 MCP tool 调用并返回统一结果。
+func (a *Adapter) Call(ctx context.Context, arguments []byte) (CallResult, error) {
 	if a == nil || a.registry == nil {
-		err := errors.New("mcp: adapter is not initialized")
-		return tools.NewErrorResult("mcp", tools.NormalizeErrorReason("mcp", err), "", nil), err
+		return CallResult{}, errors.New("mcp: adapter is not initialized")
 	}
 	if err := ctx.Err(); err != nil {
-		return tools.NewErrorResult(a.Name(), tools.NormalizeErrorReason(a.Name(), err), "", adapterMetadata(a.serverID, a.toolName)), err
+		return CallResult{}, err
 	}
-
-	result, err := a.registry.Call(ctx, a.serverID, a.toolName, call.Arguments)
-	if err != nil {
-		errorResult := tools.NewErrorResult(a.Name(), tools.NormalizeErrorReason(a.Name(), err), "", adapterMetadata(a.serverID, a.toolName))
-		errorResult.ToolCallID = call.ID
-		return errorResult, err
-	}
-
-	metadata := adapterMetadata(a.serverID, a.toolName)
-	for key, value := range result.Metadata {
-		metadata[key] = value
-	}
-
-	toolResult := tools.ToolResult{
-		ToolCallID: call.ID,
-		Name:       a.Name(),
-		Content:    strings.TrimSpace(result.Content),
-		IsError:    result.IsError,
-		Metadata:   metadata,
-	}
-	if strings.TrimSpace(toolResult.Content) == "" {
-		toolResult.Content = "ok"
-	}
-	return tools.ApplyOutputLimit(toolResult, tools.DefaultOutputLimitBytes), nil
+	return a.registry.Call(ctx, a.serverID, a.toolName, arguments)
 }
 
 // composeToolName 组装统一的 MCP tool 名称，保持权限映射可预测。
@@ -160,12 +139,4 @@ func ensureObjectSchema(schema map[string]any) map[string]any {
 		cloned["properties"] = map[string]any{}
 	}
 	return cloned
-}
-
-// adapterMetadata 生成 MCP 调用结果的基础元信息。
-func adapterMetadata(serverID string, toolName string) map[string]any {
-	return map[string]any{
-		"mcp_server_id": normalizeServerID(serverID),
-		"mcp_tool_name": strings.TrimSpace(toolName),
-	}
 }

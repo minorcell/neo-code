@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"neo-code/internal/tools"
 )
 
-func TestAdapterFactoryBuildTools(t *testing.T) {
+func TestAdapterFactoryBuildAdapters(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -29,19 +27,19 @@ func TestAdapterFactoryBuildTools(t *testing.T) {
 	}
 
 	factory := NewAdapterFactory(registry)
-	toolsList, err := factory.BuildTools(context.Background())
+	adapters, err := factory.BuildAdapters(context.Background())
 	if err != nil {
-		t.Fatalf("BuildTools() error = %v", err)
+		t.Fatalf("BuildAdapters() error = %v", err)
 	}
-	if len(toolsList) != 1 {
-		t.Fatalf("expected one adapter tool, got %d", len(toolsList))
+	if len(adapters) != 1 {
+		t.Fatalf("expected one adapter, got %d", len(adapters))
 	}
-	if toolsList[0].Name() != "mcp.docs.search" {
-		t.Fatalf("unexpected adapter tool name: %q", toolsList[0].Name())
+	if adapters[0].FullName() != "mcp.docs.search" {
+		t.Fatalf("unexpected adapter full name: %q", adapters[0].FullName())
 	}
 }
 
-func TestAdapterExecute(t *testing.T) {
+func TestAdapterCall(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -72,29 +70,16 @@ func TestAdapterExecute(t *testing.T) {
 		t.Fatalf("NewAdapter() error = %v", err)
 	}
 
-	result, err := adapter.Execute(context.Background(), tools.ToolCallInput{
-		ID:        "tool-call-1",
-		Name:      adapter.Name(),
-		Arguments: []byte(`{"q":"mcp"}`),
-	})
+	result, err := adapter.Call(context.Background(), []byte(`{"q":"mcp"}`))
 	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if result.ToolCallID != "tool-call-1" {
-		t.Fatalf("expected tool call id tool-call-1, got %q", result.ToolCallID)
-	}
-	if result.Name != "mcp.docs.search" {
-		t.Fatalf("expected tool name mcp.docs.search, got %q", result.Name)
+		t.Fatalf("Call() error = %v", err)
 	}
 	if result.Content != "result body" {
 		t.Fatalf("expected result content, got %q", result.Content)
 	}
-	if result.Metadata["mcp_server_id"] != "docs" || result.Metadata["mcp_tool_name"] != "search" {
-		t.Fatalf("unexpected metadata: %+v", result.Metadata)
-	}
 }
 
-func TestAdapterExecuteErrorMapping(t *testing.T) {
+func TestAdapterCallError(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -118,18 +103,7 @@ func TestAdapterExecuteErrorMapping(t *testing.T) {
 		t.Fatalf("NewAdapter() error = %v", err)
 	}
 
-	result, execErr := adapter.Execute(context.Background(), tools.ToolCallInput{
-		ID:        "tool-call-error",
-		Name:      adapter.Name(),
-		Arguments: []byte(`{"q":"mcp"}`),
-	})
-	if execErr == nil {
-		t.Fatalf("expected execute error")
-	}
-	if !result.IsError {
-		t.Fatalf("expected error result, got %+v", result)
-	}
-	if result.Metadata["mcp_server_id"] != "docs" {
-		t.Fatalf("unexpected metadata for error result: %+v", result.Metadata)
+	if _, err := adapter.Call(context.Background(), []byte(`{"q":"mcp"}`)); err == nil {
+		t.Fatalf("expected call error")
 	}
 }
