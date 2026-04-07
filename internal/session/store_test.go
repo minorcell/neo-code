@@ -162,6 +162,60 @@ func TestJSONStoreSaveInvalidBaseDir(t *testing.T) {
 	}
 }
 
+func TestNewUsesDefaultWorkdirAndEmptyMessages(t *testing.T) {
+	t.Parallel()
+
+	session := New("hello title")
+
+	if session.ID == "" {
+		t.Fatalf("expected non-empty id")
+	}
+	if !strings.HasPrefix(session.ID, "session_") {
+		t.Fatalf("expected id with session_ prefix, got %q", session.ID)
+	}
+	if session.Title != "hello title" {
+		t.Fatalf("expected title %q, got %q", "hello title", session.Title)
+	}
+	if session.Workdir != "" {
+		t.Fatalf("expected empty workdir, got %q", session.Workdir)
+	}
+	if len(session.Messages) != 0 {
+		t.Fatalf("expected empty messages, got %+v", session.Messages)
+	}
+	if session.CreatedAt.IsZero() || session.UpdatedAt.IsZero() {
+		t.Fatalf("expected non-zero timestamps, got created=%v updated=%v", session.CreatedAt, session.UpdatedAt)
+	}
+	if session.UpdatedAt.Before(session.CreatedAt) {
+		t.Fatalf("expected UpdatedAt >= CreatedAt, got created=%v updated=%v", session.CreatedAt, session.UpdatedAt)
+	}
+}
+
+func TestNewWithWorkdirTrimAndTitleSanitize(t *testing.T) {
+	t.Parallel()
+
+	tooLong := strings.Repeat("中", 45) // rune 长度 > 40
+	workdir := "   /tmp/workdir   "
+
+	session := NewWithWorkdir(tooLong, workdir)
+
+	if session.Workdir != "/tmp/workdir" {
+		t.Fatalf("expected trimmed workdir %q, got %q", "/tmp/workdir", session.Workdir)
+	}
+	if got := len([]rune(session.Title)); got != 40 {
+		t.Fatalf("expected title rune length 40, got %d (title=%q)", got, session.Title)
+	}
+}
+
+func TestNewWithWorkdirFallsBackDefaultTitle(t *testing.T) {
+	t.Parallel()
+
+	session := NewWithWorkdir("   \n\t  ", "")
+
+	if session.Title != "New Session" {
+		t.Fatalf("expected default title %q, got %q", "New Session", session.Title)
+	}
+}
+
 func mustWriteSessionFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
