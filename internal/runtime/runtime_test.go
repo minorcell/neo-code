@@ -2445,8 +2445,8 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession() with new service error = %v", err)
 	}
-	if strings.TrimSpace(reloaded.Workdir) != "" {
-		t.Fatalf("expected session workdir not to persist across process lifetime, got %q", reloaded.Workdir)
+	if reloaded.Workdir != target {
+		t.Fatalf("expected session workdir to persist across service lifetime, got %q", reloaded.Workdir)
 	}
 
 	_, err = service.SetSessionWorkdir(context.Background(), "", "sub")

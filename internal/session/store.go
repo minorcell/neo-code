@@ -28,7 +28,7 @@ type Session struct {
 	Model     string                  `json:"model,omitempty"`
 	CreatedAt time.Time               `json:"created_at"`
 	UpdatedAt time.Time               `json:"updated_at"`
-	Workdir   string                  `json:"-"`
+	Workdir   string                  `json:"workdir,omitempty"`
 	Messages  []providertypes.Message `json:"messages"`
 }
 

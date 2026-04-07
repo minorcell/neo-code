@@ -54,8 +54,8 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	if loaded.Title != older.Title {
 		t.Fatalf("expected title %q, got %q", older.Title, loaded.Title)
 	}
-	if loaded.Workdir != "" {
-		t.Fatalf("expected workdir to stay in-memory only, got %q", loaded.Workdir)
+	if loaded.Workdir != older.Workdir {
+		t.Fatalf("expected persisted workdir %q, got %q", older.Workdir, loaded.Workdir)
 	}
 	if len(loaded.Messages) != 2 || loaded.Messages[1].Content != "world" {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
@@ -66,8 +66,8 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
 	}
-	if strings.Contains(string(raw), "\"workdir\"") {
-		t.Fatalf("expected persisted session file to exclude workdir, got:\n%s", string(raw))
+	if !strings.Contains(string(raw), "\"workdir\"") {
+		t.Fatalf("expected persisted session file to include workdir, got:\n%s", string(raw))
 	}
 
 	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "invalid.json"), "{invalid")
@@ -325,6 +325,7 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 		Title:     "Persist Fields",
 		Provider:  "openai",
 		Model:     "gpt-4.1",
+		Workdir:   "/tmp/persist-workdir",
 		CreatedAt: time.Now().Add(-time.Hour),
 		UpdatedAt: time.Now(),
 		Messages: []providertypes.Message{
@@ -364,8 +365,8 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 	if _, ok := decoded["messages"]; !ok {
 		t.Fatalf("expected messages field persisted, got %+v", decoded)
 	}
-	if _, ok := decoded["workdir"]; ok {
-		t.Fatalf("expected workdir not persisted, got %+v", decoded)
+	if decoded["workdir"] != session.Workdir {
+		t.Fatalf("expected workdir persisted as %q, got %+v", session.Workdir, decoded["workdir"])
 	}
 }
 
