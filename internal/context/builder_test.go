@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"neo-code/internal/context/internalcompact"
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -31,7 +31,7 @@ func TestDefaultBuilderBuild(t *testing.T) {
 
 	builder := NewBuilder()
 	input := BuildInput{
-		Messages: []provider.Message{
+		Messages: []providertypes.Message{
 			{Role: "user", Content: "hello"},
 		},
 		Metadata: testMetadata(t.TempDir()),
@@ -90,7 +90,7 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 
 	builder := NewBuilder()
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
-		Messages: []provider.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
 		Metadata: testMetadata(root),
 	})
 	if err != nil {
@@ -111,10 +111,10 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T) {
 	t.Parallel()
 
-	messages := make([]provider.Message, 0, maxRetainedMessageSpans+2)
+	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+2)
 	for i := 0; i < maxRetainedMessageSpans+2; i++ {
-		messages = append(messages, provider.Message{
-			Role:    provider.RoleUser,
+		messages = append(messages, providertypes.Message{
+			Role:    providertypes.RoleUser,
 			Content: fmt.Sprintf("u-%d", i),
 		})
 	}
@@ -161,31 +161,31 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 		},
 	}
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		{Role: provider.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "current reply"},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
@@ -215,31 +215,31 @@ func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
 		},
 	}
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		{Role: provider.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "current reply"},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
@@ -271,30 +271,30 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 		},
 	}
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
@@ -313,30 +313,30 @@ func TestNewBuilderWithToolPoliciesUsesProvidedPolicySource(t *testing.T) {
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	})
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
@@ -351,20 +351,20 @@ func TestNewBuilderWithToolPoliciesUsesProvidedPolicySource(t *testing.T) {
 func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 	t.Parallel()
 
-	messages := make([]provider.Message, 0, maxRetainedMessageSpans+4)
+	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+4)
 	for i := 0; i < 8; i++ {
-		messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+		messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 	}
 	messages = append(messages,
-		provider.Message{
+		providertypes.Message{
 			Role: "assistant",
-			ToolCalls: []provider.ToolCall{
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-result"},
-		provider.Message{Role: "assistant", Content: "after-tool"},
-		provider.Message{Role: "user", Content: "latest"},
+		providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-result"},
+		providertypes.Message{Role: "assistant", Content: "after-tool"},
+		providertypes.Message{Role: "user", Content: "latest"},
 	)
 
 	trimmed := trimMessages(messages)
@@ -390,27 +390,27 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 	t.Parallel()
 
-	messages := make([]provider.Message, 0, maxRetainedMessageSpans+5)
+	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+5)
 	for i := 0; i < 2; i++ {
-		messages = append(messages, provider.Message{Role: provider.RoleUser, Content: fmt.Sprintf("old-%d", i)})
+		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: fmt.Sprintf("old-%d", i)})
 	}
 	messages = append(messages,
-		provider.Message{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-1"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-2"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-3"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-4"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-5"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-6"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-7"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-8"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-9"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-10"},
-		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-11"},
+		providertypes.Message{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-1"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-2"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-3"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-4"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-5"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-6"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-7"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-8"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-9"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-10"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-11"},
 	)
 
 	trimmed := trimMessages(messages)
-	if trimmed[0].Role != provider.RoleUser || trimmed[0].Content != "latest explicit instruction" {
+	if trimmed[0].Role != providertypes.RoleUser || trimmed[0].Content != "latest explicit instruction" {
 		t.Fatalf("expected protected tail to keep latest explicit user instruction, got %+v", trimmed[0])
 	}
 	if len(trimmed) != 12 {
@@ -421,27 +421,27 @@ func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 	t.Parallel()
 
-	messages := make([]provider.Message, 0, maxRetainedMessageSpans+6)
+	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+6)
 	for i := 0; i < 3; i++ {
-		messages = append(messages, provider.Message{Role: provider.RoleUser, Content: fmt.Sprintf("u-%d", i)})
+		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: fmt.Sprintf("u-%d", i)})
 	}
 	messages = append(messages,
-		provider.Message{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+		providertypes.Message{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		provider.Message{Role: provider.RoleTool, ToolCallID: "call-2", Content: "tool-result"},
-		provider.Message{Role: provider.RoleAssistant, Content: "after tool"},
-		provider.Message{Role: provider.RoleUser, Content: "u-4"},
-		provider.Message{Role: provider.RoleAssistant, Content: "a-5"},
-		provider.Message{Role: provider.RoleUser, Content: "u-6"},
-		provider.Message{Role: provider.RoleAssistant, Content: "a-7"},
-		provider.Message{Role: provider.RoleUser, Content: "u-8"},
-		provider.Message{Role: provider.RoleAssistant, Content: "a-9"},
-		provider.Message{Role: provider.RoleUser, Content: "u-10"},
-		provider.Message{Role: provider.RoleAssistant, Content: "a-11"},
+		providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "tool-result"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "after tool"},
+		providertypes.Message{Role: providertypes.RoleUser, Content: "u-4"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-5"},
+		providertypes.Message{Role: providertypes.RoleUser, Content: "u-6"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-7"},
+		providertypes.Message{Role: providertypes.RoleUser, Content: "u-8"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-9"},
+		providertypes.Message{Role: providertypes.RoleUser, Content: "u-10"},
+		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-11"},
 	)
 
 	spans := internalcompact.BuildMessageSpans(messages)
@@ -451,7 +451,7 @@ func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 	if len(trimmed) == 0 || trimmed[0].Content != messages[start].Content {
 		t.Fatalf("expected trim to start from shared span boundary %d, got %+v", start, trimmed)
 	}
-	if trimmed[0].Role != provider.RoleAssistant || len(trimmed[0].ToolCalls) != 1 {
+	if trimmed[0].Role != providertypes.RoleAssistant || len(trimmed[0].ToolCalls) != 1 {
 		t.Fatalf("expected trim to keep whole tool block at shared boundary, got %+v", trimmed[0])
 	}
 }
@@ -461,18 +461,18 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		input   []provider.Message
+		input   []providertypes.Message
 		wantLen int
-		assert  func(t *testing.T, original []provider.Message, trimmed []provider.Message)
+		assert  func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message)
 	}{
 		{
 			name: "within max turns returns full cloned slice",
-			input: []provider.Message{
+			input: []providertypes.Message{
 				{Role: "user", Content: "one"},
 				{Role: "assistant", Content: "two"},
 			},
 			wantLen: 2,
-			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
+			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
 				t.Helper()
 				if &trimmed[0] == &original[0] {
 					t.Fatalf("expected trimmed slice to be cloned")
@@ -481,25 +481,25 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		},
 		{
 			name: "long message list with limited spans keeps full history",
-			input: func() []provider.Message {
-				messages := make([]provider.Message, 0, maxRetainedMessageSpans+3)
+			input: func() []providertypes.Message {
+				messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+3)
 				for i := 0; i < maxRetainedMessageSpans-1; i++ {
-					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+					messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 				}
 				messages = append(messages,
-					provider.Message{
+					providertypes.Message{
 						Role: "assistant",
-						ToolCalls: []provider.ToolCall{
+						ToolCalls: []providertypes.ToolCall{
 							{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
 						},
 					},
-					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-1"},
-					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-2"},
+					providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-1"},
+					providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-2"},
 				)
 				return messages
 			}(),
 			wantLen: maxRetainedMessageSpans + 2,
-			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
+			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
 				t.Helper()
 				if len(trimmed) != len(original) {
 					t.Fatalf("expected full history to remain, got %d want %d", len(trimmed), len(original))
@@ -508,24 +508,24 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		},
 		{
 			name: "message count beyond limit trims by span count",
-			input: func() []provider.Message {
-				messages := make([]provider.Message, 0, maxRetainedMessageSpans+5)
+			input: func() []providertypes.Message {
+				messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+5)
 				for i := 0; i < maxRetainedMessageSpans+1; i++ {
-					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+					messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
 				}
 				messages = append(messages,
-					provider.Message{
+					providertypes.Message{
 						Role: "assistant",
-						ToolCalls: []provider.ToolCall{
+						ToolCalls: []providertypes.ToolCall{
 							{ID: "call-2", Name: "filesystem_edit", Arguments: "{}"},
 						},
 					},
-					provider.Message{Role: "tool", ToolCallID: "call-2", Content: "tool-result"},
+					providertypes.Message{Role: "tool", ToolCallID: "call-2", Content: "tool-result"},
 				)
 				return messages
 			}(),
 			wantLen: maxRetainedMessageSpans + 1,
-			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
+			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
 				t.Helper()
 				if trimmed[0].Content != "u-2" {
 					t.Fatalf("expected oldest spans to be removed, got first message %+v", trimmed[0])

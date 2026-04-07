@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 )
 
@@ -18,7 +18,7 @@ type SpecListInput struct {
 
 // Manager is the runtime-facing tool execution and schema exposure boundary.
 type Manager interface {
-	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error)
+	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error)
 	MicroCompactPolicy(name string) MicroCompactPolicy
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error
@@ -26,7 +26,7 @@ type Manager interface {
 
 // Executor is the concrete tool execution layer under the manager.
 type Executor interface {
-	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error)
+	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error)
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	Supports(name string) bool
 }
@@ -161,7 +161,7 @@ func NewManager(executor Executor, engine security.PermissionEngine, sandbox Wor
 }
 
 // ListAvailableSpecs returns the currently visible tool specs from the executor.
-func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error) {
+func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
 	if m == nil || m.executor == nil {
 		return nil, errors.New("tools: manager executor is nil")
 	}

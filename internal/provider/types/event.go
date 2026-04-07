@@ -1,55 +1,6 @@
-package provider
+package types
 
 import "fmt"
-
-const (
-	// RoleSystem 标识系统消息。
-	RoleSystem = "system"
-	// RoleUser 标识用户消息。
-	RoleUser = "user"
-	// RoleAssistant 标识助手消息。
-	RoleAssistant = "assistant"
-	// RoleTool 标识工具结果消息。
-	RoleTool = "tool"
-)
-
-// Message 表示对话中的单条消息。
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	IsError    bool       `json:"is_error,omitempty"`
-}
-
-// ToolCall 表示模型发起的工具调用请求。
-type ToolCall struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-// ToolSpec 表示暴露给模型的可调用工具描述。
-type ToolSpec struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Schema      map[string]any `json:"schema"`
-}
-
-// ChatRequest 是 provider.Chat() 的请求参数。
-type ChatRequest struct {
-	Model        string     `json:"model"`
-	SystemPrompt string     `json:"system_prompt"`
-	Messages     []Message  `json:"messages"`
-	Tools        []ToolSpec `json:"tools,omitempty"`
-}
-
-// Usage 记录本次请求的 token 使用统计。
-type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
-}
 
 // StreamEventType 定义流式事件类型。
 type StreamEventType string

@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"neo-code/internal/context/internalcompact"
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -16,12 +16,12 @@ const (
 )
 
 // microCompactMessages 对裁剪后的消息做只读投影式微压缩，仅清理旧工具结果内容。
-func microCompactMessages(messages []provider.Message) []provider.Message {
+func microCompactMessages(messages []providertypes.Message) []providertypes.Message {
 	return microCompactMessagesWithPolicies(messages, nil)
 }
 
 // microCompactMessagesWithPolicies 按工具策略对裁剪后的消息做只读投影式微压缩。
-func microCompactMessagesWithPolicies(messages []provider.Message, policies MicroCompactPolicySource) []provider.Message {
+func microCompactMessagesWithPolicies(messages []providertypes.Message, policies MicroCompactPolicySource) []providertypes.Message {
 	cloned := cloneContextMessages(messages)
 	if len(cloned) == 0 {
 		return cloned
@@ -63,31 +63,31 @@ func microCompactMessagesWithPolicies(messages []provider.Message, policies Micr
 }
 
 // cloneContextMessages 深拷贝消息切片，避免读时投影污染 runtime 持有的原始会话消息。
-func cloneContextMessages(messages []provider.Message) []provider.Message {
+func cloneContextMessages(messages []providertypes.Message) []providertypes.Message {
 	if len(messages) == 0 {
 		return nil
 	}
 
-	cloned := make([]provider.Message, 0, len(messages))
+	cloned := make([]providertypes.Message, 0, len(messages))
 	for _, message := range messages {
 		next := message
-		next.ToolCalls = append([]provider.ToolCall(nil), message.ToolCalls...)
+		next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
 		cloned = append(cloned, next)
 	}
 	return cloned
 }
 
 // isToolCallSpan 判断当前 span 是否是由 assistant tool call 起始的原子工具块。
-func isToolCallSpan(messages []provider.Message, span internalcompact.MessageSpan) bool {
+func isToolCallSpan(messages []providertypes.Message, span internalcompact.MessageSpan) bool {
 	if span.Start < 0 || span.Start >= len(messages) {
 		return false
 	}
 	message := messages[span.Start]
-	return message.Role == provider.RoleAssistant && len(message.ToolCalls) > 0
+	return message.Role == providertypes.RoleAssistant && len(message.ToolCalls) > 0
 }
 
 // compactableToolCallIDs 返回 assistant tool call 中可参与微压缩的调用 ID 集合。
-func compactableToolCallIDs(calls []provider.ToolCall, policies MicroCompactPolicySource) map[string]struct{} {
+func compactableToolCallIDs(calls []providertypes.ToolCall, policies MicroCompactPolicySource) map[string]struct{} {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -119,7 +119,7 @@ func toolParticipatesInMicroCompact(toolName string, policies MicroCompactPolicy
 }
 
 // hasCompactableToolContent 判断工具块中是否存在会影响保留预算的有效工具结果内容。
-func hasCompactableToolContent(messages []provider.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) bool {
+func hasCompactableToolContent(messages []providertypes.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) bool {
 	for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
 		if shouldClearToolMessage(messages[messageIndex], compactableIDs) {
 			return true
@@ -129,8 +129,8 @@ func hasCompactableToolContent(messages []provider.Message, span internalcompact
 }
 
 // shouldClearToolMessage 判断一条 tool 消息是否满足旧结果清理条件。
-func shouldClearToolMessage(message provider.Message, compactableIDs map[string]struct{}) bool {
-	if message.Role != provider.RoleTool || message.IsError {
+func shouldClearToolMessage(message providertypes.Message, compactableIDs map[string]struct{}) bool {
+	if message.Role != providertypes.RoleTool || message.IsError {
 		return false
 	}
 	if compactableIDs == nil {

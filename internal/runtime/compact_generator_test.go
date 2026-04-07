@@ -8,7 +8,7 @@ import (
 
 	"neo-code/internal/config"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) {
@@ -21,8 +21,8 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	}
 
 	scripted := &scriptedProvider{
-		streams: [][]provider.StreamEvent{
-			{provider.NewTextDeltaStreamEvent(strings.Join([]string{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent(strings.Join([]string{
 				"[compact_summary]",
 				"done:",
 				"- Completed the historical task and kept the final result.",
@@ -46,17 +46,17 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 
 	summary, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
-		ArchivedMessages: []provider.Message{
-			{Role: provider.RoleUser, Content: "legacy request"},
+		ArchivedMessages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Content: "legacy request"},
 			{
-				Role: provider.RoleAssistant,
-				ToolCalls: []provider.ToolCall{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
 					{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 				},
 			},
 		},
-		RetainedMessages: []provider.Message{
-			{Role: provider.RoleAssistant, Content: "recent answer"},
+		RetainedMessages: []providertypes.Message{
+			{Role: providertypes.RoleAssistant, Content: "recent answer"},
 		},
 		ArchivedMessageCount: 2,
 		Config:               manager.Get().Context.Compact,
@@ -87,7 +87,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if !strings.Contains(req.SystemPrompt, "[compact_summary]") {
 		t.Fatalf("expected compact system prompt, got %q", req.SystemPrompt)
 	}
-	if len(req.Messages) != 1 || req.Messages[0].Role != provider.RoleUser {
+	if len(req.Messages) != 1 || req.Messages[0].Role != providertypes.RoleUser {
 		t.Fatalf("expected a single user prompt, got %+v", req.Messages)
 	}
 	if !strings.Contains(req.Messages[0].Content, "<archived_source_material>") {
@@ -114,10 +114,10 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		streams: [][]provider.StreamEvent{
+		streams: [][]providertypes.StreamEvent{
 			{
-				provider.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
-				provider.NewToolCallDeltaStreamEvent(0, "call-1", "{}"),
+				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
+				providertypes.NewToolCallDeltaStreamEvent(0, "call-1", "{}"),
 			},
 		},
 	}
@@ -125,8 +125,8 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
-		ArchivedMessages: []provider.Message{
-			{Role: provider.RoleUser, Content: "legacy request"},
+		ArchivedMessages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Content: "legacy request"},
 		},
 		Config: manager.Get().Context.Compact,
 	})
@@ -145,9 +145,9 @@ func TestCompactSummaryGeneratorRejectsMalformedStreamEvent(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		streams: [][]provider.StreamEvent{
+		streams: [][]providertypes.StreamEvent{
 			{
-				{Type: provider.StreamEventTextDelta},
+				{Type: providertypes.StreamEventTextDelta},
 			},
 		},
 	}
@@ -171,12 +171,12 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 		t.Fatalf("resolve provider: %v", err)
 	}
 
-	stream := []provider.StreamEvent{{Type: provider.StreamEventTextDelta}}
+	stream := []providertypes.StreamEvent{{Type: providertypes.StreamEventTextDelta}}
 	for i := 0; i < 40; i++ {
-		stream = append(stream, provider.NewTextDeltaStreamEvent("ignored"))
+		stream = append(stream, providertypes.NewTextDeltaStreamEvent("ignored"))
 	}
 	scripted := &scriptedProvider{
-		streams: [][]provider.StreamEvent{stream},
+		streams: [][]providertypes.StreamEvent{stream},
 	}
 	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
 

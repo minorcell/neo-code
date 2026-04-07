@@ -17,6 +17,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -34,13 +35,13 @@ const (
 // 包括文本内容和工具调用列表。
 type streamAccumulator struct {
 	content   strings.Builder
-	toolCalls map[int]*provider.ToolCall
+	toolCalls map[int]*providertypes.ToolCall
 }
 
 // newStreamAccumulator 创建并初始化一个空的流式事件累积器。
 func newStreamAccumulator() *streamAccumulator {
 	return &streamAccumulator{
-		toolCalls: make(map[int]*provider.ToolCall),
+		toolCalls: make(map[int]*providertypes.ToolCall),
 	}
 }
 
@@ -50,10 +51,10 @@ func (a *streamAccumulator) accumulateTextDelta(text string) {
 }
 
 // ensureToolCall 返回指定索引的工具调用条目，不存在时会先创建占位对象。
-func (a *streamAccumulator) ensureToolCall(index int) *provider.ToolCall {
+func (a *streamAccumulator) ensureToolCall(index int) *providertypes.ToolCall {
 	call, exists := a.toolCalls[index]
 	if !exists {
-		call = &provider.ToolCall{}
+		call = &providertypes.ToolCall{}
 		a.toolCalls[index] = call
 	}
 	return call
@@ -80,15 +81,15 @@ func (a *streamAccumulator) accumulateToolCallDelta(index int, id, argumentsDelt
 }
 
 // buildMessage 从累积状态构建最终的 assistant Message 对象，并校验工具调用元数据是否完整。
-func (a *streamAccumulator) buildMessage() (provider.Message, error) {
+func (a *streamAccumulator) buildMessage() (providertypes.Message, error) {
 	ordered := make([]int, 0, len(a.toolCalls))
 	for index := range a.toolCalls {
 		ordered = append(ordered, index)
 	}
 	sort.Ints(ordered)
 
-	message := provider.Message{
-		Role:    provider.RoleAssistant,
+	message := providertypes.Message{
+		Role:    providertypes.RoleAssistant,
 		Content: a.content.String(),
 	}
 	for _, index := range ordered {
@@ -97,10 +98,10 @@ func (a *streamAccumulator) buildMessage() (provider.Message, error) {
 			continue
 		}
 		if strings.TrimSpace(call.ID) == "" {
-			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without id", index)
+			return providertypes.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without id", index)
 		}
 		if strings.TrimSpace(call.Name) == "" {
-			return provider.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without name", index)
+			return providertypes.Message{}, fmt.Errorf("runtime: provider emitted tool call %d without name", index)
 		}
 		message.ToolCalls = append(message.ToolCalls, *call)
 	}
@@ -200,8 +201,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
 
-	userMessage := provider.Message{
-		Role:    provider.RoleUser,
+	userMessage := providertypes.Message{
+		Role:    providertypes.RoleUser,
 		Content: input.Content,
 	}
 	session.Messages = append(session.Messages, userMessage)
@@ -251,7 +252,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		acc, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
+		acc, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, providertypes.ChatRequest{
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
@@ -273,7 +274,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if strings.TrimSpace(assistant.Role) == "" {
-			assistant.Role = provider.RoleAssistant
+			assistant.Role = providertypes.RoleAssistant
 		}
 
 		if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
@@ -326,8 +327,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				s.emit(ctx, EventPermissionResolved, input.RunID, session.ID, permissionEvent.toResolvedPayload())
 			}
 
-			toolMessage := provider.Message{
-				Role:       provider.RoleTool,
+			toolMessage := providertypes.Message{
+				Role:       providertypes.RoleTool,
 				Content:    result.Content,
 				ToolCallID: call.ID,
 				IsError:    result.IsError,
@@ -496,13 +497,13 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 
 // handleProviderStreamEvent 解析并应用单条 provider 流式事件，缺失载荷或未知类型时返回错误。
 func handleProviderStreamEvent(
-	event provider.StreamEvent,
+	event providertypes.StreamEvent,
 	acc *streamAccumulator,
 	onTextDelta func(string),
-	onToolCallStart func(provider.ToolCallStartPayload),
+	onToolCallStart func(providertypes.ToolCallStartPayload),
 ) error {
 	switch event.Type {
-	case provider.StreamEventTextDelta:
+	case providertypes.StreamEventTextDelta:
 		payload, err := event.TextDeltaValue()
 		if err != nil {
 			return err
@@ -513,7 +514,7 @@ func handleProviderStreamEvent(
 		if acc != nil {
 			acc.accumulateTextDelta(payload.Text)
 		}
-	case provider.StreamEventToolCallStart:
+	case providertypes.StreamEventToolCallStart:
 		payload, err := event.ToolCallStartValue()
 		if err != nil {
 			return err
@@ -524,7 +525,7 @@ func handleProviderStreamEvent(
 		if acc != nil {
 			acc.accumulateToolCallStart(payload.Index, payload.ID, payload.Name)
 		}
-	case provider.StreamEventToolCallDelta:
+	case providertypes.StreamEventToolCallDelta:
 		payload, err := event.ToolCallDeltaValue()
 		if err != nil {
 			return err
@@ -532,7 +533,7 @@ func handleProviderStreamEvent(
 		if acc != nil {
 			acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
 		}
-	case provider.StreamEventMessageDone:
+	case providertypes.StreamEventMessageDone:
 		if _, err := event.MessageDoneValue(); err != nil {
 			return err
 		}
@@ -548,7 +549,7 @@ func (s *Service) forwardProviderEvents(
 	ctx context.Context,
 	runID string,
 	sessionID string,
-	input <-chan provider.StreamEvent,
+	input <-chan providertypes.StreamEvent,
 	done chan<- error,
 	acc *streamAccumulator,
 ) {
@@ -569,7 +570,7 @@ func (s *Service) forwardProviderEvents(
 				func(text string) {
 					s.emit(ctx, EventAgentChunk, runID, sessionID, text)
 				},
-				func(payload provider.ToolCallStartPayload) {
+				func(payload providertypes.ToolCallStartPayload) {
 					s.emit(ctx, EventToolCallThinking, runID, sessionID, payload.Name)
 				},
 			)
@@ -640,7 +641,7 @@ func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	runID string,
 	sessionID string,
-	req provider.ChatRequest,
+	req providertypes.ChatRequest,
 ) (*streamAccumulator, error) {
 	acc := newStreamAccumulator()
 	var lastErr error
@@ -671,7 +672,7 @@ func (s *Service) callProviderWithRetry(
 			return nil, err
 		}
 
-		streamEvents := make(chan provider.StreamEvent, 32)
+		streamEvents := make(chan providertypes.StreamEvent, 32)
 		streamDone := make(chan error, 1)
 		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone, acc)
 

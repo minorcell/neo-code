@@ -8,11 +8,12 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/openai"
+	providertypes "neo-code/internal/provider/types"
 )
 
 type stubProvider struct{}
 
-func (stubProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+func (stubProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
 

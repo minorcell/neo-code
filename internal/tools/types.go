@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 )
 
@@ -35,4 +35,4 @@ type ToolResult struct {
 	Metadata   map[string]any
 }
 
-type ToolSpec = provider.ToolSpec
+type ToolSpec = providertypes.ToolSpec

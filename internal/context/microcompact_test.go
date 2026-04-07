@@ -3,7 +3,7 @@ package context
 import (
 	"testing"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -19,31 +19,31 @@ func (s stubMicroCompactPolicySource) MicroCompactPolicy(name string) tools.Micr
 func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		{Role: provider.RoleAssistant, Content: "current working reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "current working reply"},
 	}
 
 	got := microCompactMessages(messages)
@@ -71,10 +71,10 @@ func TestMicroCompactMessagesHandlesEmptyAndInvalidSpanInputs(t *testing.T) {
 		t.Fatalf("expected nil input to remain nil, got %+v", got)
 	}
 
-	assistantOnly := []provider.Message{
+	assistantOnly := []providertypes.Message{
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "", Name: "bash", Arguments: "{}"},
 			},
 		},
@@ -88,37 +88,37 @@ func TestMicroCompactMessagesHandlesEmptyAndInvalidSpanInputs(t *testing.T) {
 func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-0", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-0", Content: "old grep result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-0", Content: "old grep result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "recent read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "recent read result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "tail bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "tail bash result"},
 	}
 
 	got := microCompactMessages(messages)
@@ -139,36 +139,36 @@ func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
+	messages := []providertypes.Message{
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "custom result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "edit failed", IsError: true},
-		{Role: provider.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "edit failed", IsError: true},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "filesystem_write_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: microCompactClearedMessage},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: microCompactClearedMessage},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-4", Content: ""},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: ""},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
@@ -194,33 +194,33 @@ func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 				{ID: "call-2", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "read result"},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "custom result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-4", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		{Role: provider.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "current reply"},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
@@ -240,30 +240,30 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "repo_search", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old repo search result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old repo search result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})
@@ -275,45 +275,45 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleUser, Content: "older user"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older user"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "older read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "older read result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "middle grep result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "middle grep result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "near edit result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "near edit result"},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-4", Content: "", IsError: true},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "", IsError: true},
 		{
-			Role: provider.RoleAssistant,
-			ToolCalls: []provider.ToolCall{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-5", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: provider.RoleTool, ToolCallID: "call-5", Content: ""},
-		{Role: provider.RoleUser, Content: "latest explicit instruction"},
-		{Role: provider.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: ""},
+		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleAssistant, Content: "current reply"},
 	}
 
 	got := microCompactMessages(messages)
@@ -337,8 +337,8 @@ func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *
 func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testing.T) {
 	t.Parallel()
 
-	messages := []provider.Message{
-		{Role: provider.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})

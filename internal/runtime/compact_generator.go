@@ -8,7 +8,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 type compactSummaryGenerator struct {
@@ -58,7 +58,7 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 	}
 
 	// 使用流式事件通道收集 compact 摘要响应。
-	streamEvents := make(chan provider.StreamEvent, 32)
+	streamEvents := make(chan providertypes.StreamEvent, 32)
 	streamDone := make(chan error, 1)
 	acc := newStreamAccumulator()
 
@@ -84,11 +84,11 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 		}
 	}()
 
-	err = modelProvider.Chat(ctx, provider.ChatRequest{
+	err = modelProvider.Chat(ctx, providertypes.ChatRequest{
 		Model:        g.model,
 		SystemPrompt: prompt.SystemPrompt,
-		Messages: []provider.Message{{
-			Role:    provider.RoleUser,
+		Messages: []providertypes.Message{{
+			Role:    providertypes.RoleUser,
 			Content: prompt.UserPrompt,
 		}},
 	}, streamEvents)

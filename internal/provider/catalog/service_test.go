@@ -8,6 +8,7 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestNewService(t *testing.T) {
@@ -234,7 +235,7 @@ func containsModelDescriptorID(models []config.ModelDescriptor, modelID string) 
 
 type catalogTestProvider struct{}
 
-func (catalogTestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+func (catalogTestProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
 

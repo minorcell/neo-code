@@ -20,6 +20,7 @@ import (
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	providercatalog "neo-code/internal/provider/catalog"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
@@ -675,7 +676,7 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 			msg: RuntimeMsg{Event: agentruntime.RuntimeEvent{
 				Type:      agentruntime.EventAgentDone,
 				SessionID: "session-2",
-				Payload: provider.Message{
+				Payload: providertypes.Message{
 					Role:    roleAssistant,
 					Content: "final",
 				},
@@ -778,7 +779,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	now := agentruntime.Session{
 		ID:    "session-1",
 		Title: "Existing Session",
-		Messages: []provider.Message{
+		Messages: []providertypes.Message{
 			{Role: roleUser, Content: "hi"},
 			{Role: roleAssistant, Content: "hello"},
 		},
@@ -932,12 +933,12 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	if app.statusBadge("error: boom") == "" || app.statusBadge("running now") == "" {
 		t.Fatalf("expected status badge variants")
 	}
-	if rendered, _ := app.renderMessageBlockWithCopy(provider.Message{Role: roleError, Content: "boom"}, 80, 1); rendered == "" {
+	if rendered, _ := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleError, Content: "boom"}, 80, 1); rendered == "" {
 		t.Fatalf("expected error message block")
 	}
-	if rendered, _ := app.renderMessageBlockWithCopy(provider.Message{
+	if rendered, _ := app.renderMessageBlockWithCopy(providertypes.Message{
 		Role: roleAssistant,
-		ToolCalls: []provider.ToolCall{
+		ToolCalls: []providertypes.ToolCall{
 			{Name: "filesystem_edit"},
 		},
 	}, 80, 1); rendered == "" {
@@ -1194,7 +1195,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.state.ActiveSessionID = "existing"
 				app.state.ActiveSessionTitle = "Existing"
-				app.activeMessages = []provider.Message{{Role: roleUser, Content: "hello"}}
+				app.activeMessages = []providertypes.Message{{Role: roleUser, Content: "hello"}}
 			},
 			msg: tea.KeyMsg{Type: tea.KeyCtrlN},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -1211,7 +1212,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				runtime.loads["s1"] = agentruntime.Session{
 					ID:       "s1",
 					Title:    "One",
-					Messages: []provider.Message{{Role: roleAssistant, Content: "loaded"}},
+					Messages: []providertypes.Message{{Role: roleAssistant, Content: "loaded"}},
 				}
 				if err := app.refreshSessions(); err != nil {
 					t.Fatalf("refresh sessions: %v", err)
@@ -1786,7 +1787,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 			event: agentruntime.RuntimeEvent{
 				Type:      agentruntime.EventToolStart,
 				SessionID: "s1",
-				Payload: provider.ToolCall{
+				Payload: providertypes.ToolCall{
 					Name: "filesystem_edit",
 				},
 			},
@@ -2446,7 +2447,7 @@ func TestRenderMessageBlockUserContentAlignsWithUserTag(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	renderedMessage, _ := app.renderMessageBlockWithCopy(provider.Message{Role: roleUser, Content: "nihao"}, 80, 1)
+	renderedMessage, _ := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleUser, Content: "nihao"}, 80, 1)
 	rendered := stripANSI(renderedMessage)
 	lines := strings.Split(rendered, "\n")
 
@@ -2735,7 +2736,7 @@ func newTestProviderService(t *testing.T, manager *config.Manager) *config.Selec
 
 type tUItestProvider struct{}
 
-func (tUItestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+func (tUItestProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
 	return nil
 }
 
