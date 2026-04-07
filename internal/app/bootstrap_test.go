@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
 	"neo-code/internal/tools"
+	"neo-code/internal/tools/mcp"
 )
 
 func TestNewProgram(t *testing.T) {
@@ -84,7 +86,10 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.WebFetch.MaxResponseBytes = 4
 
-	registry := buildToolRegistry(cfg)
+	registry, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
 	tool, err := registry.Get("webfetch")
 	if err != nil {
 		t.Fatalf("registry.Get(webfetch) error = %v", err)
@@ -107,6 +112,145 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	}
 	if result.Content == "" {
 		t.Fatalf("expected formatted webfetch content")
+	}
+}
+
+func TestBuildMCPRegistryFromConfig(t *testing.T) {
+	t.Parallel()
+
+	stubClient := &stubMCPServerClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{
+			ID:      "docs",
+			Enabled: true,
+			Source:  "stdio",
+			Stdio: config.MCPStdioConfig{
+				Command: "mock",
+			},
+		},
+	}
+
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		if err := registry.RegisterServer(server.ID, "stdio", server.Version, stubClient); err != nil {
+			return err
+		}
+		return registry.RefreshServerTools(context.Background(), server.ID)
+	}
+
+	registry, err := buildMCPRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildMCPRegistry() error = %v", err)
+	}
+	if registry == nil {
+		t.Fatalf("expected non-nil mcp registry")
+	}
+	snapshots := registry.Snapshot()
+	if len(snapshots) != 1 || snapshots[0].ServerID != "docs" {
+		t.Fatalf("unexpected snapshots: %+v", snapshots)
+	}
+}
+
+func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{
+			ID:      "docs",
+			Enabled: true,
+			Source:  "stdio",
+			Stdio: config.MCPStdioConfig{
+				Command: "mock",
+			},
+		},
+	}
+
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &stubMCPServerClient{
+			tools: []mcp.ToolDescriptor{
+				{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+			},
+		}
+		if err := registry.RegisterServer(server.ID, "stdio", server.Version, client); err != nil {
+			return err
+		}
+		return registry.RefreshServerTools(context.Background(), server.ID)
+	}
+
+	registry, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	found := false
+	for _, spec := range specs {
+		if spec.Name == "mcp.docs.search" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected mcp.docs.search in specs, got %+v", specs)
+	}
+}
+
+func TestResolveMCPServerEnvAndWorkdir(t *testing.T) {
+	t.Setenv("MCP_TOKEN", "secret")
+	env, err := resolveMCPServerEnv(config.MCPServerConfig{
+		Env: []config.MCPEnvVarConfig{
+			{Name: "TOKEN", ValueEnv: "MCP_TOKEN"},
+			{Name: "MODE", Value: "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveMCPServerEnv() error = %v", err)
+	}
+	joined := strings.Join(env, ",")
+	if !strings.Contains(joined, "TOKEN=secret") || !strings.Contains(joined, "MODE=test") {
+		t.Fatalf("unexpected env result: %+v", env)
+	}
+
+	base := t.TempDir()
+	relative := resolveMCPServerWorkdir(base, "tools/mcp")
+	if !strings.HasSuffix(filepath.ToSlash(relative), "tools/mcp") {
+		t.Fatalf("unexpected relative workdir: %q", relative)
+	}
+	absoluteTarget := filepath.Join(t.TempDir(), "absolute")
+	absolute := resolveMCPServerWorkdir(base, absoluteTarget)
+	if absolute != filepath.Clean(absoluteTarget) {
+		t.Fatalf("unexpected absolute workdir: %q", absolute)
+	}
+}
+
+func TestInitialMCPRefreshTimeoutAndDurationConversion(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.ToolTimeoutSec = 1
+	timeout := initialMCPRefreshTimeout(cfg)
+	if timeout < 5*time.Second {
+		t.Fatalf("expected minimum timeout >= 5s, got %v", timeout)
+	}
+	if durationFromSeconds(0) != 0 {
+		t.Fatalf("expected zero duration for non-positive input")
+	}
+	if durationFromSeconds(2) != 2*time.Second {
+		t.Fatalf("expected 2s duration")
 	}
 }
 
@@ -251,4 +395,20 @@ func disableBuiltinProviderAPIKeys(t *testing.T) {
 	t.Setenv(config.GeminiDefaultAPIKeyEnv, "")
 	t.Setenv(config.OpenLLDefaultAPIKeyEnv, "")
 	t.Setenv(config.QiniuDefaultAPIKeyEnv, "")
+}
+
+type stubMCPServerClient struct {
+	tools []mcp.ToolDescriptor
+}
+
+func (s *stubMCPServerClient) ListTools(ctx context.Context) ([]mcp.ToolDescriptor, error) {
+	return append([]mcp.ToolDescriptor(nil), s.tools...), nil
+}
+
+func (s *stubMCPServerClient) CallTool(ctx context.Context, toolName string, arguments []byte) (mcp.CallResult, error) {
+	return mcp.CallResult{Content: "ok"}, nil
+}
+
+func (s *stubMCPServerClient) HealthCheck(ctx context.Context) error {
+	return nil
 }
