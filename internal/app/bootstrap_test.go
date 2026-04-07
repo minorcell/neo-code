@@ -351,6 +351,89 @@ func TestResolveMCPServerEnvAndWorkdir(t *testing.T) {
 	}
 }
 
+func TestResolveMCPServerEnvValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		server config.MCPServerConfig
+	}{
+		{
+			name: "empty name",
+			server: config.MCPServerConfig{
+				Env: []config.MCPEnvVarConfig{{Name: " ", Value: "x"}},
+			},
+		},
+		{
+			name: "both value and value_env",
+			server: config.MCPServerConfig{
+				Env: []config.MCPEnvVarConfig{{Name: "A", Value: "x", ValueEnv: "B"}},
+			},
+		},
+		{
+			name: "missing value and value_env",
+			server: config.MCPServerConfig{
+				Env: []config.MCPEnvVarConfig{{Name: "A"}},
+			},
+		},
+		{
+			name: "value_env unresolved",
+			server: config.MCPServerConfig{
+				Env: []config.MCPEnvVarConfig{{Name: "A", ValueEnv: "MISSING_ENV_FOR_TEST"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := resolveMCPServerEnv(tt.server); err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+}
+
+func TestBuildMCPRegistryNoEnabledServerReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{ID: "docs", Enabled: false, Source: "stdio"},
+	}
+
+	registry, err := buildMCPRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildMCPRegistry() error = %v", err)
+	}
+	if registry != nil {
+		t.Fatalf("expected nil registry when no enabled server")
+	}
+}
+
+func TestBuildMCPRegistryRegisterError(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{ID: "docs", Enabled: true, Source: "stdio"},
+	}
+
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		return errors.New("register failed")
+	}
+
+	_, err := buildMCPRegistry(cfg)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("expected wrapped register error, got %v", err)
+	}
+}
+
 func TestInitialMCPRefreshTimeoutAndDurationConversion(t *testing.T) {
 	t.Parallel()
 

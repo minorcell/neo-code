@@ -39,6 +39,19 @@ func TestAdapterFactoryBuildAdapters(t *testing.T) {
 	}
 }
 
+func TestAdapterFactoryBuildAdaptersEmptySnapshot(t *testing.T) {
+	t.Parallel()
+
+	factory := NewAdapterFactory(NewRegistry())
+	adapters, err := factory.BuildAdapters(context.Background())
+	if err != nil {
+		t.Fatalf("BuildAdapters() error = %v", err)
+	}
+	if len(adapters) != 0 {
+		t.Fatalf("expected empty adapters, got %d", len(adapters))
+	}
+}
+
 func TestAdapterCall(t *testing.T) {
 	t.Parallel()
 
@@ -191,5 +204,26 @@ func TestAdapterCallBoundary(t *testing.T) {
 	cancel()
 	if _, err := adapter.Call(canceledCtx, nil); err == nil {
 		t.Fatalf("expected context canceled error")
+	}
+}
+
+func TestAdapterEnsureObjectSchemaDefaults(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	adapter, err := NewAdapter(registry, "docs", ToolDescriptor{
+		Name:        "search",
+		Description: "search docs",
+		InputSchema: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter() error = %v", err)
+	}
+	schema := adapter.Schema()
+	if schema["type"] != "object" {
+		t.Fatalf("expected object type, got %v", schema["type"])
+	}
+	if _, ok := schema["properties"].(map[string]any); !ok {
+		t.Fatalf("expected properties object, got %+v", schema["properties"])
 	}
 }

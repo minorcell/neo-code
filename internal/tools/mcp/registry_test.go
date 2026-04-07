@@ -244,3 +244,93 @@ func TestRegistrySetServerStatusValidation(t *testing.T) {
 		t.Fatalf("expected missing server error")
 	}
 }
+
+func TestRegistryNilAndValidationBoundaries(t *testing.T) {
+	t.Parallel()
+
+	var nilRegistry *Registry
+	if err := nilRegistry.RegisterServer("docs", "stdio", "v1", &stubServerClient{}); err == nil {
+		t.Fatalf("expected nil registry error")
+	}
+	if nilRegistry.UnregisterServer("docs") {
+		t.Fatalf("nil registry should return false on unregister")
+	}
+	if err := nilRegistry.SetServerStatus("docs", ServerStatusReady); err == nil {
+		t.Fatalf("expected nil registry error for set status")
+	}
+	if err := nilRegistry.RefreshServerTools(context.Background(), "docs"); err == nil {
+		t.Fatalf("expected nil registry error for refresh")
+	}
+	if err := nilRegistry.HealthCheck(context.Background(), "docs"); err == nil {
+		t.Fatalf("expected nil registry error for health check")
+	}
+	if _, err := nilRegistry.Call(context.Background(), "docs", "search", nil); err == nil {
+		t.Fatalf("expected nil registry error for call")
+	}
+	if snapshots := nilRegistry.Snapshot(); snapshots != nil {
+		t.Fatalf("expected nil snapshots from nil registry")
+	}
+}
+
+func TestRegistryRefreshHealthCallValidation(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	client := &stubServerClient{}
+	if err := registry.RegisterServer("docs", "stdio", "v1", client); err != nil {
+		t.Fatalf("register server: %v", err)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := registry.RefreshServerTools(canceledCtx, "docs"); err == nil {
+		t.Fatalf("expected canceled refresh error")
+	}
+	if err := registry.HealthCheck(canceledCtx, "docs"); err == nil {
+		t.Fatalf("expected canceled health check error")
+	}
+	if _, err := registry.Call(canceledCtx, "docs", "search", nil); err == nil {
+		t.Fatalf("expected canceled call error")
+	}
+
+	if err := registry.RefreshServerTools(context.Background(), " "); err == nil {
+		t.Fatalf("expected empty server id error")
+	}
+	if err := registry.HealthCheck(context.Background(), " "); err == nil {
+		t.Fatalf("expected empty server id error")
+	}
+	if _, err := registry.Call(context.Background(), " ", "search", nil); err == nil {
+		t.Fatalf("expected empty server id error")
+	}
+	if _, err := registry.Call(context.Background(), "docs", " ", nil); err == nil {
+		t.Fatalf("expected empty tool name error")
+	}
+}
+
+func TestRegistryCloneAnyCoversSlicesAndMaps(t *testing.T) {
+	t.Parallel()
+
+	source := map[string]any{
+		"items": []any{
+			map[string]any{"name": "a"},
+			[]any{"nested"},
+		},
+	}
+	cloned := cloneSchema(source)
+
+	items, ok := cloned["items"].([]any)
+	if !ok {
+		t.Fatalf("expected []any clone")
+	}
+	nestedMap, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested map clone")
+	}
+	nestedMap["name"] = "changed"
+
+	originalItems := source["items"].([]any)
+	originalMap := originalItems[0].(map[string]any)
+	if originalMap["name"] != "a" {
+		t.Fatalf("expected deep cloned map, got %v", originalMap["name"])
+	}
+}
