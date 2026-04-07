@@ -313,7 +313,27 @@ func cloneSchema(schema map[string]any) map[string]any {
 	}
 	cloned := make(map[string]any, len(schema))
 	for key, value := range schema {
-		cloned[key] = value
+		cloned[key] = cloneAny(value)
 	}
 	return cloned
+}
+
+// cloneAny 递归复制 schema/metadata 中的 map 与 slice，避免跨层共享引用。
+func cloneAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, item := range typed {
+			cloned[key] = cloneAny(item)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = cloneAny(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }

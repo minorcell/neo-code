@@ -22,6 +22,7 @@ const (
 	defaultStdioCallTimeout    = 15 * time.Second
 	defaultStdioRestartBackoff = 1 * time.Second
 	maxStdioRestartBackoff     = 30 * time.Second
+	maxStdioFrameBytes         = 8 * 1024 * 1024
 )
 
 // StdioClientConfig 描述 MCP stdio 客户端的启动与调用参数。
@@ -64,6 +65,7 @@ type StdIOClient struct {
 	cfg      StdioClientConfig
 	idSeed   uint64
 	mu       sync.Mutex
+	writeMu  sync.Mutex
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
 	stdout   io.ReadCloser
@@ -217,6 +219,10 @@ func (c *StdIOClient) call(ctx context.Context, method string, params any) (json
 	c.pending[requestID] = replyCh
 	stdin := c.stdin
 	c.mu.Unlock()
+	if stdin == nil {
+		c.removePending(requestID)
+		return nil, errors.New("mcp: stdio client is not connected")
+	}
 
 	requestPayload, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -228,9 +234,12 @@ func (c *StdIOClient) call(ctx context.Context, method string, params any) (json
 		c.removePending(requestID)
 		return nil, fmt.Errorf("mcp: marshal request: %w", err)
 	}
-	if err := writeFramedMessage(stdin, requestPayload); err != nil {
+	c.writeMu.Lock()
+	writeErr := writeFramedMessage(stdin, requestPayload)
+	c.writeMu.Unlock()
+	if writeErr != nil {
 		c.removePending(requestID)
-		return nil, fmt.Errorf("mcp: send request: %w", err)
+		return nil, fmt.Errorf("mcp: send request: %w", writeErr)
 	}
 
 	select {
@@ -301,7 +310,7 @@ func (c *StdIOClient) ensureStarted(ctx context.Context) error {
 	c.retryAt = time.Time{}
 
 	go c.readLoop()
-	go c.waitLoop()
+	go c.waitLoop(command)
 	go io.Copy(io.Discard, stderr)
 	return nil
 }
@@ -342,8 +351,12 @@ func (c *StdIOClient) readLoop() {
 	}
 }
 
-func (c *StdIOClient) waitLoop() {
-	err := c.cmd.Wait()
+func (c *StdIOClient) waitLoop(command *exec.Cmd) {
+	if command == nil {
+		c.markExited(errors.New("mcp: stdio process is nil"))
+		return
+	}
+	err := command.Wait()
 	c.markExited(fmt.Errorf("mcp: stdio process exited: %w", err))
 }
 
@@ -427,6 +440,9 @@ func readFramedMessage(reader *bufio.Reader) ([]byte, error) {
 	if contentLength < 0 {
 		return nil, errors.New("mcp: missing content-length header")
 	}
+	if contentLength > maxStdioFrameBytes {
+		return nil, fmt.Errorf("mcp: content-length %d exceeds limit %d", contentLength, maxStdioFrameBytes)
+	}
 
 	payload := make([]byte, contentLength)
 	if _, err := io.ReadFull(reader, payload); err != nil {
@@ -489,7 +505,7 @@ func decodeCallResult(raw json.RawMessage) CallResult {
 		}
 		metadata[key] = value
 	}
-	metadata["raw_result"] = bytes.TrimSpace(raw)
+	metadata["raw_result"] = string(bytes.TrimSpace(raw))
 
 	return CallResult{
 		Content:  content,

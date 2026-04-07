@@ -143,13 +143,13 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 
 	adapter, resolveErr := r.resolveMCPAdapter(ctx, input.Name)
 	if resolveErr != nil {
-		content := FormatError(input.Name, NormalizeErrorReason(input.Name, err), "")
+		content := FormatError(input.Name, NormalizeErrorReason(input.Name, resolveErr), "")
 		return ToolResult{
 			ToolCallID: input.ID,
 			Name:       input.Name,
 			Content:    content,
 			IsError:    true,
-		}, err
+		}, resolveErr
 	}
 	callResult, callErr := adapter.Call(ctx, input.Arguments)
 	result := ToolResult{
@@ -165,17 +165,18 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 	for key, value := range callResult.Metadata {
 		result.Metadata[key] = value
 	}
-	if result.Content == "" {
-		result.Content = "ok"
-	}
-	result = ApplyOutputLimit(result, DefaultOutputLimitBytes)
 	if callErr != nil {
 		result.IsError = true
 		if strings.TrimSpace(result.Content) == "" {
 			result.Content = FormatError(result.Name, NormalizeErrorReason(result.Name, callErr), "")
 		}
+		result = ApplyOutputLimit(result, DefaultOutputLimitBytes)
 		return result, callErr
 	}
+	if result.Content == "" {
+		result.Content = "ok"
+	}
+	result = ApplyOutputLimit(result, DefaultOutputLimitBytes)
 	return result, nil
 }
 
