@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 )
 
@@ -47,7 +47,7 @@ type stubSandbox struct {
 
 type executorWithoutMicroCompactPolicy struct{}
 
-func (executorWithoutMicroCompactPolicy) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error) {
+func (executorWithoutMicroCompactPolicy) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

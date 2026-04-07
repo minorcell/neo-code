@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
@@ -31,7 +31,7 @@ const (
 type permissionExecutionInput struct {
 	RunID       string
 	SessionID   string
-	Call        provider.ToolCall
+	Call        providertypes.ToolCall
 	Workdir     string
 	ToolTimeout time.Duration
 }
@@ -40,7 +40,7 @@ type pendingPermissionRequest struct {
 	RequestID string
 	RunID     string
 	SessionID string
-	Call      provider.ToolCall
+	Call      providertypes.ToolCall
 	Action    security.Action
 	ResultCh  chan PermissionResolutionDecision
 	Submitted bool

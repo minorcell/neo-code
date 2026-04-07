@@ -3,7 +3,7 @@ package context
 import (
 	"context"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -14,7 +14,7 @@ type Builder interface {
 
 // BuildInput contains the runtime state needed to assemble model context.
 type BuildInput struct {
-	Messages []provider.Message
+	Messages []providertypes.Message
 	Metadata Metadata
 	Compact  CompactOptions
 }
@@ -22,7 +22,7 @@ type BuildInput struct {
 // BuildResult is the provider-facing context produced for a single round.
 type BuildResult struct {
 	SystemPrompt string
-	Messages     []provider.Message
+	Messages     []providertypes.Message
 }
 
 // MicroCompactPolicySource 定义 context 读取工具 micro compact 策略的最小依赖。

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 )
 
@@ -65,17 +65,17 @@ func (r *Registry) MicroCompactPolicy(name string) MicroCompactPolicy {
 	return MicroCompactPolicyCompact
 }
 
-func (r *Registry) GetSpecs() []provider.ToolSpec {
+func (r *Registry) GetSpecs() []providertypes.ToolSpec {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	specs := make([]provider.ToolSpec, 0, len(names))
+	specs := make([]providertypes.ToolSpec, 0, len(names))
 	for _, name := range names {
 		tool := r.tools[name]
-		specs = append(specs, provider.ToolSpec{
+		specs = append(specs, providertypes.ToolSpec{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			Schema:      tool.Schema(),
@@ -84,12 +84,12 @@ func (r *Registry) GetSpecs() []provider.ToolSpec {
 	return specs
 }
 
-func (r *Registry) ListSchemas() []provider.ToolSpec {
+func (r *Registry) ListSchemas() []providertypes.ToolSpec {
 	return r.GetSpecs()
 }
 
 // ListAvailableSpecs returns all registered tool specs.
-func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error) {
+func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

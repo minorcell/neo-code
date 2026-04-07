@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
@@ -53,7 +53,7 @@ func TestResolvePermissionSuccess(t *testing.T) {
 	request := registerPendingPermission(service, permissionExecutionInput{
 		RunID:     "run-permission",
 		SessionID: "session-permission",
-		Call: provider.ToolCall{
+		Call: providertypes.ToolCall{
 			ID:   "call-1",
 			Name: "webfetch",
 		},
@@ -105,7 +105,7 @@ func TestResolvePermissionDuplicateSubmissionIsNonBlocking(t *testing.T) {
 	request := registerPendingPermission(service, permissionExecutionInput{
 		RunID:     "run-permission-dup",
 		SessionID: "session-permission-dup",
-		Call: provider.ToolCall{
+		Call: providertypes.ToolCall{
 			ID:   "call-dup",
 			Name: "webfetch",
 		},
@@ -170,13 +170,19 @@ func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		streams: [][]provider.StreamEvent{
+		responses: []scriptedResponse{
 			{
-				provider.NewToolCallStartStreamEvent(0, "call-ask-reject", "webfetch"),
-				provider.NewToolCallDeltaStreamEvent(0, "call-ask-reject", `{"url":"https://example.com/private"}`),
+				Message: providertypes.Message{
+					Role: "assistant",
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-ask-reject", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
+					},
+				},
+				FinishReason: "tool_calls",
 			},
 			{
-				provider.NewTextDeltaStreamEvent("done"),
+				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
 			},
 		},
 	}
@@ -306,7 +312,7 @@ func TestResolvePermissionCanceledContext(t *testing.T) {
 	request := registerPendingPermission(service, permissionExecutionInput{
 		RunID:     "run-canceled",
 		SessionID: "session-canceled",
-		Call: provider.ToolCall{
+		Call: providertypes.ToolCall{
 			ID:   "call-canceled",
 			Name: "webfetch",
 		},
