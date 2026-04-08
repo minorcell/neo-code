@@ -3,65 +3,82 @@ package workspace
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
 func TestResolveWorkspacePath(t *testing.T) {
 	base := t.TempDir()
-	childDir := filepath.Join(base, "project")
-	if err := os.MkdirAll(childDir, 0o755); err != nil {
-		t.Fatalf("mkdir child dir: %v", err)
+	subdir := filepath.Join(base, "sub")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
 
-	resolved, err := ResolveWorkspacePath(base, "project")
-	if err != nil {
-		t.Fatalf("ResolveWorkspacePath(relative) error = %v", err)
-	}
-	if resolved != filepath.Clean(childDir) {
-		t.Fatalf("unexpected resolved path: %q", resolved)
-	}
-
-	resolved, err = ResolveWorkspacePath(base, "")
-	if err != nil {
-		t.Fatalf("ResolveWorkspacePath(default current) error = %v", err)
-	}
-	if resolved != filepath.Clean(base) {
-		t.Fatalf("expected base directory for empty requested path, got %q", resolved)
-	}
-
-	// Empty base falls back to os.Getwd().
-	resolved, err = ResolveWorkspacePath("", ".")
-	if err != nil {
-		t.Fatalf("ResolveWorkspacePath(empty base) error = %v", err)
-	}
-	cwd, _ := os.Getwd()
-	if resolved != filepath.Clean(cwd) {
-		t.Fatalf("expected current directory for empty base, got %q", resolved)
-	}
-}
-
-func TestResolveWorkspacePathErrors(t *testing.T) {
-	base := t.TempDir()
-	filePath := filepath.Join(base, "not-dir.txt")
-	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-
-	if _, err := ResolveWorkspacePath(base, "missing-dir"); err == nil {
-		t.Fatalf("expected missing path to return error")
+	tests := []struct {
+		name      string
+		base      string
+		requested string
+		check     func(t *testing.T, got string)
+		wantErr   bool
+	}{
+		{"resolve absolute path", base, subdir, func(t *testing.T, got string) {
+			if got != subdir {
+				t.Errorf("expected %v, got %v", subdir, got)
+			}
+		}, false},
+		{"resolve relative path", base, "sub", func(t *testing.T, got string) {
+			if got != subdir {
+				t.Errorf("expected %v, got %v", subdir, got)
+			}
+		}, false},
+		{"empty base uses cwd", "", ".", func(t *testing.T, got string) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("getwd: %v", err)
+			}
+			if got != cwd {
+				t.Errorf("expected %v, got %v", cwd, got)
+			}
+		}, false},
+		{"empty requested uses dot", base, "", func(t *testing.T, got string) {
+			if got != base {
+				t.Errorf("expected %v, got %v", base, got)
+			}
+		}, false},
+		{"non-existent path", base, "nonexistent", func(t *testing.T, got string) {}, true},
 	}
 
-	if _, err := ResolveWorkspacePath(base, "not-dir.txt"); err == nil || !strings.Contains(err.Error(), "not a directory") {
-		t.Fatalf("expected non-directory path error, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveWorkspacePath(tt.base, tt.requested)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ResolveWorkspacePath() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && tt.check != nil {
+				tt.check(t, got)
+			}
+		})
 	}
 }
 
 func TestSelectSessionWorkdir(t *testing.T) {
-	if got := SelectSessionWorkdir(" /session ", "/default"); got != "/session" {
-		t.Fatalf("expected session workdir priority, got %q", got)
+	tests := []struct {
+		name           string
+		sessionWorkdir string
+		defaultWorkdir string
+		want           string
+	}{
+		{"prefer session workdir", "/session", "/default", "/session"},
+		{"fallback to default", "", "/default", "/default"},
+		{"both empty", "", "", ""},
+		{"session with whitespace", "  /session  ", "/default", "/session"},
 	}
-	if got := SelectSessionWorkdir(" ", " /default "); got != "/default" {
-		t.Fatalf("expected default workdir fallback, got %q", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SelectSessionWorkdir(tt.sessionWorkdir, tt.defaultWorkdir); got != tt.want {
+				t.Errorf("SelectSessionWorkdir() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

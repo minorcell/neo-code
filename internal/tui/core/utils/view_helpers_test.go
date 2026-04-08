@@ -7,91 +7,176 @@ import (
 )
 
 func TestPickerLabelFromMode(t *testing.T) {
-	if got := PickerLabelFromMode(tuistate.PickerProvider); got != "provider" {
-		t.Fatalf("expected provider label, got %q", got)
+	tests := []struct {
+		mode tuistate.PickerMode
+		want string
+	}{
+		{tuistate.PickerProvider, "provider"},
+		{tuistate.PickerModel, "model"},
+		{tuistate.PickerFile, "file"},
+		{tuistate.PickerMode(999), "none"},
 	}
-	if got := PickerLabelFromMode(tuistate.PickerModel); got != "model" {
-		t.Fatalf("expected model label, got %q", got)
-	}
-	if got := PickerLabelFromMode(tuistate.PickerFile); got != "file" {
-		t.Fatalf("expected file label, got %q", got)
-	}
-	if got := PickerLabelFromMode(tuistate.PickerMode(99)); got != "none" {
-		t.Fatalf("expected default picker label none, got %q", got)
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := PickerLabelFromMode(tt.mode); got != tt.want {
+				t.Errorf("PickerLabelFromMode(%v) = %v, want %v", tt.mode, got, tt.want)
+			}
+		})
 	}
 }
 
 func TestRequestedWorkdirForRun(t *testing.T) {
-	if got := RequestedWorkdirForRun("", "/repo"); got != "/repo" {
-		t.Fatalf("expected current workdir when active session is blank, got %q", got)
+	tests := []struct {
+		name            string
+		activeSessionID string
+		currentWorkdir  string
+		want            string
+	}{
+		{"empty session returns current", "", "/home/user", "/home/user"},
+		{"active session returns empty", "session-1", "/home/user", ""},
 	}
-	if got := RequestedWorkdirForRun("session-1", "/repo"); got != "" {
-		t.Fatalf("expected empty requested workdir when active session exists, got %q", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RequestedWorkdirForRun(tt.activeSessionID, tt.currentWorkdir); got != tt.want {
+				t.Errorf("RequestedWorkdirForRun() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestIsBusy(t *testing.T) {
-	if IsBusy(false, false) {
-		t.Fatalf("expected idle state")
+	tests := []struct {
+		name           string
+		isAgentRunning bool
+		isCompacting   bool
+		want           bool
+	}{
+		{"both false", false, false, false},
+		{"agent running", true, false, true},
+		{"compacting", false, true, true},
+		{"both true", true, true, true},
 	}
-	if !IsBusy(true, false) || !IsBusy(false, true) || !IsBusy(true, true) {
-		t.Fatalf("expected busy state when any operation is running")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsBusy(tt.isAgentRunning, tt.isCompacting); got != tt.want {
+				t.Errorf("IsBusy() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestFocusLabelFromPanel(t *testing.T) {
-	const (
-		sessions   = "Sessions"
-		transcript = "Transcript"
-		activity   = "Activity"
-		composer   = "Composer"
-	)
+	tests := []struct {
+		name  string
+		focus tuistate.Panel
+		want  string
+	}{
+		{"sessions", tuistate.PanelSessions, "sessions"},
+		{"transcript", tuistate.PanelTranscript, "transcript"},
+		{"activity", tuistate.PanelActivity, "activity"},
+		{"input falls to default", tuistate.PanelInput, "composer"},
+		{"unknown", tuistate.Panel(999), "composer"},
+	}
 
-	if got := FocusLabelFromPanel(tuistate.PanelSessions, sessions, transcript, activity, composer); got != sessions {
-		t.Fatalf("expected sessions label, got %q", got)
-	}
-	if got := FocusLabelFromPanel(tuistate.PanelTranscript, sessions, transcript, activity, composer); got != transcript {
-		t.Fatalf("expected transcript label, got %q", got)
-	}
-	if got := FocusLabelFromPanel(tuistate.PanelActivity, sessions, transcript, activity, composer); got != activity {
-		t.Fatalf("expected activity label, got %q", got)
-	}
-	if got := FocusLabelFromPanel(tuistate.PanelInput, sessions, transcript, activity, composer); got != composer {
-		t.Fatalf("expected composer label, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FocusLabelFromPanel(tt.focus, "sessions", "transcript", "activity", "composer"); got != tt.want {
+				t.Errorf("FocusLabelFromPanel() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestTrimHelpers(t *testing.T) {
-	if got := TrimRunes("abcdef", 3); got != "abcdef" {
-		t.Fatalf("expected original text when limit < 4, got %q", got)
-	}
-	if got := TrimRunes("abcdef", 5); got != "ab..." {
-		t.Fatalf("expected rune-safe truncation, got %q", got)
+func TestTrimRunes(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		limit int
+		want  string
+	}{
+		{"short text", "hello", 10, "hello"},
+		{"exact limit", "hello", 5, "hello"},
+		{"long text", "hello world", 8, "hello..."},
+		{"limit too small", "hello", 2, "hello"},
+		{"limit 3", "hello", 4, "h..."},
 	}
 
-	if got := TrimMiddle("abcdef", 6); got != "abcdef" {
-		t.Fatalf("expected no trim when limit < 7, got %q", got)
-	}
-	if got := TrimMiddle("abcdefghij", 7); got != "ab...ij" {
-		t.Fatalf("expected middle trim output, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TrimRunes(tt.text, tt.limit); got != tt.want {
+				t.Errorf("TrimRunes(%q, %d) = %q, want %q", tt.text, tt.limit, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestFallbackAndClamp(t *testing.T) {
-	if got := Fallback("value", "fallback"); got != "value" {
-		t.Fatalf("expected value when non-empty, got %q", got)
-	}
-	if got := Fallback("   ", "fallback"); got != "fallback" {
-		t.Fatalf("expected fallback for blank value, got %q", got)
+func TestTrimMiddle(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		limit int
+		want  string
+	}{
+		{"short text", "hello", 10, "hello"},
+		{"exact limit", "hello", 5, "hello"},
+		{"long text", "abcdefghij", 8, "ab...hij"},
+		{"limit too small", "hello", 5, "hello"},
+		{"limit 6", "abcdefghij", 7, "ab...ij"},
 	}
 
-	if got := Clamp(-1, 0, 10); got != 0 {
-		t.Fatalf("expected clamp to min, got %d", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TrimMiddle(tt.text, tt.limit); got != tt.want {
+				t.Errorf("TrimMiddle(%q, %d) = %q, want %q", tt.text, tt.limit, got, tt.want)
+			}
+		})
 	}
-	if got := Clamp(11, 0, 10); got != 10 {
-		t.Fatalf("expected clamp to max, got %d", got)
+}
+
+func TestFallback(t *testing.T) {
+	tests := []struct {
+		name          string
+		value         string
+		fallbackValue string
+		want          string
+	}{
+		{"empty value", "", "default", "default"},
+		{"whitespace only", "   ", "default", "default"},
+		{"normal value", "actual", "default", "actual"},
 	}
-	if got := Clamp(5, 0, 10); got != 5 {
-		t.Fatalf("expected in-range value unchanged, got %d", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Fallback(tt.value, tt.fallbackValue); got != tt.want {
+				t.Errorf("Fallback(%q, %q) = %q, want %q", tt.value, tt.fallbackValue, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClamp(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    int
+		minValue int
+		maxValue int
+		want     int
+	}{
+		{"within range", 5, 0, 10, 5},
+		{"below min", -1, 0, 10, 0},
+		{"above max", 15, 0, 10, 10},
+		{"at min", 0, 0, 10, 0},
+		{"at max", 10, 0, 10, 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Clamp(tt.value, tt.minValue, tt.maxValue); got != tt.want {
+				t.Errorf("Clamp(%d, %d, %d) = %d, want %d", tt.value, tt.minValue, tt.maxValue, got, tt.want)
+			}
+		})
 	}
 }

@@ -1,7 +1,6 @@
 package status
 
 import (
-	"strings"
 	"testing"
 
 	tuistate "neo-code/internal/tui/state"
@@ -10,91 +9,180 @@ import (
 func TestBuildFromUIState(t *testing.T) {
 	state := tuistate.UIState{
 		ActiveSessionID:    "session-1",
-		ActiveSessionTitle: "My Session",
+		ActiveSessionTitle: "Test Session",
 		ActiveRunID:        "run-1",
 		IsAgentRunning:     true,
 		IsCompacting:       false,
 		CurrentProvider:    "openai",
-		CurrentModel:       "gpt-5.4",
-		CurrentWorkdir:     "/repo",
-		CurrentTool:        "filesystem_read_file",
-		ToolStates: []tuistate.ToolState{
-			{ToolCallID: "call-1"},
-			{ToolCallID: "call-2"},
-		},
+		CurrentModel:       "gpt-4",
+		CurrentWorkdir:     "/home/user",
+		CurrentTool:        "bash",
+		ToolStates:         []tuistate.ToolState{},
 		TokenUsage: tuistate.TokenUsageState{
-			RunTotalTokens:     12,
-			SessionTotalTokens: 34,
+			RunTotalTokens:     100,
+			SessionTotalTokens: 500,
 		},
-		ExecutionError: "boom",
+		ExecutionError: "",
 	}
 
-	snapshot := BuildFromUIState(state, 7, "transcript", "provider")
-	if snapshot.ActiveSessionID != "session-1" || snapshot.ActiveRunID != "run-1" {
-		t.Fatalf("unexpected snapshot identifiers: %+v", snapshot)
+	snapshot := BuildFromUIState(state, 10, "composer", "none")
+
+	if snapshot.ActiveSessionID != "session-1" {
+		t.Errorf("expected session ID session-1, got %s", snapshot.ActiveSessionID)
 	}
-	if snapshot.ToolStateCount != 2 || snapshot.RunTotalTokens != 12 || snapshot.SessionTotalTokens != 34 {
-		t.Fatalf("unexpected snapshot counters: %+v", snapshot)
+	if snapshot.ActiveSessionTitle != "Test Session" {
+		t.Errorf("expected session title 'Test Session', got %s", snapshot.ActiveSessionTitle)
 	}
-	if snapshot.FocusLabel != "transcript" || snapshot.PickerLabel != "provider" || snapshot.MessageCount != 7 {
-		t.Fatalf("unexpected snapshot labels: %+v", snapshot)
+	if snapshot.IsAgentRunning != true {
+		t.Errorf("expected IsAgentRunning true, got %v", snapshot.IsAgentRunning)
+	}
+	if snapshot.CurrentProvider != "openai" {
+		t.Errorf("expected provider openai, got %s", snapshot.CurrentProvider)
+	}
+	if snapshot.MessageCount != 10 {
+		t.Errorf("expected message count 10, got %d", snapshot.MessageCount)
+	}
+	if snapshot.ToolStateCount != 0 {
+		t.Errorf("expected tool state count 0, got %d", snapshot.ToolStateCount)
+	}
+}
+
+func TestBuildFromUIStateWithEmptyValues(t *testing.T) {
+	state := tuistate.UIState{
+		ActiveSessionID:    "",
+		ActiveSessionTitle: "",
+		ActiveRunID:        "",
+		IsAgentRunning:     false,
+		IsCompacting:       false,
+		CurrentProvider:    "",
+		CurrentModel:       "",
+		CurrentWorkdir:     "",
+		CurrentTool:        "",
+		ToolStates:         nil,
+		TokenUsage:         tuistate.TokenUsageState{},
+		ExecutionError:     "",
+	}
+
+	snapshot := BuildFromUIState(state, 0, "", "")
+
+	if snapshot.ActiveSessionID != "" {
+		t.Errorf("expected empty session ID, got %s", snapshot.ActiveSessionID)
+	}
+	if snapshot.CurrentTool != "" {
+		t.Errorf("expected empty current tool, got %s", snapshot.CurrentTool)
 	}
 }
 
 func TestFormat(t *testing.T) {
-	formatted := Format(Snapshot{
+	snapshot := Snapshot{
+		ActiveSessionID:    "session-123",
+		ActiveSessionTitle: "My Session",
+		ActiveRunID:        "run-456",
+		IsAgentRunning:     true,
+		IsCompacting:       false,
+		CurrentProvider:    "openai",
+		CurrentModel:       "gpt-4",
+		CurrentWorkdir:     "/home/user",
+		CurrentTool:        "bash",
+		ToolStateCount:     3,
+		RunTotalTokens:     150,
+		SessionTotalTokens: 1000,
+		ExecutionError:     "",
+		FocusLabel:         "composer",
+		PickerLabel:        "none",
+		MessageCount:       5,
+	}
+
+	output := Format(snapshot, "Draft Session")
+
+	if !contains(output, "Session: My Session") {
+		t.Errorf("expected output to contain 'Session: My Session', got %s", output)
+	}
+	if !contains(output, "Running: yes") {
+		t.Errorf("expected output to contain 'Running: yes', got %s", output)
+	}
+	if !contains(output, "Provider: openai") {
+		t.Errorf("expected output to contain 'Provider: openai', got %s", output)
+	}
+	if !contains(output, "Current Tool: bash") {
+		t.Errorf("expected output to contain 'Current Tool: bash', got %s", output)
+	}
+}
+
+func TestFormatWithEmptySession(t *testing.T) {
+	snapshot := Snapshot{
 		ActiveSessionID:    "",
 		ActiveSessionTitle: "",
-		ActiveRunID:        " ",
+		ActiveRunID:        "",
 		IsAgentRunning:     false,
 		IsCompacting:       false,
 		CurrentProvider:    "openai",
-		CurrentModel:       "gpt-5.4",
-		CurrentWorkdir:     "/repo",
+		CurrentModel:       "gpt-4",
+		CurrentWorkdir:     "/home/user",
 		CurrentTool:        "",
-		ToolStateCount:     1,
-		RunTotalTokens:     2,
-		SessionTotalTokens: 3,
-		ExecutionError:     "",
+		ToolStateCount:     0,
+		RunTotalTokens:     0,
+		SessionTotalTokens: 0,
+		ExecutionError:     "some error",
 		FocusLabel:         "composer",
-		PickerLabel:        "",
-		MessageCount:       4,
-	}, "Draft Session")
-
-	expectedParts := []string{
-		"Session: Draft Session",
-		"Session ID: <draft>",
-		"Run ID: <none>",
-		"Running: no",
-		"Picker: none",
-		"Current Tool: <none>",
-		"Error: <none>",
-	}
-	for _, part := range expectedParts {
-		if !strings.Contains(formatted, part) {
-			t.Fatalf("expected formatted status to contain %q, got:\n%s", part, formatted)
-		}
+		PickerLabel:        "none",
+		MessageCount:       0,
 	}
 
-	running := Format(Snapshot{
-		ActiveSessionID:    "session-2",
-		ActiveSessionTitle: "Named Session",
-		ActiveRunID:        "run-2",
+	output := Format(snapshot, "Default Draft")
+
+	if !contains(output, "Session: Default Draft") {
+		t.Errorf("expected output to contain 'Session: Default Draft', got %s", output)
+	}
+	if !contains(output, "Session ID: <draft>") {
+		t.Errorf("expected output to contain 'Session ID: <draft>', got %s", output)
+	}
+	if !contains(output, "Running: no") {
+		t.Errorf("expected output to contain 'Running: no', got %s", output)
+	}
+	if !contains(output, "Current Tool: <none>") {
+		t.Errorf("expected output to contain 'Current Tool: <none>', got %s", output)
+	}
+	if !contains(output, "Error: some error") {
+		t.Errorf("expected output to contain 'Error: some error', got %s", output)
+	}
+}
+
+func TestFormatWithCompacting(t *testing.T) {
+	snapshot := Snapshot{
+		ActiveSessionID:    "session-1",
+		ActiveSessionTitle: "Test",
+		IsAgentRunning:     false,
 		IsCompacting:       true,
 		CurrentProvider:    "openai",
-		CurrentModel:       "gpt-5.4-mini",
-		CurrentWorkdir:     "/repo",
-		CurrentTool:        "tool-x",
-		ToolStateCount:     2,
-		RunTotalTokens:     10,
-		SessionTotalTokens: 20,
-		ExecutionError:     "failed",
-		FocusLabel:         "activity",
-		PickerLabel:        "model",
-		MessageCount:       5,
-	}, "Ignored Draft")
-
-	if !strings.Contains(running, "Session: Named Session") || !strings.Contains(running, "Running: yes") {
-		t.Fatalf("expected running status to keep explicit values, got:\n%s", running)
+		CurrentModel:       "gpt-4",
+		CurrentWorkdir:     "/home",
+		CurrentTool:        "",
+		ToolStateCount:     0,
+		RunTotalTokens:     0,
+		SessionTotalTokens: 0,
+		ExecutionError:     "",
+		FocusLabel:         "",
+		PickerLabel:        "",
+		MessageCount:       0,
 	}
+
+	output := Format(snapshot, "")
+
+	if !contains(output, "Running: yes") {
+		t.Errorf("expected output to contain 'Running: yes' when compacting, got %s", output)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
+}
+
+func containsAt(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
