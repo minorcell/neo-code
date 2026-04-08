@@ -34,13 +34,20 @@ type persistedConfig struct {
 }
 
 type persistedContextConfig struct {
-	Compact persistedCompactConfig `yaml:"compact,omitempty"`
+	Compact     persistedCompactConfig     `yaml:"compact,omitempty"`
+	AutoCompact persistedAutoCompactConfig `yaml:"auto_compact,omitempty"`
 }
 
 type persistedCompactConfig struct {
 	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
 	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
 	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
+	MicroCompactDisabled     bool   `yaml:"micro_compact_disabled,omitempty"`
+}
+
+type persistedAutoCompactConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -217,6 +224,11 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 			ManualStrategy:           cfg.Compact.ManualStrategy,
 			ManualKeepRecentMessages: cfg.Compact.ManualKeepRecentMessages,
 			MaxSummaryChars:          cfg.Compact.MaxSummaryChars,
+			MicroCompactDisabled:     cfg.Compact.MicroCompactDisabled,
+		},
+		AutoCompact: persistedAutoCompactConfig{
+			Enabled:             cfg.AutoCompact.Enabled,
+			InputTokenThreshold: cfg.AutoCompact.InputTokenThreshold,
 		},
 	}
 }
@@ -228,9 +240,15 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 			ManualStrategy:           strings.TrimSpace(file.Compact.ManualStrategy),
 			ManualKeepRecentMessages: file.Compact.ManualKeepRecentMessages,
 			MaxSummaryChars:          file.Compact.MaxSummaryChars,
+			MicroCompactDisabled:     file.Compact.MicroCompactDisabled,
+		},
+		AutoCompact: AutoCompactConfig{
+			Enabled:             file.AutoCompact.Enabled,
+			InputTokenThreshold: file.AutoCompact.InputTokenThreshold,
 		},
 	}
 	out.Compact.ApplyDefaults(defaults.Compact)
+	out.AutoCompact.ApplyDefaults(defaults.AutoCompact)
 	return out
 }
 

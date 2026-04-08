@@ -15,7 +15,10 @@ type RuntimeEvent struct {
 
 // PermissionRequestPayload 描述一次需要审批的权限请求上下文。
 type PermissionRequestPayload struct {
+	RequestID     string
+	ToolCallID    string
 	ToolName      string
+	ToolCategory  string
 	ActionType    string
 	Operation     string
 	TargetType    string
@@ -28,7 +31,10 @@ type PermissionRequestPayload struct {
 
 // PermissionResolvedPayload 描述权限请求被运行时处理后的最终状态。
 type PermissionResolvedPayload struct {
+	RequestID     string
+	ToolCallID    string
 	ToolName      string
+	ToolCategory  string
 	ActionType    string
 	Operation     string
 	TargetType    string
@@ -73,4 +79,14 @@ const (
 	EventCompactDone EventType = "compact_done"
 	// EventCompactError is emitted when compact fails.
 	EventCompactError EventType = "compact_error"
+	// EventTokenUsage is emitted after each provider response with token statistics.
+	EventTokenUsage EventType = "token_usage"
 )
+
+// TokenUsagePayload carries token usage statistics for a single provider turn.
+type TokenUsagePayload struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	SessionInputTokens  int `json:"session_input_tokens"`
+	SessionOutputTokens int `json:"session_output_tokens"`
+}

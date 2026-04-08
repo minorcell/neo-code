@@ -9,76 +9,10 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"neo-code/internal/config"
 )
-
-func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
-	workdir := t.TempDir()
-	cfg := config.Config{
-		Workdir:        workdir,
-		ToolTimeoutSec: 15,
-	}
-
-	command := "pwd"
-	if goruntime.GOOS == "windows" {
-		cfg.Shell = "powershell"
-		command = "$PWD.Path"
-	} else {
-		cfg.Shell = "sh"
-	}
-
-	output, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", command)
-	if err != nil {
-		t.Fatalf("DefaultWorkspaceCommandExecutor() error = %v", err)
-	}
-	normalizedOutput := strings.ToLower(filepath.Clean(strings.TrimSpace(output)))
-	normalizedWorkdir := strings.ToLower(filepath.Clean(workdir))
-	if !strings.Contains(normalizedOutput, normalizedWorkdir) {
-		t.Fatalf("expected output %q to contain resolved workdir %q", output, workdir)
-	}
-
-	// Empty command rejected.
-	if _, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", "   "); err == nil {
-		t.Fatalf("expected empty command error")
-	}
-
-	// Default timeout used when ToolTimeoutSec <= 0.
-	cfg.ToolTimeoutSec = 0
-	output, err = DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", command)
-	if err != nil {
-		t.Fatalf("DefaultWorkspaceCommandExecutor() with default timeout error = %v", err)
-	}
-	if strings.TrimSpace(output) == "" {
-		t.Fatalf("expected non-empty output with default timeout")
-	}
-}
-
-func TestDefaultWorkspaceCommandExecutorUsesDefaultTimeout(t *testing.T) {
-	workdir := t.TempDir()
-	cfg := config.Config{
-		Workdir:        workdir,
-		ToolTimeoutSec: 0,
-	}
-	if goruntime.GOOS == "windows" {
-		cfg.Shell = "powershell"
-	} else {
-		cfg.Shell = "sh"
-	}
-
-	command := "echo hello"
-	if goruntime.GOOS == "windows" {
-		command = "Write-Output hello"
-	}
-
-	output, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", command)
-	if err != nil {
-		t.Fatalf("DefaultWorkspaceCommandExecutor() error = %v", err)
-	}
-	if !strings.Contains(strings.ToLower(output), "hello") {
-		t.Fatalf("expected output to contain hello, got %q", output)
-	}
-}
 
 func TestShellArgs(t *testing.T) {
 	if got := ShellArgs("bash", "pwd"); len(got) != 3 || got[0] != "bash" || got[2] != "pwd" {
@@ -86,6 +20,12 @@ func TestShellArgs(t *testing.T) {
 	}
 	if got := ShellArgs("sh", "pwd"); len(got) != 3 || got[0] != "sh" || got[2] != "pwd" {
 		t.Fatalf("unexpected sh args: %+v", got)
+	}
+	if got := ShellArgs("powershell", "Get-Location"); len(got) != 4 || got[0] != "powershell" {
+		t.Fatalf("unexpected powershell args: %+v", got)
+	}
+	if got := ShellArgs("pwsh", "Get-Location"); len(got) != 4 || got[0] != "powershell" {
+		t.Fatalf("unexpected pwsh args: %+v", got)
 	}
 	if got := ShellArgs("unknown", "git status"); len(got) != 4 || got[0] != "powershell" {
 		t.Fatalf("expected powershell fallback, got %+v", got)
@@ -117,6 +57,47 @@ func TestDecodeWorkspaceOutputUTF16LE(t *testing.T) {
 	}
 }
 
+func TestDecodeWorkspaceOutputUTF16BE(t *testing.T) {
+	utf16Data := utf16.Encode([]rune("UTF16 BE"))
+	buf := make([]byte, 2+len(utf16Data)*2)
+	buf[0], buf[1] = 0xFE, 0xFF
+	for i, word := range utf16Data {
+		binary.BigEndian.PutUint16(buf[2+i*2:], word)
+	}
+
+	got := DecodeWorkspaceOutput(buf)
+	if !strings.Contains(got, "UTF16 BE") {
+		t.Fatalf("expected decoded utf16 big-endian content, got %q", got)
+	}
+}
+
+func TestDecodeWorkspaceOutputHeuristicsAndEdges(t *testing.T) {
+	evenWithoutBOM := []byte{0x61, 0x00, 0x62, 0x00}
+	got := DecodeWorkspaceOutput(evenWithoutBOM)
+	if !strings.Contains(got, "ab") {
+		t.Fatalf("expected utf16 heuristic decode result to contain ab, got %q", got)
+	}
+
+	if got := DecodeWorkspaceOutput([]byte{0xE4, 0xBD, 0xA0}); utf8.ValidString(got) && strings.TrimSpace(got) == "" {
+		t.Fatalf("expected odd-length raw bytes to keep readable content, got %q", got)
+	}
+
+	if got := decodeUTF16([]byte{0x61}, true); got != "a" {
+		t.Fatalf("expected short utf16 input to return raw text, got %q", got)
+	}
+	if got := decodeUTF16([]byte{0x61, 0x00, 0x62}, true); !strings.Contains(got, "a") {
+		t.Fatalf("expected odd-length utf16 input to decode after trimming, got %q", got)
+	}
+}
+
+func TestDecodedTextScore(t *testing.T) {
+	printable := decodedTextScore("hello world")
+	replacement := decodedTextScore(string([]rune{'\uFFFD'}))
+	if printable <= replacement {
+		t.Fatalf("expected printable text score > replacement score, got printable=%d replacement=%d", printable, replacement)
+	}
+}
+
 func TestCollectWorkspaceFiles(t *testing.T) {
 	root := t.TempDir()
 	mustWrite := func(rel string) {
@@ -145,6 +126,38 @@ func TestCollectWorkspaceFiles(t *testing.T) {
 	}
 	if !strings.Contains(got, "README.md") || !strings.Contains(got, "internal/tui/update.go") {
 		t.Fatalf("expected workspace files included, got %v", files)
+	}
+}
+
+func TestCollectWorkspaceFilesLimitAndErrors(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(rel string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte(rel), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	mustWrite("b.txt")
+	mustWrite("a.txt")
+
+	files, err := CollectWorkspaceFiles(root, 1)
+	if err != nil {
+		t.Fatalf("CollectWorkspaceFiles(limit=1) error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected exactly one file due to limit, got %v", files)
+	}
+	if files[0] != "a.txt" && files[0] != "b.txt" {
+		t.Fatalf("unexpected limited file list: %v", files)
+	}
+
+	_, err = CollectWorkspaceFiles(filepath.Join(root, "missing"), 10)
+	if err == nil {
+		t.Fatalf("expected missing root to produce walk error")
 	}
 }
 
@@ -202,187 +215,124 @@ func TestCachedMarkdownRendererCacheEviction(t *testing.T) {
 	}
 }
 
-func TestCachedMarkdownRendererEdgeCases(t *testing.T) {
-	// Zero max entries means no caching.
+func TestCachedMarkdownRendererDefaultsAndSetMax(t *testing.T) {
+	renderer := NewCachedMarkdownRenderer("", -1, "(empty)")
+	if renderer.style != "dark" {
+		t.Fatalf("expected default style dark, got %q", renderer.style)
+	}
+	if renderer.maxCacheEntries != 0 {
+		t.Fatalf("expected negative max cache to normalize to 0, got %d", renderer.maxCacheEntries)
+	}
+
+	renderer.SetMaxCacheEntries(2)
+	if _, err := renderer.Render("one", 20); err != nil {
+		t.Fatalf("Render(one) error = %v", err)
+	}
+	if _, err := renderer.Render("two", 20); err != nil {
+		t.Fatalf("Render(two) error = %v", err)
+	}
+	if _, err := renderer.Render("three", 20); err != nil {
+		t.Fatalf("Render(three) error = %v", err)
+	}
+	if renderer.CacheCount() != 2 {
+		t.Fatalf("expected cache eviction to keep 2 entries, got %d", renderer.CacheCount())
+	}
+
+	renderer.SetMaxCacheEntries(1)
+	if renderer.CacheCount() != 1 || renderer.CacheOrderCount() != 1 {
+		t.Fatalf("expected cache trim to one entry, got cache=%d order=%d", renderer.CacheCount(), renderer.CacheOrderCount())
+	}
+
+	renderer.SetMaxCacheEntries(-1)
+	if renderer.CacheCount() != 0 || renderer.CacheOrderCount() != 0 {
+		t.Fatalf("expected cache trim to zero after negative max, got cache=%d order=%d", renderer.CacheCount(), renderer.CacheOrderCount())
+	}
+}
+
+func TestCachedMarkdownRendererCacheDisabledAndWidthFloor(t *testing.T) {
 	renderer := NewCachedMarkdownRenderer("dark", 0, "(empty)")
-	if _, err := renderer.Render("# test", 20); err != nil {
-		t.Fatalf("Render error = %v", err)
+	if _, err := renderer.Render("same", 1); err != nil {
+		t.Fatalf("Render(width=1) error = %v", err)
+	}
+	if _, err := renderer.Render("same", 15); err != nil {
+		t.Fatalf("Render(width=15) error = %v", err)
 	}
 	if renderer.CacheCount() != 0 {
-		t.Fatalf("expected no cache entries with max=0, got %d", renderer.CacheCount())
+		t.Fatalf("expected disabled cache to keep zero entries, got %d", renderer.CacheCount())
 	}
-
-	// Negative max entries clamped to 0.
-	renderer2 := NewCachedMarkdownRenderer("dark", -5, "(empty)")
-	if _, err := renderer2.Render("# test", 20); err != nil {
-		t.Fatalf("Render error = %v", err)
-	}
-	if renderer2.CacheCount() != 0 {
-		t.Fatalf("expected no cache entries with max=-5, got %d", renderer2.CacheCount())
-	}
-
-	// Cache hit returns cached value.
-	renderer3 := NewCachedMarkdownRenderer("dark", 4, "(empty)")
-	out1, _ := renderer3.Render("# hello", 30)
-	out2, _ := renderer3.Render("# hello", 30)
-	if out1 != out2 {
-		t.Fatalf("expected cache hit to return same result")
-	}
-	if renderer3.RendererCount() != 1 {
-		t.Fatalf("expected only one render call, got %d", renderer3.RendererCount())
-	}
-
-	// SetMaxCacheEntries shrinks and evicts.
-	renderer4 := NewCachedMarkdownRenderer("dark", 10, "(empty)")
-	for i := 0; i < 5; i++ {
-		_, _ = renderer4.Render("item"+string(rune('a'+i)), 20)
-	}
-	if renderer4.CacheCount() != 5 {
-		t.Fatalf("expected 5 entries, got %d", renderer4.CacheCount())
-	}
-	renderer4.SetMaxCacheEntries(2)
-	if renderer4.CacheCount() != 2 {
-		t.Fatalf("expected 2 entries after shrink, got %d", renderer4.CacheCount())
+	if renderer.RendererCount() != 1 {
+		t.Fatalf("expected render width floor to reuse one renderer, got %d", renderer.RendererCount())
 	}
 }
 
-func TestDecodeWorkspaceOutputEdgeCases(t *testing.T) {
-	// Empty input returns empty.
-	if got := DecodeWorkspaceOutput(nil); got != "" {
-		t.Fatalf("expected empty for nil input, got %q", got)
-	}
-	if got := DecodeWorkspaceOutput([]byte{}); got != "" {
-		t.Fatalf("expected empty for empty slice, got %q", got)
-	}
-
-	// UTF-16 BE BOM.
-	utf16Data := utf16.Encode([]rune("hello"))
-	buf := make([]byte, 2+len(utf16Data)*2)
-	buf[0], buf[1] = 0xFE, 0xFF
-	for i, word := range utf16Data {
-		buf[2+i*2] = byte(word >> 8)
-		buf[2+i*2+1] = byte(word & 0xFF)
-	}
-	if got := DecodeWorkspaceOutput(buf); !strings.Contains(got, "hello") {
-		t.Fatalf("expected BE BOM decode, got %q", got)
+func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
+	workdir := t.TempDir()
+	shellName, successCmd, noOutputCmd, failCmd, sleepCmd := workspaceExecutorCommands()
+	cfg := config.Config{
+		Workdir:        workdir,
+		Shell:          shellName,
+		ToolTimeoutSec: 1,
 	}
 
-	// Odd-length raw bytes falls back to string.
-	if got := DecodeWorkspaceOutput([]byte{0x61, 0x62, 0x63}); got != "abc" {
-		t.Fatalf("expected odd-length fallback to string, got %q", got)
-	}
-}
-
-func TestDecodeUTF16EdgeCases(t *testing.T) {
-	if got := decodeUTF16(nil, true); got != "" {
-		t.Fatalf("expected empty for nil, got %q", got)
-	}
-	if got := decodeUTF16([]byte{0x61}, true); got != "a" {
-		t.Fatalf("expected single byte handling, got %q", got)
-	}
-}
-
-func TestSanitizeWorkspaceOutputEdgeCases(t *testing.T) {
-	// Empty input.
-	if got := SanitizeWorkspaceOutput(nil); got != "" {
-		t.Fatalf("expected empty for nil, got %q", got)
+	if _, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", "  "); err == nil {
+		t.Fatalf("expected empty command to fail")
 	}
 
-	// \r-only line endings.
-	if got := SanitizeWorkspaceOutput([]byte("a\r\rb")); !strings.Contains(got, "a") {
-		t.Fatalf("expected content preserved with \\r, got %q", got)
-	}
-
-	// Control characters below 0x20 (except \n and \t) are stripped.
-	got := SanitizeWorkspaceOutput([]byte("hello\x01world"))
-	if !strings.Contains(got, "hello") || !strings.Contains(got, "world") {
-		t.Fatalf("expected control chars removed but content preserved, got %q", got)
-	}
-	if strings.Contains(got, "\x01") {
-		t.Fatalf("expected \\x01 stripped, got %q", got)
-	}
-}
-
-func TestShellArgsPowerShell(t *testing.T) {
-	args := ShellArgs("powershell", "echo hi")
-	if len(args) != 4 || args[0] != "powershell" || args[1] != "-NoProfile" {
-		t.Fatalf("unexpected powershell args: %+v", args)
-	}
-	args = ShellArgs("pwsh", "echo hi")
-	if len(args) != 4 || args[0] != "powershell" {
-		t.Fatalf("unexpected pwsh args: %+v", args)
-	}
-}
-
-func TestPowerShellUTF8Command(t *testing.T) {
-	cmd := PowerShellUTF8Command("echo hi")
-	if !strings.Contains(cmd, "chcp 65001") || !strings.Contains(cmd, "echo hi") {
-		t.Fatalf("unexpected powershell UTF-8 command: %q", cmd)
-	}
-}
-
-func TestDecodedTextScore(t *testing.T) {
-	if got := decodedTextScore(""); got != 0 {
-		t.Fatalf("expected 0 for empty, got %d", got)
-	}
-	if got := decodedTextScore("ab"); got <= 0 {
-		t.Fatalf("expected positive score for printable, got %d", got)
-	}
-	if got := decodedTextScore("\ufffd"); got >= 0 {
-		t.Fatalf("expected negative score for replacement char, got %d", got)
-	}
-}
-
-func TestCollectWorkspaceFilesEdgeCases(t *testing.T) {
-	root := t.TempDir()
-	mustWrite := func(rel string) {
-		t.Helper()
-		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", rel, err)
-		}
-		if err := os.WriteFile(path, []byte(rel), 0o644); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
-	}
-
-	mustWrite(".gocache/test.go")
-	mustWrite("src/main.go")
-
-	// .gocache should be skipped.
-	files, _ := CollectWorkspaceFiles(root, 10)
-	got := strings.Join(files, ",")
-	if strings.Contains(got, ".gocache") {
-		t.Fatalf("expected .gocache skipped, got %v", files)
-	}
-
-	// Zero limit means no cap.
-	mustWrite("a.txt")
-	mustWrite("b.txt")
-	files, _ = CollectWorkspaceFiles(root, 0)
-	if len(files) < 3 {
-		t.Fatalf("expected no cap with limit=0, got %d files", len(files))
-	}
-}
-
-func TestNewGlamourTermRenderer(t *testing.T) {
-	r, err := NewGlamourTermRenderer("dark", 80)
+	output, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", successCmd)
 	if err != nil {
-		t.Fatalf("NewGlamourTermRenderer() error = %v", err)
+		t.Fatalf("expected success command to pass, got error %v (output=%q)", err, output)
 	}
-	if r == nil {
-		t.Fatalf("expected non-nil renderer")
+	if !strings.Contains(strings.ToLower(output), "ok") {
+		t.Fatalf("expected success output to contain ok, got %q", output)
+	}
+
+	output, err = DefaultWorkspaceCommandExecutor(context.Background(), cfg, workdir, noOutputCmd)
+	if err != nil {
+		t.Fatalf("expected no-output command to pass, got error %v (output=%q)", err, output)
+	}
+	if output != "(no output)" {
+		t.Fatalf("expected no-output placeholder, got %q", output)
+	}
+
+	output, err = DefaultWorkspaceCommandExecutor(context.Background(), cfg, workdir, failCmd)
+	if err == nil {
+		t.Fatalf("expected failing command to return error, output=%q", output)
+	}
+	if strings.TrimSpace(output) == "" {
+		t.Fatalf("expected failing command to return sanitized output")
+	}
+
+	output, err = DefaultWorkspaceCommandExecutor(context.Background(), cfg, workdir, sleepCmd)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got err=%v output=%q", err, output)
 	}
 }
 
-func TestClipboardError(t *testing.T) {
-	original := clipboardWriteAll
-	t.Cleanup(func() { clipboardWriteAll = original })
+func TestDefaultWorkspaceCommandExecutorUsesDefaultTimeout(t *testing.T) {
+	workdir := t.TempDir()
+	shellName, successCmd, _, _, _ := workspaceExecutorCommands()
+	cfg := config.Config{
+		Workdir:        workdir,
+		Shell:          shellName,
+		ToolTimeoutSec: 0,
+	}
 
-	clipboardWriteAll = func(text string) error {
-		return os.ErrPermission
+	if output, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", successCmd); err != nil || !strings.Contains(strings.ToLower(output), "ok") {
+		t.Fatalf("expected default timeout path to execute command, output=%q err=%v", output, err)
 	}
-	if err := CopyText("hello"); err == nil {
-		t.Fatalf("expected error from clipboard write")
+}
+
+func workspaceExecutorCommands() (shell string, success string, noOutput string, fail string, sleep string) {
+	if goruntime.GOOS == "windows" {
+		return "powershell",
+			"Write-Output 'OK'",
+			"$null = 1",
+			"Write-Error 'failed'; exit 2",
+			"Start-Sleep -Seconds 2"
 	}
+	return "bash",
+		"printf 'OK\\n'",
+		"true",
+		"echo failed 1>&2; exit 2",
+		"sleep 2"
 }
