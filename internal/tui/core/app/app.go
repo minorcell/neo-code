@@ -15,7 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/config"
-	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuistate "neo-code/internal/tui/state"
@@ -91,7 +91,7 @@ type appRuntimeState struct {
 	inputBurstStart  time.Time
 	inputBurstCount  int
 	pasteMode        bool
-	activeMessages   []provider.Message
+	activeMessages   []providertypes.Message
 	activities       []tuistate.ActivityEntry
 	fileCandidates   []string
 	modelRefreshID   string

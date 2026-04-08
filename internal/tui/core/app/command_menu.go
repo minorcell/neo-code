@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 	tuicomponents "neo-code/internal/tui/components"
 	tuiutils "neo-code/internal/tui/core/utils"
 	tuistate "neo-code/internal/tui/state"
@@ -82,7 +82,7 @@ func (d commandMenuDelegate) Render(w io.Writer, m list.Model, index int, item l
 }
 
 type sessionItem struct {
-	Summary agentruntime.SessionSummary
+	Summary agentsession.Summary
 	Active  bool
 }
 
@@ -337,4 +337,3 @@ func (a *App) openFileBrowser() {
 	a.input.Blur()
 	a.applyComponentLayout(true)
 }
-
