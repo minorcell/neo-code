@@ -144,7 +144,9 @@ type Service struct {
 	runMu           sync.Mutex         // 仅保护 activeRun* 字段的并发读写。
 	activeRunToken  uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
 	nextRunToken    uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
-	activeRunCancel context.CancelFunc // 当前活跃 Run 的取消函数。
+	activeRunCancel     context.CancelFunc // 当前活跃 Run 的取消函数。
+	sessionInputTokens  int                // 当前会话累计输入 token。
+	sessionOutputTokens int                // 当前会话累计输出 token。
 }
 
 func NewWithFactory(
@@ -195,6 +197,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
+	s.restoreSessionTokens(session)
 
 	userMessage := providertypes.Message{
 		Role:    providertypes.RoleUser,
@@ -206,6 +209,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return s.handleRunError(ctx, input.RunID, session.ID, err)
 	}
 	s.emit(ctx, EventUserMessage, input.RunID, session.ID, userMessage)
+
+	autoCompacted := false
 
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -227,17 +232,32 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 			Messages: session.Messages,
 			Metadata: agentcontext.Metadata{
-				Workdir:  activeWorkdir,
-				Shell:    cfg.Shell,
-				Provider: cfg.SelectedProvider,
-				Model:    cfg.CurrentModel,
+				Workdir:             activeWorkdir,
+				Shell:               cfg.Shell,
+				Provider:            cfg.SelectedProvider,
+				Model:               cfg.CurrentModel,
+				SessionInputTokens:  s.sessionInputTokens,
+				SessionOutputTokens: s.sessionOutputTokens,
 			},
 			Compact: agentcontext.CompactOptions{
-				DisableMicroCompact: cfg.Context.Compact.MicroCompactDisabled,
+				DisableMicroCompact:  cfg.Context.Compact.MicroCompactDisabled,
+				AutoCompactThreshold: s.autoCompactThreshold(cfg),
 			},
 		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
+		}
+
+		if builtContext.ShouldAutoCompact && !autoCompacted {
+			autoCompacted = true
+			var compactResult contextcompact.Result
+			session, compactResult, _ = s.runCompactForSession(ctx, input.RunID, session, cfg, false)
+			if compactResult.Applied {
+				s.sessionInputTokens = 0
+				s.sessionOutputTokens = 0
+				session.TokenInputTotal = 0
+				session.TokenOutputTotal = 0
+			}
 		}
 
 		toolSpecs, err := s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
@@ -263,6 +283,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		metadataChanged := session.Provider != cfg.SelectedProvider || session.Model != cfg.CurrentModel
 		session.Provider = cfg.SelectedProvider
 		session.Model = cfg.CurrentModel
+		session.TokenInputTotal = s.sessionInputTokens
+		session.TokenOutputTotal = s.sessionOutputTokens
 
 		assistant, err := acc.buildMessage()
 		if err != nil {
@@ -289,8 +311,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if len(assistant.ToolCalls) == 0 {
-			log.Printf("[DEBUG-RUNTIME] No tool calls in assistant response, content length=%d, emitting EventAgentDone",
-				len(assistant.Content))
 			s.emit(ctx, EventAgentDone, input.RunID, session.ID, assistant)
 			return nil
 		}
@@ -478,6 +498,7 @@ func handleProviderStreamEvent(
 	acc *streamAccumulator,
 	onTextDelta func(string),
 	onToolCallStart func(providertypes.ToolCallStartPayload),
+	onMessageDone func(providertypes.MessageDonePayload),
 ) error {
 	switch event.Type {
 	case providertypes.StreamEventTextDelta:
@@ -553,6 +574,18 @@ func (s *Service) forwardProviderEvents(
 				func(payload providertypes.ToolCallStartPayload) {
 					s.emit(ctx, EventToolCallThinking, runID, sessionID, payload.Name)
 				},
+				func(done providertypes.MessageDonePayload) {
+					if done.Usage != nil {
+						s.sessionInputTokens += done.Usage.InputTokens
+						s.sessionOutputTokens += done.Usage.OutputTokens
+						s.emit(ctx, EventTokenUsage, runID, sessionID, TokenUsagePayload{
+							InputTokens:        done.Usage.InputTokens,
+							OutputTokens:       done.Usage.OutputTokens,
+							SessionInputTokens:  s.sessionInputTokens,
+							SessionOutputTokens: s.sessionOutputTokens,
+						})
+					}
+				},
 			)
 			if err != nil && forwardErr == nil {
 				// 记录首个协议错误后继续排空事件通道，避免 provider 在后续发送时阻塞。
@@ -562,6 +595,22 @@ func (s *Service) forwardProviderEvents(
 			return
 		}
 	}
+}
+
+// restoreSessionTokens restores token counters from session persistence,
+// or resets them to zero for new sessions.
+func (s *Service) restoreSessionTokens(session agentsession.Session) {
+	s.sessionInputTokens = session.TokenInputTotal
+	s.sessionOutputTokens = session.TokenOutputTotal
+}
+
+// autoCompactThreshold returns the configured auto-compact input token threshold,
+// or 0 if auto-compact is disabled.
+func (s *Service) autoCompactThreshold(cfg config.Config) int {
+	if cfg.Context.AutoCompact.Enabled && cfg.Context.AutoCompact.InputTokenThreshold > 0 {
+		return cfg.Context.AutoCompact.InputTokenThreshold
+	}
+	return 0
 }
 
 func (s *Service) startRun(cancel context.CancelFunc) uint64 {
@@ -659,10 +708,6 @@ func (s *Service) callProviderWithRetry(
 		err = modelProvider.Chat(ctx, req, streamEvents)
 		close(streamEvents)
 		forwardErr := <-streamDone
-
-		// [DEBUG] 打印 provider.Chat() 返回状态和转发错误
-		log.Printf("[DEBUG-RUNTIME] provider.Chat() returned: err=%v, forwardErr=%v", err, forwardErr)
-
 		if forwardErr != nil {
 			if err != nil {
 				return nil, fmt.Errorf("runtime: provider stream handling failed after provider error: %v: %w", err, forwardErr)
