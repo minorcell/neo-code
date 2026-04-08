@@ -17,6 +17,7 @@ const (
 	DefaultWebFetchMaxResponseBytes        int64 = 256 * 1024
 	DefaultCompactManualKeepRecentMessages       = 10
 	DefaultCompactMaxSummaryChars                = 1200
+	DefaultAutoCompactInputTokenThreshold         = 100000
 )
 
 const (
@@ -63,7 +64,14 @@ type ToolsConfig struct {
 }
 
 type ContextConfig struct {
-	Compact CompactConfig `yaml:"compact,omitempty"`
+	Compact     CompactConfig     `yaml:"compact,omitempty"`
+	AutoCompact AutoCompactConfig `yaml:"auto_compact,omitempty"`
+}
+
+// AutoCompactConfig controls automatic context compression triggered by token thresholds.
+type AutoCompactConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
 }
 
 type CompactConfig struct {
@@ -333,7 +341,14 @@ func defaultWebFetchConfig() WebFetchConfig {
 // defaultContextConfig 返回上下文压缩相关配置的默认值。
 func defaultContextConfig() ContextConfig {
 	return ContextConfig{
-		Compact: defaultCompactConfig(),
+		Compact:     defaultCompactConfig(),
+		AutoCompact: defaultAutoCompactConfig(),
+	}
+}
+
+func defaultAutoCompactConfig() AutoCompactConfig {
+	return AutoCompactConfig{
+		InputTokenThreshold: DefaultAutoCompactInputTokenThreshold,
 	}
 }
 
@@ -355,7 +370,8 @@ func (c ToolsConfig) Clone() ToolsConfig {
 // Clone 返回上下文配置的独立副本，避免后续修改污染原值。
 func (c ContextConfig) Clone() ContextConfig {
 	return ContextConfig{
-		Compact: c.Compact.Clone(),
+		Compact:     c.Compact.Clone(),
+		AutoCompact: c.AutoCompact.Clone(),
 	}
 }
 
@@ -374,6 +390,7 @@ func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
 	}
 
 	c.Compact.ApplyDefaults(defaults.Compact)
+	c.AutoCompact.ApplyDefaults(defaults.AutoCompact)
 }
 
 func (c ToolsConfig) Validate() error {
@@ -388,6 +405,9 @@ func (c ContextConfig) Validate() error {
 	if err := c.Compact.Validate(); err != nil {
 		return fmt.Errorf("compact: %w", err)
 	}
+	if err := c.AutoCompact.Validate(); err != nil {
+		return fmt.Errorf("auto_compact: %w", err)
+	}
 	return nil
 }
 
@@ -400,6 +420,29 @@ func (c WebFetchConfig) Clone() WebFetchConfig {
 // Clone 返回 compact 配置的值副本。
 func (c CompactConfig) Clone() CompactConfig {
 	return c
+}
+
+// Clone 返回 auto_compact 配置的值副本。
+func (c AutoCompactConfig) Clone() AutoCompactConfig {
+	return c
+}
+
+// ApplyDefaults 为 auto_compact 配置填充缺省阈值。
+func (c *AutoCompactConfig) ApplyDefaults(defaults AutoCompactConfig) {
+	if c == nil {
+		return
+	}
+	if c.InputTokenThreshold <= 0 {
+		c.InputTokenThreshold = defaults.InputTokenThreshold
+	}
+}
+
+// Validate 校验 auto_compact 配置是否合法。
+func (c AutoCompactConfig) Validate() error {
+	if c.Enabled && c.InputTokenThreshold <= 0 {
+		return errors.New("input_token_threshold must be greater than 0 when enabled")
+	}
+	return nil
 }
 
 func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
