@@ -343,18 +343,25 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
+			// 先检查是否是立即执行的命令，如果处理了，就直接返回
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
+				a.input.Reset() // 只有在命令被处理后才清空输入
+				a.state.InputText = ""
+				a.applyComponentLayout(true)
+				a.refreshCommandMenu()
+				a.resetPasteHeuristics()
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return a, tea.Batch(cmds...)
 			}
+
+			// 如果不是立即执行的命令，再执行常规的输入重置
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
 
 			switch strings.ToLower(input) {
 			case slashCommandProvider:
@@ -1488,7 +1495,9 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
 	a.input.SetHeight(a.composerHeight())
 	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
-	a.transcript.Height = max(6, lay.rightHeight-activityHeight-menuHeight-promptHeight)
+	availableHeight := lay.rightHeight - activityHeight - menuHeight - promptHeight
+	minTranscriptHeight := max(6, lay.rightHeight/2)
+	a.transcript.Height = max(minTranscriptHeight, availableHeight)
 
 	if activityHeight > 0 {
 		panelStyle := a.styles.panelFocused
