@@ -140,7 +140,12 @@ func (a App) renderWaterfall(width int, height int) string {
 		)
 	}
 
-	transcript := a.styles.streamContent.Width(width).Height(a.transcript.Height).Render(a.transcript.View())
+	activityHeight := a.activityPreviewHeight()
+	menuHeight := a.commandMenuHeight(width)
+	promptHeight := lipgloss.Height(a.renderPrompt(width))
+	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
+
+	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
 
 	parts := []string{transcript}
 	if activity := a.renderActivityPreview(width); activity != "" {
@@ -151,7 +156,12 @@ func (a App) renderWaterfall(width int, height int) string {
 	}
 	parts = append(parts, a.renderPrompt(width))
 
-	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, lipgloss.JoinVertical(lipgloss.Left, parts...))
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	contentHeight := lipgloss.Height(content)
+	if contentHeight < height {
+		content = content + "\n" + lipgloss.NewStyle().Height(height-contentHeight).Render("")
+	}
+	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
 func (a App) renderPicker(width int, height int) string {
