@@ -93,6 +93,51 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name: "resolve_permission valid struct payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionResolvePermission,
+				Payload: PermissionResolutionInput{
+					RequestID: "perm-1",
+					Decision:  PermissionResolutionAllowOnce,
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "resolve_permission missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionResolvePermission,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "resolve_permission missing request_id",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionResolvePermission,
+				Payload: map[string]any{
+					"decision": "allow_session",
+				},
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload.request_id",
+		},
+		{
+			name: "resolve_permission invalid decision",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionResolvePermission,
+				Payload: map[string]any{
+					"request_id": "perm-1",
+					"decision":   "allow_forever",
+				},
+			},
+			wantCode: ErrorCodeInvalidAction.String(),
+		},
+		{
 			name: "event frame allows empty action",
 			frame: MessageFrame{
 				Type: FrameTypeEvent,

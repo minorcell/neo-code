@@ -1,6 +1,10 @@
 package gateway
 
-import "strings"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 // ValidateFrame 校验网关协议帧是否满足基础契约约束。
 func ValidateFrame(frame MessageFrame) *FrameError {
@@ -39,6 +43,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		if strings.TrimSpace(frame.Workdir) == "" {
 			return NewMissingRequiredFieldError("workdir")
 		}
+	case FrameActionResolvePermission:
+		return validateResolvePermissionFrame(frame)
 	case FrameActionCancel, FrameActionListSessions:
 		return nil
 	default:
@@ -65,6 +71,60 @@ func validateRunFrame(frame MessageFrame) *FrameError {
 	}
 
 	return nil
+}
+
+// validateResolvePermissionFrame 校验 resolve_permission 动作所需字段。
+func validateResolvePermissionFrame(frame MessageFrame) *FrameError {
+	if frame.Payload == nil {
+		return NewMissingRequiredFieldError("payload")
+	}
+
+	input, err := decodePermissionResolutionInput(frame.Payload)
+	if err != nil {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid resolve_permission payload")
+	}
+	if strings.TrimSpace(input.RequestID) == "" {
+		return NewMissingRequiredFieldError("payload.request_id")
+	}
+	if !isValidPermissionResolutionDecision(input.Decision) {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid resolve_permission decision")
+	}
+
+	return nil
+}
+
+// decodePermissionResolutionInput 将 payload 解析为权限审批决策输入。
+func decodePermissionResolutionInput(payload any) (PermissionResolutionInput, error) {
+	if direct, ok := payload.(PermissionResolutionInput); ok {
+		return direct, nil
+	}
+	if ptr, ok := payload.(*PermissionResolutionInput); ok {
+		if ptr == nil {
+			return PermissionResolutionInput{}, errors.New("permission payload is nil")
+		}
+		return *ptr, nil
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return PermissionResolutionInput{}, err
+	}
+
+	var input PermissionResolutionInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return PermissionResolutionInput{}, err
+	}
+	return input, nil
+}
+
+// isValidPermissionResolutionDecision 判断审批决策是否属于受支持集合。
+func isValidPermissionResolutionDecision(decision PermissionResolutionDecision) bool {
+	switch decision {
+	case PermissionResolutionAllowOnce, PermissionResolutionAllowSession, PermissionResolutionReject:
+		return true
+	default:
+		return false
+	}
 }
 
 // validateInputParts 校验多模态输入分片数组。
@@ -120,7 +180,8 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionCancel,
 		FrameActionListSessions,
 		FrameActionLoadSession,
-		FrameActionSetSessionWorkdir:
+		FrameActionSetSessionWorkdir,
+		FrameActionResolvePermission:
 		return true
 	default:
 		return false

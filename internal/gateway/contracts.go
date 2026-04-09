@@ -17,6 +17,26 @@ const (
 	RuntimeEventTypeRunError RuntimeEventType = "run_error"
 )
 
+// PermissionResolutionDecision 表示权限审批最终决策。
+type PermissionResolutionDecision string
+
+const (
+	// PermissionResolutionAllowOnce 表示仅本次允许。
+	PermissionResolutionAllowOnce PermissionResolutionDecision = "allow_once"
+	// PermissionResolutionAllowSession 表示在当前会话中持续允许。
+	PermissionResolutionAllowSession PermissionResolutionDecision = "allow_session"
+	// PermissionResolutionReject 表示拒绝本次审批。
+	PermissionResolutionReject PermissionResolutionDecision = "reject"
+)
+
+// PermissionResolutionInput 表示一次权限审批决策输入。
+type PermissionResolutionInput struct {
+	// RequestID 是待审批请求标识。
+	RequestID string `json:"request_id"`
+	// Decision 是审批决策值。
+	Decision PermissionResolutionDecision `json:"decision"`
+}
+
 // RunInput 表示网关向下游运行端口发起 run 动作时的输入。
 type RunInput struct {
 	// RequestID 是客户端请求标识。
@@ -73,12 +93,24 @@ type RuntimeEvent struct {
 	Payload any `json:"payload,omitempty"`
 }
 
+// ToolCall 表示助手消息中的工具调用元数据。
+type ToolCall struct {
+	// ID 是工具调用标识。
+	ID string `json:"id"`
+	// Name 是工具名。
+	Name string `json:"name"`
+	// Arguments 是工具参数 JSON 字符串。
+	Arguments string `json:"arguments"`
+}
+
 // SessionMessage 表示会话消息快照中的单条消息。
 type SessionMessage struct {
 	// Role 是消息角色。
 	Role string `json:"role"`
 	// Content 是消息内容。
 	Content string `json:"content"`
+	// ToolCalls 是 assistant 发起的工具调用元数据。
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID 是工具消息关联的调用标识。
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	// IsError 表示该消息是否为错误结果。
@@ -119,6 +151,8 @@ type RuntimePort interface {
 	Run(ctx context.Context, input RunInput) error
 	// Compact 对指定会话触发一次手动压缩。
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	// ResolvePermission 向运行时提交一次权限审批决策。
+	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	// CancelActiveRun 取消当前活跃运行。
 	CancelActiveRun() bool
 	// Events 返回统一运行事件流。

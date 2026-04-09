@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestMessageFrameJSONRoundTrip(t *testing.T) {
@@ -64,5 +65,56 @@ func TestMessageFrameJSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Error == nil || decoded.Error.Code != original.Error.Code {
 		t.Fatalf("error code mismatch")
+	}
+}
+
+func TestSessionMessageToolCallsRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	original := Session{
+		ID:        "sess_1",
+		Title:     "demo",
+		CreatedAt: now,
+		UpdatedAt: now,
+		Messages: []SessionMessage{
+			{
+				Role:    "assistant",
+				Content: "我准备调用工具",
+				ToolCalls: []ToolCall{
+					{
+						ID:        "call_1",
+						Name:      "filesystem_read",
+						Arguments: `{"path":"README.md"}`,
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				Content:    "tool result",
+				ToolCallID: "call_1",
+			},
+		},
+	}
+
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal session failed: %v", err)
+	}
+
+	var decoded Session
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal session failed: %v", err)
+	}
+
+	if len(decoded.Messages) != 2 {
+		t.Fatalf("message count mismatch: got %d want %d", len(decoded.Messages), 2)
+	}
+	if len(decoded.Messages[0].ToolCalls) != 1 {
+		t.Fatalf("assistant tool_calls count mismatch: got %d want %d", len(decoded.Messages[0].ToolCalls), 1)
+	}
+	if decoded.Messages[0].ToolCalls[0].Name != "filesystem_read" {
+		t.Fatalf("tool call name mismatch: got %q", decoded.Messages[0].ToolCalls[0].Name)
+	}
+	if decoded.Messages[0].ToolCalls[0].Arguments != `{"path":"README.md"}` {
+		t.Fatalf("tool call arguments mismatch: got %q", decoded.Messages[0].ToolCalls[0].Arguments)
 	}
 }

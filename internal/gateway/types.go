@@ -30,6 +30,8 @@ const (
 	FrameActionLoadSession FrameAction = "load_session"
 	// FrameActionSetSessionWorkdir 表示设置会话工作目录。
 	FrameActionSetSessionWorkdir FrameAction = "set_session_workdir"
+	// FrameActionResolvePermission 表示提交一次权限审批决策。
+	FrameActionResolvePermission FrameAction = "resolve_permission"
 )
 
 // InputPartType 表示多模态输入分片类型。
