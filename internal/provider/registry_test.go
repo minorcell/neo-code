@@ -176,30 +176,6 @@ func TestRegistrySupports(t *testing.T) {
 	}
 }
 
-func TestRegistryDriverTransportCapabilities(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t)
-	got, err := registry.DriverTransportCapabilities("OPENAICOMPAT")
-	if err != nil {
-		t.Fatalf("DriverTransportCapabilities() error = %v", err)
-	}
-	if !got.Streaming {
-		t.Fatalf("expected openaicompat driver to support streaming, got %+v", got)
-	}
-	if !got.ToolTransport {
-		t.Fatalf("expected openaicompat driver to support tool transport, got %+v", got)
-	}
-	if !got.ModelDiscovery {
-		t.Fatalf("expected openaicompat driver to support model discovery, got %+v", got)
-	}
-
-	_, err = registry.DriverTransportCapabilities("missing")
-	if !errors.Is(err, provider.ErrDriverNotFound) {
-		t.Fatalf("expected ErrDriverNotFound for missing driver, got %v", err)
-	}
-}
-
 func TestRegistryValidateCatalogIdentity(t *testing.T) {
 	t.Parallel()
 

@@ -17,7 +17,6 @@ type DriverDefinition struct {
 	Build                   Builder
 	Discover                DiscoveryFunc
 	ValidateCatalogIdentity func(identity ProviderIdentity) error
-	Capabilities            DriverTransportCapabilities
 }
 
 type Registry struct {
@@ -72,15 +71,6 @@ func (r *Registry) DiscoverModels(ctx context.Context, cfg RuntimeConfig) ([]pro
 func (r *Registry) Supports(driverType string) bool {
 	_, err := r.driver(driverType)
 	return err == nil
-}
-
-// DriverTransportCapabilities 返回指定 driver 的传输能力声明；driver 不存在时返回对应错误。
-func (r *Registry) DriverTransportCapabilities(driverType string) (DriverTransportCapabilities, error) {
-	driver, err := r.driver(driverType)
-	if err != nil {
-		return DriverTransportCapabilities{}, err
-	}
-	return driver.Capabilities, nil
 }
 
 // ValidateCatalogIdentity 在读取 catalog 快照或执行默认模型回退前执行无需密钥的静态校验，避免无效配置被误判为可用。
