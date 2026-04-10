@@ -32,6 +32,21 @@ func TestEmitStreamEvent_NormalSend(t *testing.T) {
 	}
 }
 
+func TestEmitStreamEvent_NilContext(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan providertypes.StreamEvent, 1)
+	event := providertypes.NewTextDeltaStreamEvent("hello")
+	if err := emitStreamEvent(nil, events, event); err != nil {
+		t.Fatalf("emitStreamEvent() with nil context error = %v", err)
+	}
+
+	got := <-events
+	if got.Type != providertypes.StreamEventTextDelta {
+		t.Fatalf("unexpected event type: %s", got.Type)
+	}
+}
+
 func TestEmitStreamEvent_ContextCancelled(t *testing.T) {
 	t.Parallel()
 

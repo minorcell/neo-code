@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/openaicompat/shared"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -20,7 +21,7 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 		model = strings.TrimSpace(cfg.DefaultModel)
 	}
 	if model == "" {
-		return Request{}, errors.New("openai provider: model is empty")
+		return Request{}, errors.New(shared.ErrorPrefix + "model is empty")
 	}
 
 	payload := Request{
@@ -88,7 +89,7 @@ func ParseError(resp *http.Response) error {
 	data, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return provider.NewProviderErrorFromStatus(resp.StatusCode,
-			fmt.Sprintf("openai provider: read error response: %v", readErr))
+			fmt.Sprintf("%sread error response: %v", shared.ErrorPrefix, readErr))
 	}
 
 	var parsed ErrorResponse

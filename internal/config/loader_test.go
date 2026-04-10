@@ -63,7 +63,7 @@ shell: powershell
 	}
 
 	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "legacy config key \"workdir\" is no longer supported") {
+	if err == nil || !strings.Contains(err.Error(), "field workdir not found") {
 		t.Fatalf("expected legacy workdir rejection, got %v", err)
 	}
 }
@@ -86,7 +86,7 @@ shell: powershell
 	}
 
 	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "legacy config key \"default_workdir\" is no longer supported") {
+	if err == nil || !strings.Contains(err.Error(), "field default_workdir not found") {
 		t.Fatalf("expected legacy default_workdir rejection, got %v", err)
 	}
 }
@@ -107,7 +107,7 @@ func TestLoaderLoadInvalidBaseDir(t *testing.T) {
 	}
 }
 
-func TestLoaderRewritesLegacyProvidersFormatOnLoad(t *testing.T) {
+func TestLoaderRejectsLegacyProvidersFormatOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -130,37 +130,9 @@ providers:
 		t.Fatalf("write legacy config: %v", err)
 	}
 
-	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	provider, err := cfg.SelectedProviderConfig()
-	if err != nil {
-		t.Fatalf("SelectedProviderConfig() error = %v", err)
-	}
-	if provider.BaseURL != testBaseURL {
-		t.Fatalf("expected builtin provider base url %q, got %q", testBaseURL, provider.BaseURL)
-	}
-	if cfg.CurrentModel != "gpt-5.4" {
-		t.Fatalf("expected current model to stay %q, got %q", "gpt-5.4", cfg.CurrentModel)
-	}
-
-	rewritten, err := os.ReadFile(loader.ConfigPath())
-	if err != nil {
-		t.Fatalf("read rewritten config: %v", err)
-	}
-	text := string(rewritten)
-	if strings.Contains(text, "default_workdir:") || strings.Contains(text, "\nworkdir:") || strings.HasPrefix(text, "workdir:") {
-		t.Fatalf("expected rewritten config to avoid any workdir keys, got:\n%s", text)
-	}
-	if strings.Contains(text, "provider_overrides:") {
-		t.Fatalf("expected rewritten config to drop provider overrides, got:\n%s", text)
-	}
-	if strings.Contains(text, "\nproviders:") || strings.HasPrefix(text, "providers:") {
-		t.Fatalf("expected rewritten config to omit providers list, got:\n%s", text)
-	}
-	if strings.Contains(text, "models:") || strings.Contains(text, "base_url:") || strings.Contains(text, "api_key_env:") {
-		t.Fatalf("expected rewritten config to omit provider metadata, got:\n%s", text)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "field providers not found") {
+		t.Fatalf("expected legacy providers format rejection, got %v", err)
 	}
 }
 
@@ -303,7 +275,6 @@ name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 openai_compatible:
-  profile: generic
   base_url: https://llm.example.com/v1
   api_style: chat_completions
 `
@@ -541,31 +512,6 @@ openai_compatible:
 	}
 }
 
-func TestLoaderRejectsCustomProviderLegacyOpenAIDriver(t *testing.T) {
-	t.Parallel()
-
-	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	customDir := filepath.Join(loader.BaseDir(), providersDirName, "legacy-gateway")
-	if err := os.MkdirAll(customDir, 0o755); err != nil {
-		t.Fatalf("mkdir custom provider dir: %v", err)
-	}
-
-	providerYAML := `
-name: legacy-gateway
-driver: openai
-api_key_env: LEGACY_GATEWAY_API_KEY
-base_url: https://legacy.example.com/v1
-`
-	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
-		t.Fatalf("write provider.yaml: %v", err)
-	}
-
-	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "no longer supported") {
-		t.Fatalf("expected legacy driver rejection, got %v", err)
-	}
-}
-
 func TestLoaderUsesOnlyDriverSpecificCustomProviderFields(t *testing.T) {
 	t.Parallel()
 
@@ -720,7 +666,7 @@ func TestResolveCustomProviderSettingsByDriver(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown driver falls back across known blocks",
+			name: "unknown driver ignores protocol blocks",
 			file: customProviderFile{
 				Driver: "custom-driver",
 				Gemini: customGeminiProviderFile{
@@ -730,9 +676,7 @@ func TestResolveCustomProviderSettingsByDriver(t *testing.T) {
 					BaseURL: "https://anthropic.example.com/v1",
 				},
 			},
-			want: customProviderSettings{
-				BaseURL: "https://gemini.example.com/v1beta",
-			},
+			want: customProviderSettings{},
 		},
 	}
 
@@ -748,25 +692,55 @@ func TestResolveCustomProviderSettingsByDriver(t *testing.T) {
 	}
 }
 
-func TestResolveFallbackCustomProviderBaseURL(t *testing.T) {
+func TestLoaderRejectsUnknownCustomProviderDriver(t *testing.T) {
 	t.Parallel()
 
-	got := resolveFallbackCustomProviderBaseURL(customProviderFile{
-		OpenAICompatible: customOpenAICompatibleFile{
-			BaseURL: "   ",
-		},
-		Gemini: customGeminiProviderFile{
-			BaseURL: " https://gemini.example.com/v1beta ",
-		},
-		Anthropic: customAnthropicProviderFile{
-			BaseURL: "https://anthropic.example.com/v1",
-		},
-	})
-	if got != "https://gemini.example.com/v1beta" {
-		t.Fatalf("expected gemini fallback base URL, got %q", got)
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
 	}
 
-	if got := resolveFallbackCustomProviderBaseURL(customProviderFile{}); got != "" {
-		t.Fatalf("expected empty fallback base URL, got %q", got)
+	providerYAML := `
+name: company-gateway
+driver: custom-driver
+api_key_env: COMPANY_GATEWAY_API_KEY
+gemini:
+  base_url: https://gemini.example.com/v1beta
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `driver "custom-driver" is not supported`) {
+		t.Fatalf("expected unsupported driver error, got %v", err)
+	}
+}
+
+func TestLoaderRejectsUnknownCustomProviderField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+openai_compatible:
+  profile: generic
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "field profile not found") {
+		t.Fatalf("expected unknown field rejection, got %v", err)
 	}
 }

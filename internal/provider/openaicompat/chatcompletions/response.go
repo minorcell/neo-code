@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/openaicompat/shared"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -37,7 +38,7 @@ func (p *Provider) ConsumeStream(
 
 		var chunk Chunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			return fmt.Errorf("openai provider: decode stream chunk: %w", err)
+			return fmt.Errorf("%sdecode stream chunk: %w", shared.ErrorPrefix, err)
 		}
 
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {

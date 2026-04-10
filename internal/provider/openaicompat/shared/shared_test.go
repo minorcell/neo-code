@@ -17,7 +17,7 @@ func TestValidateRuntimeConfig(t *testing.T) {
 			BaseURL: "",
 			APIKey:  "test-key",
 		})
-		if err == nil || err.Error() != "openai provider: base url is empty" {
+		if err == nil || err.Error() != ErrorPrefix+"base url is empty" {
 			t.Fatalf("expected base url error, got %v", err)
 		}
 	})
@@ -29,7 +29,7 @@ func TestValidateRuntimeConfig(t *testing.T) {
 			BaseURL: "https://api.example.com/v1",
 			APIKey:  "   ",
 		})
-		if err == nil || err.Error() != "openai provider: api key is empty" {
+		if err == nil || err.Error() != ErrorPrefix+"api key is empty" {
 			t.Fatalf("expected api key error, got %v", err)
 		}
 	})

@@ -153,6 +153,32 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 		t.Fatalf("nil channel guard failed: %v", err)
 	}
 
+	nilCtxEvents := make(chan providertypes.StreamEvent, 4)
+	if err := EmitTextDelta(nil, nilCtxEvents, "nil-ctx-text"); err != nil {
+		t.Fatalf("nil context text emit failed: %v", err)
+	}
+	if got := mustText(t, <-nilCtxEvents); got.Text != "nil-ctx-text" {
+		t.Fatalf("unexpected nil context text payload: %+v", got)
+	}
+	if err := EmitToolCallStart(nil, nilCtxEvents, 0, "call_nil", "tool_nil"); err != nil {
+		t.Fatalf("nil context start emit failed: %v", err)
+	}
+	if got := mustStart(t, <-nilCtxEvents); got.ID != "call_nil" || got.Name != "tool_nil" {
+		t.Fatalf("unexpected nil context start payload: %+v", got)
+	}
+	if err := EmitToolCallDelta(nil, nilCtxEvents, 0, "call_nil", "{\"x\":1}"); err != nil {
+		t.Fatalf("nil context delta emit failed: %v", err)
+	}
+	if got := mustDelta(t, <-nilCtxEvents); got.ID != "call_nil" || got.ArgumentsDelta != "{\"x\":1}" {
+		t.Fatalf("unexpected nil context delta payload: %+v", got)
+	}
+	if err := EmitMessageDone(nil, nilCtxEvents, "stop", &providertypes.Usage{TotalTokens: 3}); err != nil {
+		t.Fatalf("nil context done emit failed: %v", err)
+	}
+	if got := mustDone(t, <-nilCtxEvents); got.FinishReason != "stop" || got.Usage == nil || got.Usage.TotalTokens != 3 {
+		t.Fatalf("unexpected nil context done payload: %+v", got)
+	}
+
 	events := make(chan providertypes.StreamEvent, 8)
 	if err := EmitTextDelta(context.Background(), events, ""); err != nil {
 		t.Fatalf("empty text guard failed: %v", err)

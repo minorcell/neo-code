@@ -52,13 +52,13 @@ func TestDriverClosuresAndAPIStyle(t *testing.T) {
 		t.Fatalf("unexpected models: %+v", models)
 	}
 
-	if got := normalizedAPIStyle(""); got != defaultAPIStyleChatCompletions {
+	if got := normalizedAPIStyle(""); got != provider.OpenAICompatibleAPIStyleChatCompletions {
 		t.Fatalf("expected default api style, got %q", got)
 	}
 	if got := normalizedAPIStyle(" Responses "); got != "responses" {
 		t.Fatalf("expected normalized responses style, got %q", got)
 	}
-	if got, err := supportedAPIStyle(""); err != nil || got != defaultAPIStyleChatCompletions {
+	if got, err := supportedAPIStyle(""); err != nil || got != provider.OpenAICompatibleAPIStyleChatCompletions {
 		t.Fatalf("expected supported default api style, got style=%q err=%v", got, err)
 	}
 	if _, err := supportedAPIStyle(" Responses "); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {

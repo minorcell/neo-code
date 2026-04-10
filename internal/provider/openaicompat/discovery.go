@@ -21,14 +21,14 @@ func (p *Provider) fetchModels(ctx context.Context) ([]map[string]any, error) {
 	endpoint := shared.Endpoint(p.cfg.BaseURL, "/models")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("openai provider: build models request: %w", err)
+		return nil, fmt.Errorf("%sbuild models request: %w", shared.ErrorPrefix, err)
 	}
 	req.Header.Set("Accept", "application/json")
 	shared.SetBearerAuthorization(req.Header, p.cfg.APIKey)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai provider: send models request: %w", err)
+		return nil, fmt.Errorf("%ssend models request: %w", shared.ErrorPrefix, err)
 	}
 	defer func(body io.ReadCloser) {
 		_ = body.Close()
@@ -40,12 +40,12 @@ func (p *Provider) fetchModels(ctx context.Context) ([]map[string]any, error) {
 		if body == "" {
 			body = resp.Status
 		}
-		return nil, fmt.Errorf("openai provider: models endpoint %s", body)
+		return nil, fmt.Errorf("%smodels endpoint %s", shared.ErrorPrefix, body)
 	}
 
 	var payload openAIModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("openai provider: decode models response: %w", err)
+		return nil, fmt.Errorf("%sdecode models response: %w", shared.ErrorPrefix, err)
 	}
 	return payload.Data, nil
 }

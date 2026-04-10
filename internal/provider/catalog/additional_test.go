@@ -34,7 +34,7 @@ func TestLoadCatalogWithoutStoreReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
 	service := NewService("", provider.NewRegistry(), nil)
-	identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+	identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
@@ -92,7 +92,7 @@ func TestJSONStoreAdditionalFilesystemErrors(t *testing.T) {
 		t.Parallel()
 
 		store := newJSONStore(t.TempDir())
-		identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+		identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 		if err != nil {
 			t.Fatalf("NewProviderIdentity() error = %v", err)
 		}
@@ -114,7 +114,7 @@ func TestJSONStoreAdditionalFilesystemErrors(t *testing.T) {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 		store := &jsonStore{dir: blocker}
-		identity, err := provider.NewProviderIdentity("openai", "https://api.openai.com/v1")
+		identity, err := provider.NewProviderIdentity("openaicompat", "https://api.openai.com/v1")
 		if err != nil {
 			t.Fatalf("NewProviderIdentity() error = %v", err)
 		}
@@ -182,5 +182,79 @@ func TestListBuiltinProviderModelsRejectsUnsupportedOpenAICompatibleAPIStyle(t *
 	models, err := service.ListProviderModels(context.Background(), input)
 	if err == nil || models != nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
 		t.Fatalf("expected builtin unsupported api_style error, got models=%+v err=%v", models, err)
+	}
+}
+
+func TestListBuiltinProviderModelsSnapshotRejectsUnsupportedOpenAICompatibleAPIStyleBeforeFallback(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		t.Fatalf("register openaicompat driver: %v", err)
+	}
+
+	service := NewService("", registry, newMemoryStore())
+	cfg := config.OpenAIProvider()
+	cfg.APIStyle = "responses"
+
+	input, err := config.NewProviderCatalogInput(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+	}
+
+	models, err := service.ListProviderModelsSnapshot(context.Background(), input)
+	if err == nil || models != nil || !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected snapshot path to reject invalid api_style, got models=%+v err=%v", models, err)
+	}
+	if !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+		t.Fatalf("unexpected snapshot error: %v", err)
+	}
+}
+
+func TestListBuiltinProviderModelsSnapshotAndCachedRejectUnsupportedAPIStyleWithCachedCatalog(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		t.Fatalf("register openaicompat driver: %v", err)
+	}
+
+	store := newMemoryStore()
+	service := NewService("", registry, store)
+	cfg := config.OpenAIProvider()
+	cfg.APIStyle = "responses"
+
+	input, err := config.NewProviderCatalogInput(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+	}
+	if err := store.Save(context.Background(), ModelCatalog{
+		SchemaVersion: schemaVersion,
+		Identity:      input.Identity,
+		FetchedAt:     time.Now(),
+		ExpiresAt:     time.Now().Add(time.Hour),
+		Models:        []providertypes.ModelDescriptor{{ID: "cached-model", Name: "Cached Model"}},
+	}); err != nil {
+		t.Fatalf("Save() cached catalog error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		call func(context.Context, provider.CatalogInput) ([]providertypes.ModelDescriptor, error)
+	}{
+		{name: "snapshot", call: service.ListProviderModelsSnapshot},
+		{name: "cached", call: service.ListProviderModelsCached},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			models, err := tt.call(context.Background(), input)
+			if err == nil || models != nil || !provider.IsDiscoveryConfigError(err) {
+				t.Fatalf("expected cached %s path to reject invalid api_style, got models=%+v err=%v", tt.name, models, err)
+			}
+			if !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+				t.Fatalf("unexpected cached %s error: %v", tt.name, err)
+			}
+		})
 	}
 }

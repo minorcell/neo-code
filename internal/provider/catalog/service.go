@@ -96,6 +96,10 @@ type catalogSnapshot struct {
 }
 
 func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogInput, options queryOptions) ([]providertypes.ModelDescriptor, error) {
+	if err := s.registry.ValidateCatalogIdentity(input.Identity); err != nil {
+		return nil, err
+	}
+
 	configuredModels := providertypes.MergeModelDescriptors(input.ConfiguredModels)
 	defaultModels := providertypes.MergeModelDescriptors(input.DefaultModels)
 	snapshot := s.catalogSnapshot(ctx, input)

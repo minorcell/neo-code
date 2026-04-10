@@ -201,8 +201,11 @@ func TestDiscoveryConfigError(t *testing.T) {
 	t.Parallel()
 
 	err := NewDiscoveryConfigError("unsupported api_style")
-	if err == nil || err.Error() != "unsupported api_style" {
+	if err == nil || !strings.Contains(err.Error(), "unsupported api_style") {
 		t.Fatalf("unexpected discovery config error: %v", err)
+	}
+	if !errors.Is(err, ErrDiscoveryConfig) {
+		t.Fatalf("expected errors.Is to match ErrDiscoveryConfig")
 	}
 	if !IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config classification")

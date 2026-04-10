@@ -26,7 +26,7 @@ func New(cfg provider.RuntimeConfig, client *http.Client) (*Provider, error) {
 		return nil, err
 	}
 	if client == nil {
-		return nil, fmt.Errorf("openai provider: client is nil")
+		return nil, fmt.Errorf("%sclient is nil", shared.ErrorPrefix)
 	}
 
 	return &Provider{
@@ -45,13 +45,13 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("openai provider: marshal request: %w", err)
+		return fmt.Errorf("%smarshal request: %w", shared.ErrorPrefix, err)
 	}
 
 	endpoint := shared.Endpoint(p.cfg.BaseURL, "/chat/completions")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("openai provider: build request: %w", err)
+		return fmt.Errorf("%sbuild request: %w", shared.ErrorPrefix, err)
 	}
 	shared.SetBearerAuthorization(httpReq.Header, p.cfg.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -59,11 +59,11 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("openai provider: send request: %w", err)
+		return fmt.Errorf("%ssend request: %w", shared.ErrorPrefix, err)
 	}
 	defer func(body io.ReadCloser) {
 		if closeErr := body.Close(); closeErr != nil {
-			log.Printf("openai provider: close response body: %v", closeErr)
+			log.Printf("%sclose response body: %v", shared.ErrorPrefix, closeErr)
 		}
 	}(resp.Body)
 

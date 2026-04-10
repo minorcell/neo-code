@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"neo-code/internal/provider"
 )
 
 const (
@@ -27,7 +29,6 @@ type customProviderFile struct {
 }
 
 type customOpenAICompatibleFile struct {
-	Profile  string `yaml:"profile,omitempty"`
 	BaseURL  string `yaml:"base_url"`
 	APIStyle string `yaml:"api_style,omitempty"`
 }
@@ -49,7 +50,7 @@ type customProviderSettings struct {
 	APIVersion     string
 }
 
-// loadCustomProviders 扫描 baseDir/providers 下的一级子目录，并将其中的 provider.yaml 解析为运行时配置。
+// loadCustomProviders 扫描 baseDir/providers 下的一层子目录，并将其中的 provider.yaml 解析为运行时配置。
 func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 	providersDir := filepath.Join(strings.TrimSpace(baseDir), providersDirName)
 	entries, err := os.ReadDir(providersDir)
@@ -99,7 +100,9 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	}
 
 	var file customProviderFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: parse %s: %w", providerPath, err)
 	}
 	if strings.TrimSpace(file.DefaultModel) != "" {
@@ -121,8 +124,8 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		Source:         ProviderSourceCustom,
 	}
 
-	if normalizeProviderDriver(cfg.Driver) == "openaicompat" && strings.TrimSpace(cfg.APIStyle) == "" {
-		cfg.APIStyle = defaultOpenAICompatibleAPIStyle
+	if normalizeProviderDriver(cfg.Driver) == provider.DriverOpenAICompat && strings.TrimSpace(cfg.APIStyle) == "" {
+		cfg.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -139,40 +142,22 @@ func resolveCustomProviderSettings(file customProviderFile) customProviderSettin
 	}
 
 	switch normalizeProviderDriver(file.Driver) {
-	case "openaicompat":
+	case provider.DriverOpenAICompat:
 		if settings.BaseURL == "" {
 			settings.BaseURL = strings.TrimSpace(file.OpenAICompatible.BaseURL)
 		}
 		settings.APIStyle = strings.TrimSpace(file.OpenAICompatible.APIStyle)
-	case "gemini":
+	case provider.DriverGemini:
 		if settings.BaseURL == "" {
 			settings.BaseURL = strings.TrimSpace(file.Gemini.BaseURL)
 		}
 		settings.DeploymentMode = strings.TrimSpace(file.Gemini.DeploymentMode)
-	case "anthropic":
+	case provider.DriverAnthropic:
 		if settings.BaseURL == "" {
 			settings.BaseURL = strings.TrimSpace(file.Anthropic.BaseURL)
 		}
 		settings.APIVersion = strings.TrimSpace(file.Anthropic.APIVersion)
-	default:
-		if settings.BaseURL == "" {
-			settings.BaseURL = resolveFallbackCustomProviderBaseURL(file)
-		}
 	}
 
 	return settings
-}
-
-// resolveFallbackCustomProviderBaseURL 为未知 driver 保留兼容兜底顺序，避免切断既有自定义接入配置。
-func resolveFallbackCustomProviderBaseURL(file customProviderFile) string {
-	for _, value := range []string{
-		file.OpenAICompatible.BaseURL,
-		file.Gemini.BaseURL,
-		file.Anthropic.BaseURL,
-	} {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

@@ -18,8 +18,6 @@ type Provider struct {
 	client *http.Client
 }
 
-const defaultAPIStyleChatCompletions = "chat_completions"
-
 // buildOptions 控制构造行为，用于注入自定义 Transport 等选项。
 type buildOptions struct {
 	transport http.RoundTripper
@@ -82,28 +80,22 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDes
 // Generate 发起 SSE 流式生成请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	apiStyle, err := supportedAPIStyle(p.cfg.APIStyle)
-	if err != nil {
+	if _, err := supportedAPIStyle(p.cfg.APIStyle); err != nil {
 		return err
 	}
 
-	switch apiStyle {
-	case defaultAPIStyleChatCompletions:
-		impl, err := chatcompletions.New(p.cfg, p.client)
-		if err != nil {
-			return err
-		}
-		return impl.Generate(ctx, req, events)
-	default:
-		return fmt.Errorf("openaicompat provider: unsupported api_style %q", apiStyle)
+	impl, err := chatcompletions.New(p.cfg, p.client)
+	if err != nil {
+		return err
 	}
+	return impl.Generate(ctx, req, events)
 }
 
 // normalizedAPIStyle 统一规范化 openaicompat 的 api_style，并为空值回退到 chat_completions。
 func normalizedAPIStyle(apiStyle string) string {
 	normalized := provider.NormalizeProviderAPIStyle(apiStyle)
 	if normalized == "" {
-		return defaultAPIStyleChatCompletions
+		return provider.OpenAICompatibleAPIStyleChatCompletions
 	}
 	return normalized
 }
@@ -111,9 +103,9 @@ func normalizedAPIStyle(apiStyle string) string {
 func supportedAPIStyle(apiStyle string) (string, error) {
 	normalized := normalizedAPIStyle(apiStyle)
 	switch normalized {
-	case defaultAPIStyleChatCompletions:
+	case provider.OpenAICompatibleAPIStyleChatCompletions:
 		return normalized, nil
-	case "responses":
+	case provider.OpenAICompatibleAPIStyleResponses:
 		return "", provider.NewDiscoveryConfigError(
 			fmt.Sprintf("openaicompat provider: api_style %q is not supported yet", normalized),
 		)

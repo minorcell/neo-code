@@ -65,6 +65,9 @@ func emitStreamEvent(ctx context.Context, events chan<- providertypes.StreamEven
 	if events == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	select {
 	case events <- event:

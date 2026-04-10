@@ -8,12 +8,15 @@ import (
 	"neo-code/internal/provider"
 )
 
+// ErrorPrefix 统一收敛 OpenAI 兼容 provider 的错误前缀，避免历史命名残留继续扩散。
+const ErrorPrefix = "openaicompat provider: "
+
 func ValidateRuntimeConfig(cfg provider.RuntimeConfig) error {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
-		return errors.New("openai provider: base url is empty")
+		return errors.New(ErrorPrefix + "base url is empty")
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		return errors.New("openai provider: api key is empty")
+		return errors.New(ErrorPrefix + "api key is empty")
 	}
 	return nil
 }

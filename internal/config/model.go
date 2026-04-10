@@ -295,11 +295,14 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("provider name is empty")
 	}
-	if strings.TrimSpace(p.Driver) == "" {
+	normalizedDriver := normalizeProviderDriver(p.Driver)
+	if normalizedDriver == "" {
 		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
-	if normalizeProviderDriver(p.Driver) == "openai" {
-		return fmt.Errorf("provider %q driver %q is no longer supported", p.Name, p.Driver)
+	switch normalizedDriver {
+	case provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic:
+	default:
+		return fmt.Errorf("provider %q driver %q is not supported", p.Name, p.Driver)
 	}
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
