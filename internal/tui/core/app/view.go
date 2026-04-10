@@ -129,6 +129,15 @@ func (a App) renderSidebar(width int, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
 }
 
+// waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
+func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
+	activityHeight := a.activityPreviewHeight()
+	menuHeight := a.commandMenuHeight(width)
+	promptHeight := lipgloss.Height(a.renderPrompt(width))
+	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
+	return transcriptHeight, activityHeight, menuHeight, promptHeight
+}
+
 func (a App) renderWaterfall(width int, height int) string {
 	if a.state.ActivePicker != pickerNone {
 		return lipgloss.Place(
@@ -140,10 +149,7 @@ func (a App) renderWaterfall(width int, height int) string {
 		)
 	}
 
-	activityHeight := a.activityPreviewHeight()
-	menuHeight := a.commandMenuHeight(width)
-	promptHeight := lipgloss.Height(a.renderPrompt(width))
-	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
+	transcriptHeight, _, _, _ := a.waterfallMetrics(width, height)
 
 	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
 

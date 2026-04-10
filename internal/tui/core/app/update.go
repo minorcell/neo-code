@@ -1503,14 +1503,10 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	a.transcript.Width = max(24, lay.rightWidth)
 	a.resizeCommandMenu()
-	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
-	activityHeight := a.activityPreviewHeight()
 	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
 	a.input.SetHeight(a.composerHeight())
-	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
-	availableHeight := lay.rightHeight - activityHeight - menuHeight - promptHeight
-	minTranscriptHeight := max(6, lay.rightHeight/2)
-	a.transcript.Height = max(minTranscriptHeight, availableHeight)
+	transcriptHeight, activityHeight, _, _ := a.waterfallMetrics(a.transcript.Width, lay.rightHeight)
+	a.transcript.Height = transcriptHeight
 
 	if activityHeight > 0 {
 		panelStyle := a.styles.panelFocused
