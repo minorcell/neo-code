@@ -22,7 +22,7 @@
 4. 解析当前 provider 配置并构建 provider 实例。
 5. 调用 `context.Builder` 生成本轮请求使用的 `system prompt` 和消息上下文。
 6. 如命中 token 阈值自动压缩建议，则先执行一次 compact，再继续构造请求。
-7. 调用 `Provider.Chat`，并把流式事件桥接给 TUI。
+7. 调用 `Provider.Generate`，并把流式事件桥接给 TUI。
 8. 如 provider 返回“上下文过长”错误，则触发一次 `reactive` compact，并仅重试一次当前请求。
 9. 保存 assistant 完整回复。
 10. 执行返回的工具调用，并保存每一个工具结果。
@@ -86,3 +86,9 @@ runtime 在转发 provider 流式事件时，从 `MessageDone` 事件中提取 `
 - assistant 完整回复后保存
 - 每个工具结果完成后保存
 - 避免在高频 UI 刷新路径中做磁盘 I/O
+
+## Session 持久化补充
+
+- Session 默认按工作区隔离存储到 `~/.neocode/projects/<workspace-hash>/sessions/`
+- `runtime` 在加载会话时恢复 `token_input_total` 与 `token_output_total`
+- compact 成功后，重置后的 token 累计值会随下一次 session 保存一起持久化
