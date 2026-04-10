@@ -190,7 +190,9 @@ func (a App) renderPrompt(width int) string {
 
 	// Account for frame and padding when sizing the composer container.
 	boxWidth := a.composerBoxWidth(width)
-
+	if a.pendingPermission != nil {
+		return box.Width(boxWidth).Render(a.renderPermissionPrompt())
+	}
 	return box.Width(boxWidth).Render(a.input.View())
 }
 
