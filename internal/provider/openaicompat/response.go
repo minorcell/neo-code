@@ -76,24 +76,30 @@ func (p *Provider) consumeStream(
 	}
 
 	for {
-		line, err := reader.ReadLine()
-
-		if err != nil && !errors.Is(err, io.EOF) {
-			// 非 EOF 的读取错误：先刷新缓冲的 data 行，再包装为流中断，
-			// 避免中断前最后一段数据丢失。
+		select {
+		case <-ctx.Done():
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
+			}
+			return ctx.Err()
+		default:
+		}
+
+		line, err := reader.ReadLine()
+		if err != nil && !errors.Is(err, io.EOF) {
+			if flushErr := flushPendingData(); flushErr != nil {
+				return flushErr
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
 			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
 
 		trimmed := line
-
 		switch {
 		case strings.HasPrefix(trimmed, "data:"):
 			data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-			// data: [DONE] 需要立即处理：先刷新已缓冲的 data 行，再标记结束，
-			// 避免与前面的合法 JSON 拼接后导致 json.Unmarshal 失败。
 			if data == "[DONE]" {
 				if flushErr := flushPendingData(); flushErr != nil {
 					return flushErr
@@ -120,10 +126,10 @@ func (p *Provider) consumeStream(
 			if done {
 				return finishStream()
 			}
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
-			return provider.ErrStreamInterrupted
+			return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
 		}
 	}
 }

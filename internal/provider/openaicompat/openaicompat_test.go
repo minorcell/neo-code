@@ -548,8 +548,57 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 `
 	events := make(chan providertypes.StreamEvent, 1)
 	err = p.consumeStream(ctx, strings.NewReader(sseData), events)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled or nil, got: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+	if errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected cancellation to win over stream interruption, got: %v", err)
+	}
+}
+
+func TestConsumeStream_ContextCancellationOnReadErrorReturnsCanceled(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &cancelThenErrorReader{cancel: cancel, err: io.ErrClosedPipe}
+
+	err = p.consumeStream(ctx, body, make(chan providertypes.StreamEvent, 1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected cancellation to win over stream interruption, got %v", err)
+	}
+}
+
+func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sseData := `data: {"id":"a","choices":[{"delta":{"content":"hello"}}]}
+`
+	body := &cancelOnEOFReader{
+		reader: strings.NewReader(sseData),
+		cancel: cancel,
+	}
+	events := make(chan providertypes.StreamEvent, 8)
+
+	err = p.consumeStream(ctx, body, events)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected cancellation to win over stream interruption, got %v", err)
 	}
 }
 
@@ -1345,6 +1394,29 @@ func TestConsumeStream_FlushesPendingDataOnNonEOFError(t *testing.T) {
 type errReader struct{ err error }
 
 func (e *errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+type cancelThenErrorReader struct {
+	cancel func()
+	err    error
+}
+
+func (r *cancelThenErrorReader) Read(_ []byte) (int, error) {
+	r.cancel()
+	return 0, r.err
+}
+
+type cancelOnEOFReader struct {
+	reader io.Reader
+	cancel func()
+}
+
+func (r *cancelOnEOFReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.cancel()
+	}
+	return n, err
+}
 
 type failingReadCloser struct{ err error }
 
