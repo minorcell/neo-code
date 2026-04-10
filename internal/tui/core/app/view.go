@@ -131,19 +131,18 @@ func (a App) renderSidebar(width int, height int) string {
 
 func (a App) renderWaterfall(width int, height int) string {
 	if a.state.ActivePicker != pickerNone {
+		pickerWidth := tuiutils.Clamp(width-10, 36, max(36, a.activePickerWidth()+2))
+		pickerHeight := tuiutils.Clamp(height-4, 10, max(10, a.activePickerHeight()+4))
 		return lipgloss.Place(
 			width,
 			height,
 			lipgloss.Center,
 			lipgloss.Center,
-			a.renderPicker(tuiutils.Clamp(width-10, 36, 56), tuiutils.Clamp(height-6, 10, 14)),
+			a.renderPicker(pickerWidth, pickerHeight),
 		)
 	}
 
-	activityHeight := a.activityPreviewHeight()
-	menuHeight := a.commandMenuHeight(width)
-	promptHeight := lipgloss.Height(a.renderPrompt(width))
-	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
+	transcriptHeight := max(6, a.transcript.Height)
 
 	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
 
@@ -158,6 +157,38 @@ func (a App) renderWaterfall(width int, height int) string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
+}
+
+// activePickerWidth 返回当前激活选择器的内容宽度，用于避免渲染时再次被固定宽度截断。
+func (a App) activePickerWidth() int {
+	switch a.state.ActivePicker {
+	case pickerProvider:
+		return a.providerPicker.Width()
+	case pickerModel:
+		return a.modelPicker.Width()
+	case pickerFile:
+		return 0
+	case pickerHelp:
+		return a.helpPicker.Width()
+	default:
+		return 0
+	}
+}
+
+// activePickerHeight 返回当前激活选择器的内容高度，用于让 /help 保持单页可见。
+func (a App) activePickerHeight() int {
+	switch a.state.ActivePicker {
+	case pickerProvider:
+		return a.providerPicker.Height()
+	case pickerModel:
+		return a.modelPicker.Height()
+	case pickerFile:
+		return 0
+	case pickerHelp:
+		return a.helpPicker.Height()
+	default:
+		return 0
+	}
 }
 
 func (a App) renderPicker(width int, height int) string {

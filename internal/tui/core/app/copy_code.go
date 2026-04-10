@@ -39,7 +39,7 @@ var (
 		regexp.MustCompile(`^[[:space:]]*(func|if|for|while|switch|case|return|class|def|const|let|var|import|export|package|struct|enum|interface|public|private|static|void|int|string|bool|nil|null|true|false)\b`),
 		regexp.MustCompile(`=>|->|::`),
 		regexp.MustCompile(`[})];?\s*$`),
-		regexp.MustCompile(`^\s*(//|#|/\*|\*)`),
+		regexp.MustCompile(`^\s*(//|/\*)`),
 		regexp.MustCompile(`:=|=>`),
 		regexp.MustCompile(`\([a-zA-Z_][a-zA-Z0-9_]*(\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*)*\)\s*{?$`),
 	}
@@ -163,8 +163,9 @@ func splitIndentedCodeSegments(content string) []markdownSegment {
 		codeFeatureCount = 0
 	}
 
-	for _, line := range lines {
+	for index, line := range lines {
 		indented := isIndentedCodeLine(line)
+		startsCode := indented || shouldStartCodeBlock(lines, index)
 		if inCode {
 			if indented || hasCodeFeatures(line) {
 				codeLines = append(codeLines, trimCodeIndent(line))
@@ -183,7 +184,7 @@ func splitIndentedCodeSegments(content string) []markdownSegment {
 			inCode = false
 		}
 
-		if indented || hasCodeFeatures(line) {
+		if startsCode {
 			if !inCode {
 				flushText()
 				inCode = true
@@ -234,10 +235,7 @@ func isFenceCloseLine(line string) bool {
 }
 
 func isIndentedCodeLine(line string) bool {
-	if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") {
-		return true
-	}
-	return hasCodeFeatures(line)
+	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
 }
 
 func hasCodeFeatures(line string) bool {
@@ -251,6 +249,50 @@ func hasCodeFeatures(line string) bool {
 		}
 	}
 	return false
+}
+
+// shouldStartCodeBlock 判断未围栏文本中的当前行是否足以开启代码段，避免普通 prose 被误判为代码。
+func shouldStartCodeBlock(lines []string, index int) bool {
+	line := lines[index]
+	if !hasCodeFeatures(line) {
+		return false
+	}
+	if hasStandaloneCodeShape(line) {
+		return true
+	}
+
+	prev := nearestNonEmptyLine(lines, index, -1)
+	if prev >= 0 && (isIndentedCodeLine(lines[prev]) || hasCodeFeatures(lines[prev])) {
+		return true
+	}
+
+	next := nearestNonEmptyLine(lines, index, 1)
+	return next >= 0 && (isIndentedCodeLine(lines[next]) || hasCodeFeatures(lines[next]))
+}
+
+// hasStandaloneCodeShape 判断单行本身是否具备足够强的代码结构特征，可直接作为代码段起点。
+func hasStandaloneCodeShape(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "/*") ||
+		strings.ContainsAny(trimmed, "{}()[];") ||
+		strings.Contains(trimmed, ":=") ||
+		strings.Contains(trimmed, "=>") ||
+		strings.Contains(trimmed, "->") ||
+		strings.Contains(trimmed, "::")
+}
+
+// nearestNonEmptyLine 查找当前位置前后最近的非空行，用于辅助判断代码段是否连续。
+func nearestNonEmptyLine(lines []string, index int, direction int) int {
+	for next := index + direction; next >= 0 && next < len(lines); next += direction {
+		if strings.TrimSpace(lines[next]) != "" {
+			return next
+		}
+	}
+	return -1
 }
 
 func trimCodeIndent(line string) string {

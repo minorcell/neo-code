@@ -286,6 +286,9 @@ func TestUpdatePermissionResolveFlow(t *testing.T) {
 func TestUpdatePermissionResolvedError(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.pendingPermissionID = "perm-4"
+	app.pendingPermissionTool = "bash"
+	app.pendingPermissionHint = "bash write file"
+	app.pendingPermissionSubmitted = true
 
 	model, _ := app.Update(permissionResolvedMsg{
 		RequestID: "perm-4",
@@ -296,6 +299,9 @@ func TestUpdatePermissionResolvedError(t *testing.T) {
 
 	if app.state.StatusText != statusPermissionFailed {
 		t.Fatalf("expected failure status, got %s", app.state.StatusText)
+	}
+	if app.pendingPermissionID != "" || app.pendingPermissionTool != "" || app.pendingPermissionHint != "" || app.pendingPermissionSubmitted {
+		t.Fatalf("expected pending permission state to be cleared")
 	}
 }
 
@@ -374,6 +380,64 @@ func TestUpdatePermissionRejectFlow(t *testing.T) {
 	app = next.(App)
 	if app.state.StatusText != statusPermissionDenied {
 		t.Fatalf("expected denied status, got %s", app.state.StatusText)
+	}
+}
+
+func TestUpdateClearsPendingPermissionOnRuntimeClosed(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingPermissionID = "perm-close"
+	app.pendingPermissionTool = "bash"
+	app.pendingPermissionHint = "bash read file"
+	app.pendingPermissionSubmitted = true
+
+	model, _ := app.Update(RuntimeClosedMsg{})
+	app = model.(App)
+
+	if app.pendingPermissionID != "" || app.pendingPermissionTool != "" || app.pendingPermissionHint != "" || app.pendingPermissionSubmitted {
+		t.Fatalf("expected pending permission state to be cleared")
+	}
+}
+
+func TestUpdateClearsPendingPermissionOnRunFinishedError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingPermissionID = "perm-run"
+	app.pendingPermissionTool = "webfetch"
+	app.pendingPermissionHint = "webfetch https://example.com"
+	app.pendingPermissionSubmitted = true
+
+	model, _ := app.Update(runFinishedMsg{Err: context.Canceled})
+	app = model.(App)
+
+	if app.pendingPermissionID != "" || app.pendingPermissionTool != "" || app.pendingPermissionHint != "" || app.pendingPermissionSubmitted {
+		t.Fatalf("expected pending permission state to be cleared")
+	}
+}
+
+func TestRuntimeEventRunCanceledClearsPendingPermission(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingPermissionID = "perm-cancel"
+	app.pendingPermissionTool = "bash"
+	app.pendingPermissionHint = "bash write file"
+	app.pendingPermissionSubmitted = true
+
+	runtimeEventRunCanceledHandler(&app, agentruntime.RuntimeEvent{})
+
+	if app.pendingPermissionID != "" || app.pendingPermissionTool != "" || app.pendingPermissionHint != "" || app.pendingPermissionSubmitted {
+		t.Fatalf("expected pending permission state to be cleared")
+	}
+}
+
+func TestRuntimeEventErrorClearsPendingPermission(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingPermissionID = "perm-error"
+	app.pendingPermissionTool = "bash"
+	app.pendingPermissionHint = "bash write file"
+	app.pendingPermissionSubmitted = true
+
+	runtimeEventErrorHandler(&app, agentruntime.RuntimeEvent{Payload: "boom"})
+
+	if app.pendingPermissionID != "" || app.pendingPermissionTool != "" || app.pendingPermissionHint != "" || app.pendingPermissionSubmitted {
+		t.Fatalf("expected pending permission state to be cleared")
 	}
 }
 
@@ -507,6 +571,36 @@ func TestSplitIndentedCodeSegmentsDetectsCodeFeaturesInCodeMode(t *testing.T) {
 	}
 	if !strings.Contains(segments[0].Code, "return 1") {
 		t.Fatalf("expected code segment to include return statement, got %q", segments[0].Code)
+	}
+}
+
+func TestSplitIndentedCodeSegmentsKeepsMarkdownHeadingAsText(t *testing.T) {
+	segments := splitIndentedCodeSegments("# Title\n\nBody")
+	if len(segments) != 1 {
+		t.Fatalf("expected one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected heading content to remain text")
+	}
+}
+
+func TestSplitIndentedCodeSegmentsKeepsMarkdownListAsText(t *testing.T) {
+	segments := splitIndentedCodeSegments("* item\n* next")
+	if len(segments) != 1 {
+		t.Fatalf("expected one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected bullet list to remain text")
+	}
+}
+
+func TestSplitIndentedCodeSegmentsKeepsSingleKeywordProseAsText(t *testing.T) {
+	segments := splitIndentedCodeSegments("if we need to retry later")
+	if len(segments) != 1 {
+		t.Fatalf("expected one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected prose line to remain text")
 	}
 }
 

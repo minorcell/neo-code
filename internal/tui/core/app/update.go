@@ -67,6 +67,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
 		a.state.ActiveRunID = ""
+		a.clearPendingPermissionState()
 		a.clearRunProgress()
 		a.state.IsCompacting = false
 		if strings.TrimSpace(a.state.StatusText) == "" {
@@ -77,6 +78,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.Err != nil {
 			a.state.IsAgentRunning = false
 			a.state.ActiveRunID = ""
+			a.clearPendingPermissionState()
 			a.clearRunProgress()
 			a.state.StreamingReply = false
 			a.state.CurrentTool = ""
@@ -137,6 +139,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.pendingPermissionSubmitted = false
 		if typed.Err != nil {
+			a.clearPendingPermissionState()
 			a.state.ExecutionError = typed.Err.Error()
 			a.state.StatusText = statusPermissionFailed
 			a.appendActivity("permission", "Permission approval failed", typed.Err.Error(), true)
@@ -151,9 +154,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.StatusText = statusPermissionDenied
 		}
 		a.appendActivity("permission", "Permission resolved", decision, false)
-		a.pendingPermissionID = ""
-		a.pendingPermissionTool = ""
-		a.pendingPermissionHint = ""
+		a.clearPendingPermissionState()
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.Err != nil {
@@ -890,10 +891,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 	if !ok {
 		return false
 	}
-	a.pendingPermissionID = ""
-	a.pendingPermissionTool = ""
-	a.pendingPermissionHint = ""
-	a.pendingPermissionSubmitted = false
+	a.clearPendingPermissionState()
 	if strings.EqualFold(payload.Decision, "allow") {
 		a.state.StatusText = statusPermissionApproved
 	} else {
@@ -995,6 +993,7 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
+	a.clearPendingPermissionState()
 	a.clearRunProgress()
 	if strings.TrimSpace(a.state.ExecutionError) == "" {
 		a.state.StatusText = statusReady
@@ -1012,6 +1011,7 @@ func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) boo
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
+	a.clearPendingPermissionState()
 	a.state.ExecutionError = ""
 	a.state.StatusText = statusCanceled
 	a.clearRunProgress()
@@ -1026,6 +1026,7 @@ func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
+	a.clearPendingPermissionState()
 	a.clearRunProgress()
 	if payload, ok := event.Payload.(string); ok {
 		a.state.ExecutionError = payload
@@ -1574,6 +1575,14 @@ func (a *App) clearRunProgress() {
 	a.runProgressKnown = false
 	a.runProgressValue = 0
 	a.runProgressLabel = ""
+}
+
+// clearPendingPermissionState 清理当前等待中的权限审批上下文，避免结束态继续拦截 y/a/n。
+func (a *App) clearPendingPermissionState() {
+	a.pendingPermissionID = ""
+	a.pendingPermissionTool = ""
+	a.pendingPermissionHint = ""
+	a.pendingPermissionSubmitted = false
 }
 
 func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
