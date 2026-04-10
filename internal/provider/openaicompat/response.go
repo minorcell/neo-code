@@ -12,7 +12,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// consumeStream 消费 SSE 响应流，使用有界读取器防止缓冲区溢出。
+// consumeStream 消费 SSE 响应流，并在 [DONE] 或 message_done 时完成收尾。
 func (p *Provider) consumeStream(
 	ctx context.Context,
 	body io.Reader,
@@ -29,7 +29,7 @@ func (p *Provider) consumeStream(
 
 	dataLines := make([]string, 0, 4)
 
-	// processChunk 解析单个 SSE data payload，发送事件。
+	// processChunk 解析单个 SSE data payload，并发出增量事件。
 	processChunk := func(payload string) error {
 		if strings.TrimSpace(payload) == "[DONE]" {
 			done = true
@@ -65,33 +65,41 @@ func (p *Provider) consumeStream(
 		return nil
 	}
 
-	// finishStream 统一的流结束处理：发送 message_done 事件。
+	// finishStream 统一输出 message_done 收尾事件。
 	finishStream := func() error {
 		return emitMessageDone(ctx, events, finishReason, &usage)
 	}
 
+	// flushPendingData 刷新积累的 data 行，保证多行 data payload 正确拼接。
 	flushPendingData := func() error {
 		defer func() { dataLines = dataLines[:0] }()
 		return flushDataLines(dataLines, processChunk)
 	}
 
 	for {
-		select {
-		case <-ctx.Done():
-			if flushErr := flushPendingData(); flushErr != nil {
-				return flushErr
+		// 每次读取前优先响应上下文取消，避免取消请求被误判为流中断。
+		// 一旦收到 [DONE]，后续取消不应覆盖已完成的流收尾。
+		if !done {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
-			return ctx.Err()
-		default:
 		}
 
 		line, err := reader.ReadLine()
 		if err != nil && !errors.Is(err, io.EOF) {
-			if flushErr := flushPendingData(); flushErr != nil {
-				return flushErr
+			if done {
+				if flushErr := flushPendingData(); flushErr != nil {
+					return flushErr
+				}
+				return finishStream()
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
+			}
+			if flushErr := flushPendingData(); flushErr != nil {
+				return flushErr
 			}
 			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
@@ -134,7 +142,7 @@ func (p *Provider) consumeStream(
 	}
 }
 
-// extractStreamUsage 从 OpenAI usage 响应提取并覆盖累积的 token 统计。
+// extractStreamUsage 将 OpenAI usage 响应覆盖到累计 token 统计。
 func extractStreamUsage(usage *providertypes.Usage, raw *openAIUsage) {
 	if raw == nil {
 		return
