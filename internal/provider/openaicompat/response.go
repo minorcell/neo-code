@@ -1,4 +1,4 @@
-package openai
+package openaicompat
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 
 	"neo-code/internal/provider"
@@ -68,7 +67,6 @@ func (p *Provider) consumeStream(
 
 	// finishStream 统一输出 message_done 收尾事件。
 	finishStream := func() error {
-		log.Printf("[DEBUG-STREAM] finishStream called: finishReason=%q, done=%v", finishReason, done)
 		return emitMessageDone(ctx, events, finishReason, &usage)
 	}
 
@@ -130,22 +128,16 @@ func (p *Provider) consumeStream(
 		}
 
 		if errors.Is(err, io.EOF) {
-			log.Printf("[DEBUG-STREAM] EOF reached: done=%v, finishReason=%q, totalRead=%d, toolCallCount=%d",
-				done, finishReason, reader.totalRead, len(toolCalls))
-			if !done {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
-				}
-				log.Printf("[DEBUG-STREAM] WARNING: stream ended WITHOUT [DONE] marker — treating as interruption")
-				if flushErr := flushPendingData(); flushErr != nil {
-					return flushErr
-				}
-				return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
-			}
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
 			}
-			return finishStream()
+			if done {
+				return finishStream()
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
 		}
 	}
 }

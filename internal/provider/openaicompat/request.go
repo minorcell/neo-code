@@ -1,4 +1,4 @@
-package openai
+package openaicompat
 
 import (
 	"encoding/json"
@@ -12,12 +12,12 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// buildRequest 将 provider.ChatRequest 转换为 OpenAI API 请求结构。
+// buildRequest 将 provider.GenerateRequest 转换为 OpenAI API 请求结构。
 // 模型优先取 req.Model，其次使用配置中的默认模型。
-func (p *Provider) buildRequest(req providertypes.ChatRequest) (chatCompletionRequest, error) {
+func (p *Provider) buildRequest(req providertypes.GenerateRequest) (chatCompletionRequest, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
-		model = strings.TrimSpace(p.cfg.Model)
+		model = strings.TrimSpace(p.cfg.DefaultModel)
 	}
 	if model == "" {
 		return chatCompletionRequest{}, errors.New("openai provider: model is empty")

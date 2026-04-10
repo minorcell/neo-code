@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 )
 
@@ -49,7 +50,7 @@ func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input ag
 
 type stubProvider struct {
 	selection config.ProviderSelection
-	models    []config.ModelDescriptor
+	models    []providertypes.ModelDescriptor
 	err       error
 }
 
@@ -61,7 +62,7 @@ func (s *stubProvider) SetCurrentModel(ctx context.Context, modelID string) (con
 	return s.selection, s.err
 }
 
-func (s *stubProvider) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s *stubProvider) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return s.models, s.err
 }
 
@@ -156,7 +157,7 @@ func TestRunResolvePermissionCmd(t *testing.T) {
 func TestProviderCmds(t *testing.T) {
 	svc := &stubProvider{
 		selection: config.ProviderSelection{ProviderID: "openai", ModelID: "gpt-5.4"},
-		models:    []config.ModelDescriptor{{ID: "gpt-5.4", Name: "GPT-5.4"}},
+		models:    []providertypes.ModelDescriptor{{ID: "gpt-5.4", Name: "GPT-5.4"}},
 	}
 
 	msg := SelectProviderCmd(svc, "openai", func(sel config.ProviderSelection, err error) tea.Msg { return sel })()
@@ -172,7 +173,7 @@ func TestProviderCmds(t *testing.T) {
 	msg = RefreshModelCatalogCmd(
 		svc,
 		"openai",
-		func(providerID string, models []config.ModelDescriptor, err error) tea.Msg {
+		func(providerID string, models []providertypes.ModelDescriptor, err error) tea.Msg {
 			return providerID + ":" + models[0].ID
 		},
 	)()
@@ -180,7 +181,7 @@ func TestProviderCmds(t *testing.T) {
 		t.Fatalf("expected catalog refresh msg, got %T %#v", msg, msg)
 	}
 
-	if cmd := RefreshModelCatalogCmd(svc, "", func(providerID string, models []config.ModelDescriptor, err error) tea.Msg { return nil }); cmd != nil {
+	if cmd := RefreshModelCatalogCmd(svc, "", func(providerID string, models []providertypes.ModelDescriptor, err error) tea.Msg { return nil }); cmd != nil {
 		t.Fatalf("expected nil cmd for empty provider id")
 	}
 }

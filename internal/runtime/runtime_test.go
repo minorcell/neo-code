@@ -94,9 +94,9 @@ type scriptedProvider struct {
 	name      string
 	streams   [][]providertypes.StreamEvent
 	responses []scriptedResponse
-	requests  []providertypes.ChatRequest
+	requests  []providertypes.GenerateRequest
 	callCount int
-	chatFn    func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error
+	chatFn    func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
 }
 
 type scriptedResponse struct {
@@ -104,8 +104,8 @@ type scriptedResponse struct {
 	FinishReason string
 }
 
-func (p *scriptedProvider) Chat(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
-	p.requests = append(p.requests, cloneChatRequest(req))
+func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+	p.requests = append(p.requests, cloneGenerateRequest(req))
 
 	callIndex := p.callCount
 	p.callCount++
@@ -172,19 +172,34 @@ func streamContainsMessageDone(events []providertypes.StreamEvent) bool {
 }
 
 type scriptedProviderFactory struct {
-	provider provider.Provider
-	calls    int
-	configs  []config.ResolvedProviderConfig
-	err      error
+	provider        provider.Provider
+	calls           int
+	configs         []provider.RuntimeConfig
+	err             error
+	capabilities    provider.DriverTransportCapabilities
+	capabilitiesErr error
 }
 
-func (f *scriptedProviderFactory) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+func (f *scriptedProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 	f.calls++
 	f.configs = append(f.configs, cfg)
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.provider, nil
+}
+
+func (f *scriptedProviderFactory) DriverTransportCapabilities(driverType string) (provider.DriverTransportCapabilities, error) {
+	if f.capabilitiesErr != nil {
+		return provider.DriverTransportCapabilities{}, f.capabilitiesErr
+	}
+	if f.capabilities == (provider.DriverTransportCapabilities{}) {
+		return provider.DriverTransportCapabilities{
+			Streaming:     true,
+			ToolTransport: true,
+		}, nil
+	}
+	return f.capabilities, nil
 }
 
 type stubTool struct {
@@ -582,7 +597,7 @@ func TestServiceRunRejectsProviderCompletionWithoutMessageDone(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			select {
 			case events <- providertypes.NewTextDeltaStreamEvent("partial"):
 			case <-ctx.Done():
@@ -1458,7 +1473,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				callIdx := 0
 				return &scriptedProvider{
 					name: "retry-then-success",
-					chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+					chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 						callIdx++
 						if callIdx == 1 {
 							return &provider.ProviderError{
@@ -1494,7 +1509,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input: UserInput{RunID: "run-no-retry", Content: "hello"},
 			provider: &scriptedProvider{
 				name: "auth-error-no-retry",
-				chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+				chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 					return &provider.ProviderError{
 						StatusCode: 401,
 						Code:       provider.ErrorCodeAuthFailed,
@@ -1517,7 +1532,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input: UserInput{RunID: "run-retry-exhausted", Content: "hello"},
 			provider: &scriptedProvider{
 				name: "always-500",
-				chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+				chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 					return &provider.ProviderError{
 						StatusCode: 500,
 						Code:       provider.ErrorCodeServer,
@@ -1601,7 +1616,7 @@ func TestServiceCancelActiveRun(t *testing.T) {
 	started := make(chan struct{})
 	scripted := &scriptedProvider{
 		name: "cancel-active-run-provider",
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
 			return ctx.Err()
@@ -1644,7 +1659,7 @@ func TestServiceRunCanceledByProvider(t *testing.T) {
 	started := make(chan struct{})
 	scripted := &scriptedProvider{
 		name: "blocking-provider",
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
 			return ctx.Err()
@@ -1689,7 +1704,7 @@ func TestServiceRunPreservesProviderErrorAfterCancel(t *testing.T) {
 	providerErr := errors.New("provider failed after cancel")
 	scripted := &scriptedProvider{
 		name: "provider-error-after-cancel",
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
 			return providerErr
@@ -2077,7 +2092,7 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
-	service := NewWithFactory(manager, registry, store, factory, nil)
+	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
 
 	result, err := service.Compact(context.Background(), CompactInput{
 		SessionID: session.ID,
@@ -2149,7 +2164,7 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
-	service := NewWithFactory(manager, registry, store, factory, nil)
+	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
 
 	result, err := service.Compact(context.Background(), CompactInput{
 		SessionID: session.ID,
@@ -2265,7 +2280,7 @@ func TestServiceSerializesRunAndCompact(t *testing.T) {
 	providerStarted := make(chan struct{})
 	unblockProvider := make(chan struct{})
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			select {
 			case <-providerStarted:
 			default:
@@ -2530,16 +2545,16 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 	}
 
 	defaults := config.DefaultConfig()
-	selected := config.NormalizeProviderName(defaults.SelectedProvider)
+	selected := provider.NormalizeKey(defaults.SelectedProvider)
 	for i := range defaults.Providers {
-		if config.NormalizeProviderName(defaults.Providers[i].Name) == selected {
+		if provider.NormalizeKey(defaults.Providers[i].Name) == selected {
 			defaults.Providers[i].APIKeyEnv = apiKeyEnv
 			break
 		}
 	}
 	for providerName, envKey := range providerEnvs {
 		for i := range defaults.Providers {
-			if config.NormalizeProviderName(defaults.Providers[i].Name) == config.NormalizeProviderName(providerName) {
+			if provider.NormalizeKey(defaults.Providers[i].Name) == provider.NormalizeKey(providerName) {
 				defaults.Providers[i].APIKeyEnv = envKey
 				break
 			}
@@ -2682,7 +2697,7 @@ func cloneSession(session agentsession.Session) agentsession.Session {
 	return cloned
 }
 
-func cloneChatRequest(req providertypes.ChatRequest) providertypes.ChatRequest {
+func cloneGenerateRequest(req providertypes.GenerateRequest) providertypes.GenerateRequest {
 	cloned := req
 	cloned.Messages = append([]providertypes.Message(nil), req.Messages...)
 	cloned.Tools = append([]providertypes.ToolSpec(nil), req.Tools...)
@@ -3079,7 +3094,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	store := newMemoryStore()
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			events <- providertypes.StreamEvent{Type: providertypes.StreamEventTextDelta}
 			return errors.New("provider chat failed")
 		},
@@ -3090,7 +3105,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		context.Background(),
 		"run-forward-error",
 		"session-forward-error",
-		providertypes.ChatRequest{
+		providertypes.GenerateRequest{
 			Model:        "test-model",
 			SystemPrompt: "prompt",
 			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
@@ -3098,6 +3113,115 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	)
 	if err == nil || !containsError(err, "provider stream handling failed after provider error") {
 		t.Fatalf("expected combined forward/provider error, got %v", err)
+	}
+}
+
+func TestServiceRunRejectsDriverWithoutToolTransportWhenRequestExposesTools(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("should not run")},
+		},
+	}
+	factory := &scriptedProviderFactory{
+		provider: scripted,
+		capabilities: provider.DriverTransportCapabilities{
+			Streaming:     true,
+			ToolTransport: false,
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-driver-no-tools",
+		Content: "hello",
+	})
+	if err == nil || !containsError(err, "does not support tool transport") {
+		t.Fatalf("expected tool transport capability error, got %v", err)
+	}
+	if factory.calls != 0 {
+		t.Fatalf("expected provider build to be skipped, got %d", factory.calls)
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate() to be skipped, got %d", scripted.callCount)
+	}
+}
+
+func TestServiceRunAllowsDriverWithoutToolTransportWhenRequestHasNoTools(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	toolManager := &stubToolManager{}
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("plain answer")},
+		},
+	}
+	factory := &scriptedProviderFactory{
+		provider: scripted,
+		capabilities: provider.DriverTransportCapabilities{
+			Streaming:     true,
+			ToolTransport: false,
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, factory, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-driver-no-tool-transport-no-tools",
+		Content: "hello",
+	})
+	if err != nil {
+		t.Fatalf("expected no-tools request to succeed, got %v", err)
+	}
+	if factory.calls != 1 {
+		t.Fatalf("expected provider build once, got %d", factory.calls)
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate() once, got %d", scripted.callCount)
+	}
+	if len(scripted.requests) != 1 {
+		t.Fatalf("expected one provider request, got %d", len(scripted.requests))
+	}
+	if len(scripted.requests[0].Tools) != 0 {
+		t.Fatalf("expected provider request without tools, got %+v", scripted.requests[0].Tools)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventAgentChunk, EventAgentDone})
+	assertNoEventType(t, events, EventError)
+}
+
+func TestServiceRunPropagatesDriverNotFoundFromCapabilities(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	factory := &scriptedProviderFactory{
+		provider:        &scriptedProvider{},
+		capabilitiesErr: fmt.Errorf("%w: missing", provider.ErrDriverNotFound),
+	}
+
+	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-driver-missing",
+		Content: "hello",
+	})
+	if !errors.Is(err, provider.ErrDriverNotFound) {
+		t.Fatalf("expected ErrDriverNotFound, got %v", err)
+	}
+	if factory.calls != 0 {
+		t.Fatalf("expected provider build to be skipped, got %d", factory.calls)
 	}
 }
 
@@ -3111,7 +3235,7 @@ func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
 
 	builder := &stubContextBuilder{}
 	scripted := &scriptedProvider{}
-	scripted.chatFn = func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+	scripted.chatFn = func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 		usage := &providertypes.Usage{}
 		if scripted.callCount == 1 {
 			usage.InputTokens = 100
@@ -3443,7 +3567,7 @@ func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
 
 	callCount := 0
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			callCount++
 			if callCount == 1 {
 				return &provider.ProviderError{
@@ -3553,7 +3677,7 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 
 	callCount := 0
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			callCount++
 			if callCount == 1 {
 				return &provider.ProviderError{
@@ -3691,7 +3815,7 @@ func TestServiceRunReactivelyCompactsWithinSingleLoopBudget(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			if len(req.Messages) == 3 {
 				return &provider.ProviderError{
 					StatusCode: 400,
@@ -3761,7 +3885,7 @@ func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			return &provider.ProviderError{
 				StatusCode: 400,
 				Code:       provider.ErrorCodeContextTooLong,
@@ -3818,6 +3942,50 @@ func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
 	if !foundReactiveError {
 		t.Fatalf("expected reactive compact_error event in %+v", events)
 	}
+}
+
+func TestServiceRunDoesNotReactiveCompactOnPlainTextTokenThrottle(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	throttleErr := errors.New("requested too many tokens for this minute")
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			return throttleErr
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{}
+
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-plain-text-token-throttle",
+		Content: "continue",
+	})
+	if err == nil || !containsError(err, throttleErr.Error()) {
+		t.Fatalf("expected plain text token throttle error, got %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 0 {
+		t.Fatalf("expected no reactive compact attempts, got %d", len(compactRunner.calls))
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider to be called once, got %d", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventUserMessage,
+		EventError,
+	})
+	assertNoEventType(t, events, EventCompactStart)
+	assertNoEventType(t, events, EventCompactDone)
+	assertNoEventType(t, events, EventCompactError)
 }
 
 func TestRestoreSessionTokens(t *testing.T) {
