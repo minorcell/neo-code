@@ -106,7 +106,7 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 	if !catalogOK && options.allowSyncRefresh {
 		discovered, err := s.discoverAndPersist(ctx, input)
 		if err != nil {
-			if len(defaultModels) == 0 {
+			if len(defaultModels) == 0 || provider.IsDiscoveryConfigError(err) {
 				return nil, err
 			}
 		} else {

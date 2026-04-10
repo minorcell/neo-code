@@ -58,6 +58,15 @@ func TestDriverClosuresAndAPIStyle(t *testing.T) {
 	if got := normalizedAPIStyle(" Responses "); got != "responses" {
 		t.Fatalf("expected normalized responses style, got %q", got)
 	}
+	if got, err := supportedAPIStyle(""); err != nil || got != defaultAPIStyleChatCompletions {
+		t.Fatalf("expected supported default api style, got style=%q err=%v", got, err)
+	}
+	if _, err := supportedAPIStyle(" Responses "); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+		t.Fatalf("expected unsupported responses api_style, got %v", err)
+	}
+	if _, err := supportedAPIStyle("custom_style"); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
+		t.Fatalf("expected unsupported custom api_style, got %v", err)
+	}
 }
 
 func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
@@ -116,5 +125,35 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
 		t.Fatalf("expected unsupported api_style error, got %v", err)
+	}
+
+	p, err = New(provider.RuntimeConfig{
+		Name:         DriverName,
+		Driver:       DriverName,
+		BaseURL:      "https://api.example.com/v1",
+		DefaultModel: "gpt-4.1",
+		APIKey:       "test-key",
+		APIStyle:     "responses",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := p.DiscoverModels(context.Background()); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+		t.Fatalf("expected discovery to reject responses api_style, got %v", err)
+	}
+
+	p, err = New(provider.RuntimeConfig{
+		Name:         DriverName,
+		Driver:       DriverName,
+		BaseURL:      "https://api.example.com/v1",
+		DefaultModel: "gpt-4.1",
+		APIKey:       "test-key",
+		APIStyle:     "custom_style",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := p.DiscoverModels(context.Background()); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
+		t.Fatalf("expected discovery to reject custom api_style, got %v", err)
 	}
 }

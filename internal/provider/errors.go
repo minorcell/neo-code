@@ -64,11 +64,32 @@ type ProviderError struct {
 	Retryable  bool              // 是否建议重试
 }
 
+type DiscoveryConfigError struct {
+	Message string
+}
+
 func (e *ProviderError) Error() string {
 	if e.StatusCode > 0 {
 		return fmt.Sprintf("provider error (status=%d, code=%s): %s", e.StatusCode, e.Code, e.Message)
 	}
 	return fmt.Sprintf("provider error (code=%s): %s", e.Code, e.Message)
+}
+
+func (e *DiscoveryConfigError) Error() string {
+	return e.Message
+}
+
+func NewDiscoveryConfigError(message string) error {
+	return &DiscoveryConfigError{Message: message}
+}
+
+func IsDiscoveryConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var target *DiscoveryConfigError
+	return errors.As(err, &target)
 }
 
 // IsRetryableStatus 根据通用 HTTP 语义判断状态码是否可重试。

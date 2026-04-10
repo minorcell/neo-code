@@ -59,6 +59,10 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 
 // DiscoverModels 通过 /models 端点查询可用模型列表。
 func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
+	if _, err := supportedAPIStyle(p.cfg.APIStyle); err != nil {
+		return nil, err
+	}
+
 	rawModels, err := p.fetchModels(ctx)
 	if err != nil {
 		return nil, err
@@ -78,7 +82,10 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDes
 // Generate 发起 SSE 流式生成请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	apiStyle := normalizedAPIStyle(p.cfg.APIStyle)
+	apiStyle, err := supportedAPIStyle(p.cfg.APIStyle)
+	if err != nil {
+		return err
+	}
 
 	switch apiStyle {
 	case defaultAPIStyleChatCompletions:
@@ -87,8 +94,6 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 			return err
 		}
 		return impl.Generate(ctx, req, events)
-	case "responses":
-		return fmt.Errorf("openaicompat provider: api_style %q is not supported yet", apiStyle)
 	default:
 		return fmt.Errorf("openaicompat provider: unsupported api_style %q", apiStyle)
 	}
@@ -101,4 +106,20 @@ func normalizedAPIStyle(apiStyle string) string {
 		return defaultAPIStyleChatCompletions
 	}
 	return normalized
+}
+
+func supportedAPIStyle(apiStyle string) (string, error) {
+	normalized := normalizedAPIStyle(apiStyle)
+	switch normalized {
+	case defaultAPIStyleChatCompletions:
+		return normalized, nil
+	case "responses":
+		return "", provider.NewDiscoveryConfigError(
+			fmt.Sprintf("openaicompat provider: api_style %q is not supported yet", normalized),
+		)
+	default:
+		return "", provider.NewDiscoveryConfigError(
+			fmt.Sprintf("openaicompat provider: unsupported api_style %q", normalized),
+		)
+	}
 }

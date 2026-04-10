@@ -138,3 +138,49 @@ func TestCatalogSnapshotOnMissingCatalog(t *testing.T) {
 		t.Fatalf("expected empty snapshot on cache miss, got %+v", snapshot)
 	}
 }
+
+func TestListProviderModelsRejectsUnsupportedOpenAICompatibleAPIStyle(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		t.Fatalf("register openaicompat driver: %v", err)
+	}
+
+	service := NewService("", registry, newMemoryStore())
+	cfg := customGatewayProvider()
+	cfg.APIStyle = "responses"
+
+	input, err := config.NewProviderCatalogInput(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+	}
+
+	models, err := service.ListProviderModels(context.Background(), input)
+	if err == nil || models != nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+		t.Fatalf("expected unsupported api_style error, got models=%+v err=%v", models, err)
+	}
+}
+
+func TestListBuiltinProviderModelsRejectsUnsupportedOpenAICompatibleAPIStyle(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		t.Fatalf("register openaicompat driver: %v", err)
+	}
+
+	service := NewService("", registry, newMemoryStore())
+	cfg := config.OpenAIProvider()
+	cfg.APIStyle = "responses"
+
+	input, err := config.NewProviderCatalogInput(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+	}
+
+	models, err := service.ListProviderModels(context.Background(), input)
+	if err == nil || models != nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+		t.Fatalf("expected builtin unsupported api_style error, got models=%+v err=%v", models, err)
+	}
+}

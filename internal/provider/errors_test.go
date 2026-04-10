@@ -197,6 +197,24 @@ func TestProviderError_As(t *testing.T) {
 	}
 }
 
+func TestDiscoveryConfigError(t *testing.T) {
+	t.Parallel()
+
+	err := NewDiscoveryConfigError("unsupported api_style")
+	if err == nil || err.Error() != "unsupported api_style" {
+		t.Fatalf("unexpected discovery config error: %v", err)
+	}
+	if !IsDiscoveryConfigError(err) {
+		t.Fatalf("expected discovery config classification")
+	}
+	if !IsDiscoveryConfigError(fmt.Errorf("wrapped: %w", err)) {
+		t.Fatalf("expected wrapped discovery config classification")
+	}
+	if IsDiscoveryConfigError(errors.New("other")) {
+		t.Fatalf("expected other errors to stay false")
+	}
+}
+
 func TestIsContextTooLong(t *testing.T) {
 	t.Parallel()
 
