@@ -205,9 +205,10 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	app := App{
 		state: tuistate.UIState{
-			StatusText:         statusReady,
-			CurrentProvider:    cfg.SelectedProvider,
-			CurrentModel:       cfg.CurrentModel,
+			StatusText:      statusReady,
+			CurrentProvider: cfg.SelectedProvider,
+			CurrentModel:    cfg.CurrentModel,
+			// Workdir 在启动阶段由 config 校验过，此处直接使用。
 			CurrentWorkdir:     cfg.Workdir,
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,

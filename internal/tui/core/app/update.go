@@ -673,7 +673,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.state.CurrentWorkdir = tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
+	a.setCurrentWorkdir(tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir))
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
@@ -716,7 +716,7 @@ func (a *App) syncConfigState(cfg config.Config) {
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
 	if strings.TrimSpace(a.state.CurrentWorkdir) == "" {
-		a.state.CurrentWorkdir = cfg.Workdir
+		a.setCurrentWorkdir(cfg.Workdir)
 	}
 }
 
@@ -849,7 +849,7 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 		a.state.CurrentModel = mapped.Model
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {
-		a.state.CurrentWorkdir = mapped.Workdir
+		a.setCurrentWorkdir(mapped.Workdir)
 	}
 	return false
 }
@@ -1719,7 +1719,7 @@ func (a *App) startDraftSession() {
 	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""
-	a.state.CurrentWorkdir = a.configManager.Get().Workdir
+	a.setCurrentWorkdir(a.configManager.Get().Workdir)
 	if err := a.refreshFileCandidates(); err != nil {
 		a.state.ExecutionError = err.Error()
 		a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
@@ -1795,4 +1795,14 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 // isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
+}
+
+// setCurrentWorkdir 统一设置当前工作目录，仅接受非空白且为绝对路径的值。
+// 非法值会被静默忽略，防止 runtime 事件或异常输入污染 UI 状态。
+func (a *App) setCurrentWorkdir(workdir string) {
+	trimmed := strings.TrimSpace(workdir)
+	if trimmed == "" || !filepath.IsAbs(trimmed) {
+		return
+	}
+	a.state.CurrentWorkdir = trimmed
 }

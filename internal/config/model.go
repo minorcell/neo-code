@@ -256,6 +256,11 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Workdir) {
 		return fmt.Errorf("config: workdir must be absolute, got %q", c.Workdir)
 	}
+	if info, err := os.Stat(c.Workdir); err != nil {
+		return fmt.Errorf("config: workdir does not exist: %q", c.Workdir)
+	} else if !info.IsDir() {
+		return fmt.Errorf("config: workdir is not a directory: %q", c.Workdir)
+	}
 	if selected.Source != ProviderSourceCustom && strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}

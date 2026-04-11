@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1306,4 +1307,40 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
 	}
+}
+
+func TestSetCurrentWorkdir(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	t.Run("accepts absolute path", func(t *testing.T) {
+		dir := t.TempDir()
+		app.setCurrentWorkdir(dir)
+		if app.state.CurrentWorkdir != filepath.Clean(dir) {
+			t.Fatalf("expected %q, got %q", filepath.Clean(dir), app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores empty", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores whitespace", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("   ")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores relative path", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("relative/path")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -865,44 +864,22 @@ func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 }
 
 func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
-	workdir := strings.TrimSpace(sessionWorkdir)
-	if workdir != "" {
-		return workdir
-	}
-	return strings.TrimSpace(defaultWorkdir)
+	return agentsession.EffectiveWorkdir(sessionWorkdir, defaultWorkdir)
 }
 
 func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
 	base := effectiveSessionWorkdir(currentWorkdir, defaultWorkdir)
 	if strings.TrimSpace(requestedWorkdir) == "" {
-		return normalizeExistingWorkdir(base)
+		return agentsession.ResolveExistingDir(base)
 	}
 
 	target := strings.TrimSpace(requestedWorkdir)
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
 	}
-	return normalizeExistingWorkdir(target)
+	return agentsession.ResolveExistingDir(target)
 }
 
 func normalizeExistingWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
-		return "", errors.New("runtime: workdir is empty")
-	}
-
-	absolute, err := filepath.Abs(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("runtime: workdir %q is not a directory", absolute)
-	}
-
-	return filepath.Clean(absolute), nil
+	return agentsession.ResolveExistingDir(workdir)
 }
