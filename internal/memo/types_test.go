@@ -38,9 +38,9 @@ func TestIsValidType(t *testing.T) {
 
 func TestParseType(t *testing.T) {
 	tests := []struct {
-		input   string
-		want    Type
-		wantOK  bool
+		input  string
+		want   Type
+		wantOK bool
 	}{
 		{"user", TypeUser, true},
 		{"feedback", TypeFeedback, true},

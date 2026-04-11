@@ -100,15 +100,25 @@ func (s *Service) Add(ctx context.Context, entry Entry) error {
 	return nil
 }
 
+// loadIndexLocked 在持有锁的状态下加载索引，供多个 Service 方法复用。
+// 调用方须持有 s.mu 锁。
+func (s *Service) loadIndexLocked(ctx context.Context) (*Index, error) {
+	index, err := s.store.LoadIndex(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("memo: load index: %w", err)
+	}
+	return index, nil
+}
+
 // Remove 按关键词搜索并删除匹配的记忆条目。
 // 返回被删除的条目数量。
 func (s *Service) Remove(ctx context.Context, keyword string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	index, err := s.store.LoadIndex(ctx)
+	index, err := s.loadIndexLocked(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("memo: load index: %w", err)
+		return 0, err
 	}
 
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
@@ -148,9 +158,9 @@ func (s *Service) List(ctx context.Context) ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	index, err := s.store.LoadIndex(ctx)
+	index, err := s.loadIndexLocked(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("memo: load index: %w", err)
+		return nil, err
 	}
 	result := make([]Entry, len(index.Entries))
 	copy(result, index.Entries)
@@ -162,9 +172,9 @@ func (s *Service) Search(ctx context.Context, keyword string) ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	index, err := s.store.LoadIndex(ctx)
+	index, err := s.loadIndexLocked(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("memo: load index: %w", err)
+		return nil, err
 	}
 
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
@@ -182,9 +192,9 @@ func (s *Service) Recall(ctx context.Context, keyword string) (map[string]string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	index, err := s.store.LoadIndex(ctx)
+	index, err := s.loadIndexLocked(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("memo: load index: %w", err)
+		return nil, err
 	}
 
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
@@ -205,15 +215,6 @@ func (s *Service) Recall(ctx context.Context, keyword string) (map[string]string
 	return results, nil
 }
 
-// ExtractAndStore 从对话消息中提取记忆并保存。提取失败静默处理，不返回错误。
-func (s *Service) ExtractAndStore(ctx context.Context, messages interface{}) {
-	if s.extractor == nil || !s.config.AutoExtract {
-		return
-	}
-	// Extractor 接口接受 []providertypes.Message，此处使用 interface{} 避免循环依赖
-	// 实际调用处会进行类型断言
-}
-
 // invalidateCache 触发上下文源的缓存失效回调。
 func (s *Service) invalidateCache() {
 	if s.sourceInvl != nil {
@@ -222,16 +223,16 @@ func (s *Service) invalidateCache() {
 }
 
 // matchesKeyword 检查条目是否匹配关键词（标题、关键词列表、类型）。
+// 调用方须确保 keyword 已转换为小写。
 func matchesKeyword(entry Entry, keyword string) bool {
-	lowerKeyword := keyword
-	if strings.Contains(strings.ToLower(entry.Title), lowerKeyword) {
+	if strings.Contains(strings.ToLower(entry.Title), keyword) {
 		return true
 	}
-	if strings.Contains(strings.ToLower(string(entry.Type)), lowerKeyword) {
+	if strings.Contains(strings.ToLower(string(entry.Type)), keyword) {
 		return true
 	}
 	for _, kw := range entry.Keywords {
-		if strings.Contains(strings.ToLower(kw), lowerKeyword) {
+		if strings.Contains(strings.ToLower(kw), keyword) {
 			return true
 		}
 	}
@@ -243,6 +244,6 @@ func newEntryID(t Type) string {
 	ts := fmt.Sprintf("%x", time.Now().Unix())
 	buf := make([]byte, 4)
 	_, _ = rand.Read(buf)
-	rand := hex.EncodeToString(buf)
-	return fmt.Sprintf("%s_%s_%s", t, ts, rand)
+	randHex := hex.EncodeToString(buf)
+	return fmt.Sprintf("%s_%s_%s", t, ts, randHex)
 }

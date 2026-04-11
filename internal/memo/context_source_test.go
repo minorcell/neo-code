@@ -34,7 +34,7 @@ func (s *stubStore) LoadTopic(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
 func (s *stubStore) SaveTopic(_ context.Context, _, _ string) error { return nil }
-func (s *stubStore) DeleteTopic(_ context.Context, _ string) error { return nil }
+func (s *stubStore) DeleteTopic(_ context.Context, _ string) error  { return nil }
 func (s *stubStore) ListTopics(_ context.Context) ([]string, error) { return nil, nil }
 
 func TestContextSourceEmpty(t *testing.T) {

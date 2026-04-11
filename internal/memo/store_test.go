@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	agentsession "neo-code/internal/session"
 )
 
 func TestNewFileStore(t *testing.T) {
@@ -241,30 +243,30 @@ func TestFileStoreAtomicWrite(t *testing.T) {
 
 func TestMemoDirectory(t *testing.T) {
 	dir := memoDirectory("/base", "/workspace")
-	expected := filepath.Join("/base", "projects", hashWorkspaceRoot("/workspace"), "memo")
+	expected := filepath.Join("/base", "projects", agentsession.HashWorkspaceRoot("/workspace"), "memo")
 	if dir != expected {
 		t.Errorf("memoDirectory = %q, want %q", dir, expected)
 	}
 }
 
 func TestHashWorkspaceRootStable(t *testing.T) {
-	h1 := hashWorkspaceRoot("/workspace/project")
-	h2 := hashWorkspaceRoot("/workspace/project")
+	h1 := agentsession.HashWorkspaceRoot("/workspace/project")
+	h2 := agentsession.HashWorkspaceRoot("/workspace/project")
 	if h1 != h2 {
 		t.Errorf("hash not stable: %q != %q", h1, h2)
 	}
 }
 
 func TestHashWorkspaceRootDifferent(t *testing.T) {
-	h1 := hashWorkspaceRoot("/workspace/a")
-	h2 := hashWorkspaceRoot("/workspace/b")
+	h1 := agentsession.HashWorkspaceRoot("/workspace/a")
+	h2 := agentsession.HashWorkspaceRoot("/workspace/b")
 	if h1 == h2 {
 		t.Errorf("different paths should produce different hashes")
 	}
 }
 
 func TestHashWorkspaceRootEmpty(t *testing.T) {
-	h := hashWorkspaceRoot("")
+	h := agentsession.HashWorkspaceRoot("")
 	// 空路径回退到 "unknown" 的哈希，应产生稳定的非空结果
 	if h == "" {
 		t.Error("hash of empty workspace root should not be empty")
