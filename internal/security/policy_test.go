@@ -417,3 +417,192 @@ func TestPolicyEngineMCPDottedServerIsolation(t *testing.T) {
 		t.Fatalf("expected public allow rule, got %+v", publicResult.Rule)
 	}
 }
+
+func TestMCPPolicyPriority(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		decision Decision
+		want     int
+	}{
+		{name: "deny", decision: DecisionDeny, want: 830},
+		{name: "ask", decision: DecisionAsk, want: 820},
+		{name: "allow", decision: DecisionAllow, want: 810},
+		{name: "unknown", decision: Decision("unknown"), want: 0},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := mcpPolicyPriority(tt.decision); got != tt.want {
+				t.Fatalf("mcpPolicyPriority() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMCPServerIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		action Action
+		want   string
+	}{
+		{
+			name: "non mcp action returns empty",
+			action: Action{
+				Type: ActionTypeRead,
+				Payload: ActionPayload{
+					Target: "mcp.docs.search",
+				},
+			},
+			want: "",
+		},
+		{
+			name: "use target first",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					Target: "mcp.docs.search",
+				},
+			},
+			want: "mcp.docs",
+		},
+		{
+			name: "fallback to resource when target invalid",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					Target:   "mcp.",
+					Resource: "mcp.repo.search",
+				},
+			},
+			want: "mcp.repo",
+		},
+		{
+			name: "fallback to tool name when target and resource invalid",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					Target:   "mcp.",
+					Resource: "mcp.",
+					ToolName: "mcp.docs.read",
+				},
+			},
+			want: "mcp.docs",
+		},
+		{
+			name: "all empty returns empty",
+			action: Action{
+				Type: ActionTypeMCP,
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := mcpServerIdentity(tt.action); got != tt.want {
+				t.Fatalf("mcpServerIdentity() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalMCPServerIdentityEdges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "single segment mcp identity", input: "mcp.docs", want: "mcp.docs"},
+		{name: "leading dot in body is invalid", input: "mcp..search", want: ""},
+		{name: "trailing dot in body is invalid", input: "mcp.docs.", want: ""},
+		{name: "empty mcp identity body is invalid", input: "mcp.", want: ""},
+		{name: "trim and lowercase", input: "  MCP.DOCS.SEARCH  ", want: "mcp.docs"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := canonicalMCPServerIdentity(tt.input); got != tt.want {
+				t.Fatalf("canonicalMCPServerIdentity() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalMCPToolIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		serverID string
+		toolName string
+		want     string
+	}{
+		{name: "normalize to full tool identity", serverID: "docs", toolName: "search", want: "mcp.docs.search"},
+		{name: "invalid server id returns empty", serverID: "mcp.", toolName: "search", want: ""},
+		{name: "empty tool returns empty", serverID: "docs", toolName: " ", want: ""},
+		{name: "dotted tool name rejected", serverID: "github", toolName: "enterprise.create_issue", want: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := canonicalMCPToolIdentity(tt.serverID, tt.toolName); got != tt.want {
+				t.Fatalf("canonicalMCPToolIdentity() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveToolCategoryMCP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		action Action
+		want   string
+	}{
+		{
+			name: "derive mcp server category",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					Target: "mcp.docs.search",
+				},
+			},
+			want: "mcp.docs",
+		},
+		{
+			name: "fallback to mcp category when no identity",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					Target: "mcp.",
+				},
+			},
+			want: "mcp",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := deriveToolCategory(tt.action); got != tt.want {
+				t.Fatalf("deriveToolCategory() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

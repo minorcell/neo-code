@@ -494,9 +494,6 @@ func canonicalMCPServerIdentity(raw string) string {
 	}
 	if strings.HasPrefix(trimmed, "mcp.") {
 		body := strings.TrimPrefix(trimmed, "mcp.")
-		if body == "" {
-			return ""
-		}
 		// MCP 工具 identity 采用 mcp.<server>.<tool>，server 允许包含 "."；
 		// 因此按最后一个 "." 分隔 server 与 tool，避免将 server 错误截断到第二段。
 		lastDot := strings.LastIndex(body, ".")
@@ -529,12 +526,6 @@ func canonicalMCPToolIdentity(serverID string, toolName string) string {
 	// Reject tool names containing "." to prevent ambiguous server/tool boundary parsing.
 	if strings.Contains(tool, ".") {
 		return ""
-	}
-	if strings.HasPrefix(tool, serverIdentity+".") {
-		return tool
-	}
-	if strings.HasPrefix(tool, "mcp.") {
-		return tool
 	}
 	return serverIdentity + "." + tool
 }
