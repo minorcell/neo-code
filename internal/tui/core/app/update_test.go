@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -21,20 +22,20 @@ import (
 )
 
 type stubProviderService struct {
-	providers []config.ProviderCatalogItem
+	providers []configstate.ProviderOption
 	models    []providertypes.ModelDescriptor
 }
 
-func (s stubProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s stubProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return s.providers, nil
 }
 
-func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
 	modelID := ""
 	if len(s.models) > 0 {
 		modelID = s.models[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 func (s stubProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -45,12 +46,12 @@ func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 	return s.models, nil
 }
 
-func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
 	providerID := ""
 	if len(s.providers) > 0 {
 		providerID = s.providers[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 type stubRuntime struct {
@@ -113,11 +114,11 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -801,11 +802,11 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -874,11 +875,11 @@ func TestNewUsesBootstrap(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -1411,11 +1412,11 @@ func newTestAppWithMemo(t *testing.T) (App, *stubRuntime) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{ID: provider.Name, Name: provider.Name, Models: []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}},
 		}
 		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}

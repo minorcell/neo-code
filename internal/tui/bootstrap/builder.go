@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -12,11 +13,11 @@ import (
 
 // ProviderService 定义 TUI 需要注入的 provider 交互能力。
 type ProviderService interface {
-	ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error)
-	SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error)
+	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
+	SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error)
 	ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
-	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
+	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
 }
 
 // MemoService 定义 TUI 需要注入的 memo 交互能力。

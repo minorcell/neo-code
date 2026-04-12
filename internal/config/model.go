@@ -144,6 +144,7 @@ func DefaultWebFetchSupportedContentTypes() []string {
 	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
 
+// StaticDefaults 返回配置层静态默认值骨架。
 func Default() *Config {
 	return &Config{
 		Workdir:        DefaultWorkdir,
@@ -157,6 +158,11 @@ func Default() *Config {
 		},
 		Memo: defaultMemoConfig(),
 	}
+}
+
+// StaticDefaults 兼容新配置入口命名，返回可直接用于装配的默认配置快照。
+func StaticDefaults() *Config {
+	return DefaultConfig()
 }
 
 func (c *Config) Clone() Config {

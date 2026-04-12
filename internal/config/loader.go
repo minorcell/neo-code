@@ -173,7 +173,7 @@ func defaultBaseDir() string {
 }
 
 func parseConfig(data []byte) (*Config, error) {
-	defaults := Default()
+	defaults := StaticDefaults()
 	return parseConfigWithContextDefaults(data, defaults.Context, defaults.Memo)
 }
 
