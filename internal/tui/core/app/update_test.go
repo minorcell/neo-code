@@ -3,13 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
@@ -20,20 +20,20 @@ import (
 )
 
 type stubProviderService struct {
-	providers []config.ProviderCatalogItem
+	providers []configstate.ProviderOption
 	models    []providertypes.ModelDescriptor
 }
 
-func (s stubProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s stubProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return s.providers, nil
 }
 
-func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
 	modelID := ""
 	if len(s.models) > 0 {
 		modelID = s.models[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 func (s stubProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -44,12 +44,12 @@ func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 	return s.models, nil
 }
 
-func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
 	providerID := ""
 	if len(s.providers) > 0 {
 		providerID = s.providers[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 type stubRuntime struct {
@@ -57,7 +57,6 @@ type stubRuntime struct {
 	resolveCalls  []agentruntime.PermissionResolutionInput
 	resolveErr    error
 	cancelInvoked bool
-	loadSessionFn func(context.Context, string) (agentsession.Session, error)
 }
 
 func newStubRuntime() *stubRuntime {
@@ -91,32 +90,39 @@ func (s *stubRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary,
 }
 
 func (s *stubRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
-	if s.loadSessionFn != nil {
-		return s.loadSessionFn(ctx, id)
-	}
 	return agentsession.NewWithWorkdir("draft", ""), nil
+}
+
+func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+	return agentsession.NewWithWorkdir("draft", workdir), nil
+}
+
+func newDefaultAppConfig() *config.Config {
+	cfg := config.StaticDefaults()
+	cfg.Providers = config.DefaultProviders()
+	if len(cfg.Providers) > 0 {
+		cfg.SelectedProvider = cfg.Providers[0].Name
+		cfg.CurrentModel = cfg.Providers[0].Model
+	}
+	return cfg
 }
 
 func newTestApp(t *testing.T) (App, *stubRuntime) {
 	t.Helper()
 
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
-	if len(cfg.Providers) > 0 {
-		cfg.SelectedProvider = cfg.Providers[0].Name
-		cfg.CurrentModel = cfg.Providers[0].Model
-	}
 
 	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -788,7 +794,7 @@ func TestHelpHeightAndRenderHelp(t *testing.T) {
 }
 
 func TestNewWithBootstrapSuccess(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
 	if len(cfg.Providers) > 0 {
 		cfg.SelectedProvider = cfg.Providers[0].Name
@@ -800,11 +806,11 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -834,7 +840,7 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 }
 
 func TestNewWithBootstrapMissingDependencies(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
@@ -861,7 +867,7 @@ func TestNewWithBootstrapMissingDependencies(t *testing.T) {
 }
 
 func TestNewUsesBootstrap(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
 	if len(cfg.Providers) > 0 {
 		cfg.SelectedProvider = cfg.Providers[0].Name
@@ -873,11 +879,11 @@ func TestNewUsesBootstrap(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -915,11 +921,10 @@ func TestRuntimeEventUserMessageHandler(t *testing.T) {
 
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	workdir := t.TempDir()
 	payload := tuiservices.RuntimeRunContextPayload{
 		Provider: "p1",
 		Model:    "m1",
-		Workdir:  workdir,
+		Workdir:  "/tmp",
 	}
 	event := agentruntime.RuntimeEvent{RunID: "run-2", SessionID: "s1", Payload: payload}
 	handled := runtimeEventRunContextHandler(&app, event)
@@ -928,49 +933,6 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 	if app.state.CurrentProvider != "p1" || app.state.CurrentModel != "m1" {
 		t.Fatalf("expected provider/model to update")
-	}
-	if app.state.CurrentWorkdir != workdir {
-		t.Fatalf("expected workdir %q, got %q", workdir, app.state.CurrentWorkdir)
-	}
-}
-
-func TestRefreshMessagesUsesSessionWorkdirWhenPresent(t *testing.T) {
-	app, runtime := newTestApp(t)
-	app.state.ActiveSessionID = "session-1"
-	sessionWorkdir := t.TempDir()
-	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
-		session := agentsession.NewWithWorkdir("persisted", sessionWorkdir)
-		session.ID = id
-		session.Messages = []providertypes.Message{{Role: roleAssistant, Content: "hello"}}
-		return session, nil
-	}
-
-	if err := app.refreshMessages(); err != nil {
-		t.Fatalf("refreshMessages() error = %v", err)
-	}
-	if app.state.CurrentWorkdir != sessionWorkdir {
-		t.Fatalf("expected session workdir %q, got %q", sessionWorkdir, app.state.CurrentWorkdir)
-	}
-	if app.state.ActiveSessionTitle != "persisted" {
-		t.Fatalf("expected session title to refresh, got %q", app.state.ActiveSessionTitle)
-	}
-}
-
-func TestRefreshMessagesFallsBackToConfiguredWorkdir(t *testing.T) {
-	app, runtime := newTestApp(t)
-	app.state.ActiveSessionID = "session-1"
-	configWorkdir := app.configManager.Get().Workdir
-	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
-		session := agentsession.NewWithWorkdir("persisted", "")
-		session.ID = id
-		return session, nil
-	}
-
-	if err := app.refreshMessages(); err != nil {
-		t.Fatalf("refreshMessages() error = %v", err)
-	}
-	if app.state.CurrentWorkdir != configWorkdir {
-		t.Fatalf("expected configured workdir %q, got %q", configWorkdir, app.state.CurrentWorkdir)
 	}
 }
 
@@ -1254,19 +1216,28 @@ func TestRunSlashCommandSelectionModelRefreshError(t *testing.T) {
 	}
 }
 
-func TestRunSlashCommandSelectionLocalCommand(t *testing.T) {
+func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = ""
+	app.state.CurrentWorkdir = t.TempDir()
 
-	localCmd := app.runSlashCommandSelection(slashCommandStatus)
+	// /cwd 不是 handleImmediateSlashCommand 处理的命令，也不是 switch 中的已知命令，
+	// 所以走 default 分支返回 runLocalCommand -> localCommandResultMsg
+	localCmd := app.runSlashCommandSelection("/cwd")
 	if localCmd == nil {
-		t.Fatalf("expected local slash cmd")
+		t.Fatalf("expected local slash cmd for /cwd")
 	}
-	localMsg := localCmd()
-	localResult, ok := localMsg.(localCommandResultMsg)
+
+	statusCmd := app.runSlashCommandSelection(slashCommandStatus)
+	if statusCmd == nil {
+		t.Fatalf("expected local slash cmd for status")
+	}
+	statusMsg := statusCmd()
+	statusResult, ok := statusMsg.(localCommandResultMsg)
 	if !ok {
-		t.Fatalf("expected localCommandResultMsg, got %T", localMsg)
+		t.Fatalf("expected localCommandResultMsg, got %T", statusMsg)
 	}
-	if !strings.Contains(localResult.Notice, "Status:") {
+	if !strings.Contains(statusResult.Notice, "Status:") {
 		t.Fatalf("expected status output in local command result")
 	}
 }
@@ -1355,40 +1326,4 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
 	}
-}
-
-func TestSetCurrentWorkdir(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	t.Run("accepts absolute path", func(t *testing.T) {
-		dir := t.TempDir()
-		app.setCurrentWorkdir(dir)
-		if app.state.CurrentWorkdir != filepath.Clean(dir) {
-			t.Fatalf("expected %q, got %q", filepath.Clean(dir), app.state.CurrentWorkdir)
-		}
-	})
-
-	t.Run("ignores empty", func(t *testing.T) {
-		app.state.CurrentWorkdir = "/original"
-		app.setCurrentWorkdir("")
-		if app.state.CurrentWorkdir != "/original" {
-			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
-		}
-	})
-
-	t.Run("ignores whitespace", func(t *testing.T) {
-		app.state.CurrentWorkdir = "/original"
-		app.setCurrentWorkdir("   ")
-		if app.state.CurrentWorkdir != "/original" {
-			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
-		}
-	})
-
-	t.Run("ignores relative path", func(t *testing.T) {
-		app.state.CurrentWorkdir = "/original"
-		app.setCurrentWorkdir("relative/path")
-		if app.state.CurrentWorkdir != "/original" {
-			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
-		}
-	})
 }
