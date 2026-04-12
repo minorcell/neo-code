@@ -552,6 +552,52 @@ func TestSelectionServiceEnsureSelectionKeepsEmptyCustomModelWhenSynchronousDisc
 	}
 }
 
+func TestSelectionServiceEnsureSelectionReturnsBootstrappedSelectionWhenCustomDiscoveryFails(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.Providers = []configpkg.ProviderConfig{
+		{
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://llm.example.com/v1",
+			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+			Source:    ProviderSourceCustom,
+		},
+	}
+	defaults.SelectedProvider = ""
+	defaults.CurrentModel = ""
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, defaults)
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listErr: errors.New("discover failed"),
+		tracker: tracker,
+	})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() should preserve the bootstrapped selection when discovery fails, got %v", err)
+	}
+	if selection.ProviderID != "company-gateway" || selection.ModelID != "" {
+		t.Fatalf("expected bootstrapped custom selection to be returned, got %+v", selection)
+	}
+	if tracker.listCalls != 1 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected custom ensure to attempt snapshot and one sync discovery, got %+v", *tracker)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.SelectedProvider != "company-gateway" {
+		t.Fatalf("expected selected provider to persist as company-gateway, got %q", reloaded.SelectedProvider)
+	}
+	if reloaded.CurrentModel != "" {
+		t.Fatalf("expected current model to remain empty after failed discovery, got %q", reloaded.CurrentModel)
+	}
+}
+
 func TestSelectionServiceSelectCustomProviderDoesNotPersistWhenDiscoveryFails(t *testing.T) {
 	t.Parallel()
 

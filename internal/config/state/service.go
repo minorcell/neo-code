@@ -228,6 +228,7 @@ func (s *Service) EnsureSelection(ctx context.Context) (Selection, error) {
 		if err != nil {
 			return Selection{}, err
 		}
+		cfgSnapshot = s.manager.Get()
 	}
 	if err := ensureSupportedProvider(s.supporters, selected); err != nil {
 		return Selection{}, err
