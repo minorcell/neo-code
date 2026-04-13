@@ -98,3 +98,33 @@ func TestGenerateTextRejectsUnexpectedEvent(t *testing.T) {
 		t.Fatalf("GenerateText() error = %v", err)
 	}
 }
+
+func TestGenerateTextRejectsTextDeltaWithNilPayload(t *testing.T) {
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.StreamEvent{Type: providertypes.StreamEventTextDelta}
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+
+	_, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if err == nil || !strings.Contains(err.Error(), "text_delta event payload is nil") {
+		t.Fatalf("GenerateText() error = %v", err)
+	}
+}
+
+func TestGenerateTextRejectsMessageDoneWithNilPayload(t *testing.T) {
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.NewTextDeltaStreamEvent("partial")
+			events <- providertypes.StreamEvent{Type: providertypes.StreamEventMessageDone}
+			return nil
+		},
+	}
+
+	_, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if err == nil || !strings.Contains(err.Error(), "message_done event payload is nil") {
+		t.Fatalf("GenerateText() error = %v", err)
+	}
+}
