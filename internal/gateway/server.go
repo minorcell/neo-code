@@ -25,6 +25,8 @@ const (
 var (
 	errFrameTooLarge = errors.New("frame exceeds max size")
 	errFrameEmpty    = errors.New("empty frame")
+
+	defaultListenAddressFn = transport.DefaultListenAddress
 )
 
 // ServerOptions 描述网关服务启动所需的可选配置。
@@ -50,7 +52,7 @@ type Server struct {
 func NewServer(options ServerOptions) (*Server, error) {
 	listenAddress := strings.TrimSpace(options.ListenAddress)
 	if listenAddress == "" {
-		resolved, err := transport.DefaultListenAddress()
+		resolved, err := defaultListenAddressFn()
 		if err != nil {
 			return nil, err
 		}

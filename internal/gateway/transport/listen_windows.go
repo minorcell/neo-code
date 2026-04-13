@@ -14,6 +14,14 @@ const (
 	pipeSDDLDiscretionaryACL = "D:P"
 )
 
+var (
+	listenPipeFn             = winio.ListenPipe
+	currentProcessUserSIDFn  = currentProcessUserSID
+	wellKnownSIDStringFn     = wellKnownSIDString
+	getCurrentProcessTokenFn = windows.GetCurrentProcessToken
+	createWellKnownSIDFn     = windows.CreateWellKnownSid
+)
+
 // Listen 在 Windows 系统上启动 Named Pipe 监听，并显式收敛访问控制。
 func Listen(address string) (net.Listener, error) {
 	config, err := newRestrictedPipeConfig()
@@ -21,7 +29,7 @@ func Listen(address string) (net.Listener, error) {
 		return nil, err
 	}
 
-	listener, err := winio.ListenPipe(address, config)
+	listener, err := listenPipeFn(address, config)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: listen named pipe: %w", err)
 	}
@@ -39,17 +47,17 @@ func newRestrictedPipeConfig() (*winio.PipeConfig, error) {
 
 // buildRestrictedPipeSecurityDescriptor 生成管道 ACL 的 SDDL 表达式。
 func buildRestrictedPipeSecurityDescriptor() (string, error) {
-	currentUserSID, err := currentProcessUserSID()
+	currentUserSID, err := currentProcessUserSIDFn()
 	if err != nil {
 		return "", err
 	}
 
-	systemSID, err := wellKnownSIDString(windows.WinLocalSystemSid)
+	systemSID, err := wellKnownSIDStringFn(windows.WinLocalSystemSid)
 	if err != nil {
 		return "", fmt.Errorf("gateway: resolve local-system sid: %w", err)
 	}
 
-	administratorsSID, err := wellKnownSIDString(windows.WinBuiltinAdministratorsSid)
+	administratorsSID, err := wellKnownSIDStringFn(windows.WinBuiltinAdministratorsSid)
 	if err != nil {
 		return "", fmt.Errorf("gateway: resolve administrators sid: %w", err)
 	}
@@ -65,7 +73,7 @@ func buildRestrictedPipeSecurityDescriptor() (string, error) {
 
 // currentProcessUserSID 返回当前进程用户的 SID 字符串。
 func currentProcessUserSID() (string, error) {
-	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+	tokenUser, err := getCurrentProcessTokenFn().GetTokenUser()
 	if err != nil {
 		return "", fmt.Errorf("gateway: query current token user: %w", err)
 	}
@@ -77,7 +85,7 @@ func currentProcessUserSID() (string, error) {
 
 // wellKnownSIDString 将系统内置 SID 类型转换为 SID 字符串。
 func wellKnownSIDString(sidType windows.WELL_KNOWN_SID_TYPE) (string, error) {
-	sid, err := windows.CreateWellKnownSid(sidType)
+	sid, err := createWellKnownSIDFn(sidType)
 	if err != nil {
 		return "", err
 	}
