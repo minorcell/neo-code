@@ -10,27 +10,37 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-const autoExtractDebounce = 2 * time.Second
+const (
+	autoExtractDebounce = 2 * time.Second
+	autoExtractIdleTTL  = 5 * time.Minute
+)
 
 // AutoExtractor 负责按会话在后台调度自动提取，并处理防抖、互斥和尾随执行。
 type AutoExtractor struct {
 	extractor Extractor
 	svc       *Service
 	debounce  time.Duration
+	idleTTL   time.Duration
 	logf      func(format string, args ...any)
 
-	mu      sync.Mutex
-	workers map[string]*autoExtractWorker
+	mu     sync.Mutex
+	states map[string]*autoExtractState
 }
 
-type autoExtractWorker struct {
-	updates chan autoExtractRequest
+type autoExtractState struct {
+	mu          sync.Mutex
+	pending     *autoExtractRequest
+	running     bool
+	timer       *time.Timer
+	idleTimer   *time.Timer
+	scheduleSeq uint64
+	idleSeq     uint64
 }
 
 type autoExtractRequest struct {
-	messages []providertypes.Message
-	dueAt    time.Time
-	skip     bool
+	messages  []providertypes.Message
+	dueAt     time.Time
+	extractor Extractor
 }
 
 // NewAutoExtractor 创建后台自动提取调度器。
@@ -39,14 +49,25 @@ func NewAutoExtractor(extractor Extractor, svc *Service) *AutoExtractor {
 		extractor: extractor,
 		svc:       svc,
 		debounce:  autoExtractDebounce,
+		idleTTL:   autoExtractIdleTTL,
 		logf:      log.Printf,
-		workers:   make(map[string]*autoExtractWorker),
+		states:    make(map[string]*autoExtractState),
 	}
 }
 
-// Schedule 按会话维度安排一次后台自动提取，skip=true 时清空当前待执行请求。
-func (a *AutoExtractor) Schedule(sessionID string, messages []providertypes.Message, skip bool) {
-	if a == nil || a.extractor == nil || a.svc == nil {
+// Schedule 按会话维度安排一次后台自动提取。
+func (a *AutoExtractor) Schedule(sessionID string, messages []providertypes.Message) {
+	a.schedule(sessionID, messages, a.extractor)
+}
+
+// ScheduleWithExtractor 允许调用方在调度时绑定本次请求专用的提取器快照。
+func (a *AutoExtractor) ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor Extractor) {
+	a.schedule(sessionID, messages, extractor)
+}
+
+// schedule 统一处理会话级别的自动提取调度。
+func (a *AutoExtractor) schedule(sessionID string, messages []providertypes.Message, extractor Extractor) {
+	if a == nil || extractor == nil || a.svc == nil {
 		return
 	}
 
@@ -56,115 +77,127 @@ func (a *AutoExtractor) Schedule(sessionID string, messages []providertypes.Mess
 	}
 
 	req := autoExtractRequest{
-		messages: cloneProviderMessages(messages),
-		dueAt:    time.Now().Add(a.debounce),
-		skip:     skip,
+		messages:  cloneProviderMessages(messages),
+		dueAt:     time.Now().Add(a.debounce),
+		extractor: extractor,
 	}
 
-	worker := a.ensureWorker(sessionID)
-	worker.updates <- req
+	state := a.ensureState(sessionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	stopTimer(state.idleTimer)
+	state.idleTimer = nil
+	reqCopy := req
+	state.pending = &reqCopy
+	state.scheduleSeq++
+	if state.running {
+		return
+	}
+
+	a.armDebounceTimerLocked(sessionID, state, state.scheduleSeq, req.dueAt)
 }
 
-// ensureWorker 获取或创建指定会话的后台 worker。
-func (a *AutoExtractor) ensureWorker(sessionID string) *autoExtractWorker {
+// ensureState 获取或创建会话级别的调度状态。
+func (a *AutoExtractor) ensureState(sessionID string) *autoExtractState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if worker, ok := a.workers[sessionID]; ok {
-		return worker
+	if state, ok := a.states[sessionID]; ok {
+		return state
 	}
 
-	worker := &autoExtractWorker{
-		updates: make(chan autoExtractRequest, 32),
-	}
-	a.workers[sessionID] = worker
-	go a.runWorker(worker)
-	return worker
+	state := &autoExtractState{}
+	a.states[sessionID] = state
+	return state
 }
 
-// runWorker 串行处理单个会话的调度状态，避免并发提取并支持 trailing extraction。
-func (a *AutoExtractor) runWorker(worker *autoExtractWorker) {
-	var (
-		pending *autoExtractRequest
-		timer   *time.Timer
-		timerCh <-chan time.Time
-		running bool
-		doneCh  = make(chan struct{}, 1)
-	)
+// armDebounceTimerLocked 在持有状态锁时重置会话的防抖定时器。
+func (a *AutoExtractor) armDebounceTimerLocked(
+	sessionID string,
+	state *autoExtractState,
+	seq uint64,
+	dueAt time.Time,
+) {
+	stopTimer(state.timer)
+	wait := time.Until(dueAt)
+	if wait < 0 {
+		wait = 0
+	}
+	state.timer = time.AfterFunc(wait, func() {
+		a.handleDebounce(sessionID, state, seq)
+	})
+}
 
-	for {
-		select {
-		case req := <-worker.updates:
-			if req.skip {
-				pending = nil
-				stopTimer(timer)
-				timer = nil
-				timerCh = nil
-				continue
-			}
+// handleDebounce 在防抖窗口结束后启动一次后台提取。
+func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState, seq uint64) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-			reqCopy := req
-			pending = &reqCopy
-			if running {
-				continue
-			}
+	if state.scheduleSeq != seq || state.running || state.pending == nil {
+		return
+	}
+	if wait := time.Until(state.pending.dueAt); wait > 0 {
+		a.armDebounceTimerLocked(sessionID, state, seq, state.pending.dueAt)
+		return
+	}
 
-			timer = resetTimer(timer, time.Until(req.dueAt))
-			timerCh = timer.C
+	req := *state.pending
+	state.pending = nil
+	state.running = true
+	state.timer = nil
 
-		case <-timerCh:
-			timer = nil
-			timerCh = nil
+	go func() {
+		a.extractAndStore(req.extractor, req.messages)
+		a.handleRunDone(sessionID, state)
+	}()
+}
 
-			for {
-				select {
-				case req := <-worker.updates:
-					if req.skip {
-						pending = nil
-						continue
-					}
-					reqCopy := req
-					pending = &reqCopy
-				default:
-					goto launch
-				}
-			}
+// handleRunDone 在后台提取结束后决定是否执行尾随提取，或安排空闲回收。
+func (a *AutoExtractor) handleRunDone(sessionID string, state *autoExtractState) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-		launch:
-			if running || pending == nil {
-				continue
-			}
-			if wait := time.Until(pending.dueAt); wait > 0 {
-				timer = resetTimer(timer, wait)
-				timerCh = timer.C
-				continue
-			}
+	state.running = false
+	if state.pending != nil {
+		a.armDebounceTimerLocked(sessionID, state, state.scheduleSeq, state.pending.dueAt)
+		return
+	}
 
-			current := *pending
-			pending = nil
-			running = true
+	a.armIdleTimerLocked(sessionID, state)
+}
 
-			go func(req autoExtractRequest) {
-				a.extractAndStore(req.messages)
-				doneCh <- struct{}{}
-			}(current)
+// armIdleTimerLocked 在会话空闲时安排状态回收，避免 map 与 goroutine 长期累积。
+func (a *AutoExtractor) armIdleTimerLocked(sessionID string, state *autoExtractState) {
+	stopTimer(state.idleTimer)
+	state.idleSeq++
+	seq := state.idleSeq
+	state.idleTimer = time.AfterFunc(a.idleTTL, func() {
+		a.handleIdle(sessionID, state, seq)
+	})
+}
 
-		case <-doneCh:
-			running = false
-			if pending == nil {
-				continue
-			}
+// handleIdle 在会话空闲超时后回收状态。
+func (a *AutoExtractor) handleIdle(sessionID string, state *autoExtractState, seq uint64) {
+	state.mu.Lock()
+	if state.idleSeq != seq || state.running || state.pending != nil {
+		state.mu.Unlock()
+		return
+	}
+	state.idleTimer = nil
+	state.mu.Unlock()
 
-			timer = resetTimer(timer, time.Until(pending.dueAt))
-			timerCh = timer.C
-		}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.states[sessionID] == state {
+		delete(a.states, sessionID)
 	}
 }
 
 // extractAndStore 执行提取，并在写入前做本地批次去重和持久化级别的原子去重。
-func (a *AutoExtractor) extractAndStore(messages []providertypes.Message) {
+func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) {
 	ctx := context.Background()
-	entries, err := a.extractor.Extract(ctx, messages)
+	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
 		a.logError("memo: auto extract failed: %v", err)
 		return
@@ -237,19 +270,6 @@ func cloneProviderMessages(messages []providertypes.Message) []providertypes.Mes
 		cloned = append(cloned, cloneProviderMessage(message))
 	}
 	return cloned
-}
-
-// resetTimer 以安全方式重置定时器，避免旧事件污染新的防抖窗口。
-func resetTimer(timer *time.Timer, wait time.Duration) *time.Timer {
-	if wait < 0 {
-		wait = 0
-	}
-	if timer == nil {
-		return time.NewTimer(wait)
-	}
-	stopTimer(timer)
-	timer.Reset(wait)
-	return timer
 }
 
 // stopTimer 停止定时器并在必要时清空通道。

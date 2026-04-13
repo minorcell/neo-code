@@ -14,11 +14,15 @@ import (
 
 // Service 编排记忆的存储、检索、提取和删除，是 memo 子系统对外的统一入口。
 type Service struct {
-	store      Store
-	extractor  Extractor
-	config     config.MemoConfig
-	mu         sync.Mutex
-	sourceInvl func()
+	store                  Store
+	extractor              Extractor
+	config                 config.MemoConfig
+	mu                     sync.Mutex
+	sourceInvl             func()
+	autoExtractIndexMu     sync.Mutex
+	autoExtractIndexReady  bool
+	autoExtractKeysByTopic map[string]string
+	autoExtractKeyRefs     map[string]int
 }
 
 // NewService 创建 memo Service 实例；extractor 可以为 nil。
@@ -50,15 +54,14 @@ func (s *Service) addAutoExtractIfAbsent(ctx context.Context, entry Entry) (bool
 	if err != nil {
 		return false, err
 	}
+	if err := s.ensureAutoExtractIndex(ctx); err != nil {
+		return false, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	duplicate, err := s.hasExactAutoExtractLocked(ctx, entry)
-	if err != nil {
-		return false, err
-	}
-	if duplicate {
+	if s.hasExactAutoExtractLocked(entry) {
 		return false, nil
 	}
 
@@ -90,8 +93,10 @@ func (s *Service) saveEntryLocked(ctx context.Context, entry Entry) error {
 	working := cloneIndex(index)
 
 	replaced := false
+	var previous Entry
 	for i, existing := range working.Entries {
 		if existing.ID == entry.ID {
+			previous = existing
 			working.Entries[i] = entry
 			replaced = true
 			break
@@ -126,28 +131,53 @@ func (s *Service) saveEntryLocked(ctx context.Context, entry Entry) error {
 	for _, topicFile := range topicsToDelete {
 		_ = s.store.DeleteTopic(ctx, topicFile)
 	}
+	if s.autoExtractIndexReady {
+		if replaced {
+			s.removeAutoExtractTopicLocked(previous.TopicFile)
+		}
+		for _, topicFile := range topicsToDelete {
+			s.removeAutoExtractTopicLocked(topicFile)
+		}
+		s.trackAutoExtractEntryLocked(entry)
+	}
 
 	s.invalidateCache()
 	return nil
 }
 
-// hasExactAutoExtractLocked 检查是否已存在完全相同的自动提取记忆。
-func (s *Service) hasExactAutoExtractLocked(ctx context.Context, target Entry) (bool, error) {
-	targetKey := autoExtractDedupKey(target)
-	if targetKey == "" {
-		return false, nil
+// ensureAutoExtractIndex 在锁外预加载自动提取的精确去重索引，避免重复在主锁内扫 topic 文件。
+func (s *Service) ensureAutoExtractIndex(ctx context.Context) error {
+	s.mu.Lock()
+	if s.autoExtractIndexReady {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	s.autoExtractIndexMu.Lock()
+	defer s.autoExtractIndexMu.Unlock()
+
+	s.mu.Lock()
+	if s.autoExtractIndexReady {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	index, err := s.store.LoadIndex(ctx)
+	if err != nil {
+		return fmt.Errorf("memo: load index: %w", err)
 	}
 
-	index, err := s.loadIndexLocked(ctx)
-	if err != nil {
-		return false, err
-	}
+	keysByTopic := make(map[string]string)
+	keyRefs := make(map[string]int)
 	for _, entry := range index.Entries {
-		if strings.TrimSpace(entry.TopicFile) == "" {
+		topicFile := strings.TrimSpace(entry.TopicFile)
+		if topicFile == "" {
 			continue
 		}
 
-		topicContent, err := s.store.LoadTopic(ctx, entry.TopicFile)
+		topicContent, err := s.store.LoadTopic(ctx, topicFile)
 		if err != nil {
 			continue
 		}
@@ -159,11 +189,82 @@ func (s *Service) hasExactAutoExtractLocked(ctx context.Context, target Entry) (
 
 		entry.Source = source
 		entry.Content = content
-		if autoExtractDedupKey(entry) == targetKey {
-			return true, nil
+		key := autoExtractDedupKey(entry)
+		if key == "" {
+			continue
 		}
+
+		keysByTopic[topicFile] = key
+		keyRefs[key]++
 	}
-	return false, nil
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.autoExtractIndexReady {
+		return nil
+	}
+	s.autoExtractKeysByTopic = keysByTopic
+	s.autoExtractKeyRefs = keyRefs
+	s.autoExtractIndexReady = true
+	return nil
+}
+
+// hasExactAutoExtractLocked 检查是否已存在完全相同的自动提取记忆。
+func (s *Service) hasExactAutoExtractLocked(target Entry) bool {
+	targetKey := autoExtractDedupKey(target)
+	if targetKey == "" {
+		return false
+	}
+	return s.autoExtractKeyRefs[targetKey] > 0
+}
+
+// trackAutoExtractEntryLocked 在自动提取索引已就绪时维护单条条目的去重键。
+func (s *Service) trackAutoExtractEntryLocked(entry Entry) {
+	if !s.autoExtractIndexReady {
+		return
+	}
+
+	topicFile := strings.TrimSpace(entry.TopicFile)
+	if topicFile == "" {
+		return
+	}
+	s.removeAutoExtractTopicLocked(topicFile)
+
+	if entry.Source != SourceAutoExtract {
+		return
+	}
+
+	key := autoExtractDedupKey(entry)
+	if key == "" {
+		return
+	}
+
+	s.autoExtractKeysByTopic[topicFile] = key
+	s.autoExtractKeyRefs[key]++
+}
+
+// removeAutoExtractTopicLocked 从精确去重索引中移除指定 topic 的记录。
+func (s *Service) removeAutoExtractTopicLocked(topicFile string) {
+	if !s.autoExtractIndexReady {
+		return
+	}
+
+	topicFile = strings.TrimSpace(topicFile)
+	if topicFile == "" {
+		return
+	}
+
+	key, ok := s.autoExtractKeysByTopic[topicFile]
+	if !ok {
+		return
+	}
+	delete(s.autoExtractKeysByTopic, topicFile)
+
+	if refs := s.autoExtractKeyRefs[key]; refs > 1 {
+		s.autoExtractKeyRefs[key] = refs - 1
+		return
+	}
+	delete(s.autoExtractKeyRefs, key)
 }
 
 // loadIndexLocked 在持有锁的状态下加载索引。
@@ -216,6 +317,11 @@ func (s *Service) Remove(ctx context.Context, keyword string) (int, error) {
 	}
 	for _, topicFile := range topicsToDelete {
 		_ = s.store.DeleteTopic(ctx, topicFile)
+	}
+	if s.autoExtractIndexReady {
+		for _, topicFile := range topicsToDelete {
+			s.removeAutoExtractTopicLocked(topicFile)
+		}
 	}
 
 	s.invalidateCache()

@@ -134,8 +134,8 @@ type ProviderFactory interface {
 // MemoExtractor 定义 runtime 层调用记忆提取的最小能力。
 // 与 memo.Extractor 解耦，避免 runtime 直接依赖 memo 包的具体类型。
 type MemoExtractor interface {
-	// ExtractAndStore 从消息中提取记忆并保存，失败静默处理。
-	Schedule(sessionID string, messages []providertypes.Message, skip bool)
+	// Schedule 从消息中安排一次后台记忆提取，失败静默处理。
+	Schedule(sessionID string, messages []providertypes.Message)
 }
 
 // SetMemoExtractor 设置可选的记忆提取钩子，完成后由 ReAct 循环调用。
@@ -346,8 +346,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		if len(assistant.ToolCalls) == 0 {
 			s.emit(ctx, EventAgentDone, input.RunID, session.ID, assistant)
 			// 异步提取记忆：不影响主循环，失败静默处理。
-			if s.memoExtractor != nil {
-				s.memoExtractor.Schedule(session.ID, cloneMessages(session.Messages), rememberedThisRun)
+			if s.memoExtractor != nil && !rememberedThisRun {
+				s.memoExtractor.Schedule(session.ID, cloneMessages(session.Messages))
 			}
 			return nil
 		}
@@ -785,12 +785,7 @@ func isSuccessfulRememberToolCall(callName string, result tools.ToolResult, exec
 	if execErr != nil || result.IsError {
 		return false
 	}
-
-	toolName := strings.TrimSpace(result.Name)
-	if toolName == "" {
-		toolName = strings.TrimSpace(callName)
-	}
-	return toolName == tools.ToolNameMemoRemember
+	return strings.TrimSpace(callName) == tools.ToolNameMemoRemember
 }
 
 // cloneMessages 深拷贝消息切片，避免后台调度读取到后续运行态修改。

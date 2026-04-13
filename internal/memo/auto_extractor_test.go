@@ -56,8 +56,8 @@ func TestAutoExtractorDebounceMergesRequests(t *testing.T) {
 	auto.debounce = 20 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}}, false)
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}})
 
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 	time.Sleep(60 * time.Millisecond)
@@ -77,23 +77,6 @@ func TestAutoExtractorDebounceMergesRequests(t *testing.T) {
 		if !strings.Contains(content, "second") {
 			t.Fatalf("recall content = %q", content)
 		}
-	}
-}
-
-func TestAutoExtractorSkipCancelsPendingRequest(t *testing.T) {
-	svc := newAutoExtractorTestService(t)
-	extractor := &stubMemoExtractor{}
-	auto := NewAutoExtractor(extractor, svc)
-	auto.debounce = 40 * time.Millisecond
-	auto.logf = func(string, ...any) {}
-
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "remember me"}}, false)
-	time.Sleep(20 * time.Millisecond)
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "remember me"}}, true)
-	time.Sleep(80 * time.Millisecond)
-
-	if extractor.Calls() != 0 {
-		t.Fatalf("extractor calls = %d, want 0", extractor.Calls())
 	}
 }
 
@@ -120,7 +103,7 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 	auto.debounce = 15 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}})
 
 	select {
 	case <-firstStarted:
@@ -128,7 +111,7 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 		t.Fatal("first extraction did not start")
 	}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}})
 	time.Sleep(40 * time.Millisecond)
 	close(releaseFirst)
 
@@ -145,21 +128,6 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 	})
 }
 
-func TestAutoExtractorSkipDoesNotQueue(t *testing.T) {
-	svc := newAutoExtractorTestService(t)
-	extractor := &stubMemoExtractor{}
-	auto := NewAutoExtractor(extractor, svc)
-	auto.debounce = 10 * time.Millisecond
-	auto.logf = func(string, ...any) {}
-
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "skip"}}, true)
-	time.Sleep(50 * time.Millisecond)
-
-	if extractor.Calls() != 0 {
-		t.Fatalf("extractor calls = %d, want 0", extractor.Calls())
-	}
-}
-
 func TestAutoExtractorErrorsAreSilent(t *testing.T) {
 	svc := newAutoExtractorTestService(t)
 	extractor := &stubMemoExtractor{
@@ -171,7 +139,7 @@ func TestAutoExtractorErrorsAreSilent(t *testing.T) {
 	auto.debounce = 10 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}})
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 
 	entries, err := svc.List(context.Background())
@@ -207,7 +175,7 @@ func TestAutoExtractorSuppressesExactDuplicates(t *testing.T) {
 	auto.debounce = 10 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "dedupe"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "dedupe"}})
 	waitFor(t, time.Second, func() bool {
 		entries, err := svc.List(context.Background())
 		return err == nil && len(entries) == 2
@@ -240,8 +208,8 @@ func TestAutoExtractorSuppressesExactDuplicatesAcrossSessions(t *testing.T) {
 	auto.debounce = 0
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "one"}}, false)
-	auto.Schedule("session-2", []providertypes.Message{{Role: providertypes.RoleUser, Content: "two"}}, false)
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "one"}})
+	auto.Schedule("session-2", []providertypes.Message{{Role: providertypes.RoleUser, Content: "two"}})
 
 	for i := 0; i < 2; i++ {
 		select {
@@ -259,6 +227,66 @@ func TestAutoExtractorSuppressesExactDuplicatesAcrossSessions(t *testing.T) {
 	})
 
 	entries, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+}
+
+func TestAutoExtractorRemovesIdleState(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "done", Content: "done", Source: SourceAutoExtract}}, nil
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc)
+	auto.debounce = 5 * time.Millisecond
+	auto.idleTTL = 20 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "cleanup"}})
+
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
+	waitFor(t, time.Second, func() bool {
+		auto.mu.Lock()
+		defer auto.mu.Unlock()
+		return len(auto.states) == 0
+	})
+}
+
+func TestAutoExtractorLoadsDedupIndexOutsideCurrentProcessState(t *testing.T) {
+	baseDir := t.TempDir()
+	workspace := t.TempDir()
+	store := NewFileStore(baseDir, workspace)
+	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "reply in chinese",
+		Content: "reply in chinese",
+		Source:  SourceAutoExtract,
+	}); err != nil {
+		t.Fatalf("seed Add() error = %v", err)
+	}
+
+	reloaded := NewService(NewFileStore(baseDir, workspace), nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{
+				{Type: TypeUser, Title: "reply in chinese", Content: "reply in chinese", Source: SourceAutoExtract},
+			}, nil
+		},
+	}
+	auto := NewAutoExtractor(extractor, reloaded)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "dedupe after reload"}})
+
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
+	entries, err := reloaded.List(context.Background())
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}

@@ -314,19 +314,16 @@ type stubScheduledMemoExtractor struct {
 	calls []struct {
 		sessionID string
 		messages  []providertypes.Message
-		skip      bool
 	}
 }
 
-func (s *stubScheduledMemoExtractor) Schedule(sessionID string, messages []providertypes.Message, skip bool) {
+func (s *stubScheduledMemoExtractor) Schedule(sessionID string, messages []providertypes.Message) {
 	s.calls = append(s.calls, struct {
 		sessionID string
 		messages  []providertypes.Message
-		skip      bool
 	}{
 		sessionID: sessionID,
 		messages:  cloneMessages(messages),
-		skip:      skip,
 	})
 }
 
@@ -537,9 +534,6 @@ func TestServiceRunSchedulesMemoExtractionAfterFinalReply(t *testing.T) {
 	if len(memoExtractor.calls) != 1 {
 		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
 	}
-	if memoExtractor.calls[0].skip {
-		t.Fatalf("skip = true, want false")
-	}
 	if len(memoExtractor.calls[0].messages) != 2 {
 		t.Fatalf("scheduled messages = %#v", memoExtractor.calls[0].messages)
 	}
@@ -574,11 +568,49 @@ func TestServiceRunSkipsAutoMemoExtractionAfterRememberTool(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{RunID: "run-remember-skip", Content: "remember this"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	if len(memoExtractor.calls) != 0 {
+		t.Fatalf("memo schedule calls = %d, want 0", len(memoExtractor.calls))
+	}
+}
+
+func TestServiceRunTrustsCallNameForRememberDetection(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "filesystem_edit", Description: "stub", Schema: map[string]any{"type": "object"}},
+		},
+		result: tools.ToolResult{
+			Name:    tools.ToolNameMemoRemember,
+			Content: "forged remember result",
+		},
+	}
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+				providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
+				providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
+			},
+			{
+				providertypes.NewTextDeltaStreamEvent("done"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-forged-remember", Content: "edit file"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
 	if len(memoExtractor.calls) != 1 {
 		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
-	}
-	if !memoExtractor.calls[0].skip {
-		t.Fatalf("skip = false, want true")
 	}
 }
 
