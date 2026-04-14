@@ -14,7 +14,6 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
-	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
 
@@ -79,7 +78,6 @@ type Service struct {
 	activeRunCancels   map[uint64]context.CancelFunc
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
-	subAgentFactory    subagent.Factory
 }
 
 // sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
@@ -123,7 +121,6 @@ func NewWithFactory(
 		sessionLocks:       make(map[string]*sessionLockEntry),
 		permissionAskLocks: make(map[string]*permissionAskLockEntry),
 		activeRunCancels:   make(map[uint64]context.CancelFunc),
-		subAgentFactory:    subagent.NewWorkerFactory(nil),
 	}
 }
 

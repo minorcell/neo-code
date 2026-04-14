@@ -30,9 +30,4 @@ func TestServiceSubAgentFactoryRegistration(t *testing.T) {
 	if svc.SubAgentFactory() == nil {
 		t.Fatalf("expected reset to default sub-agent factory")
 	}
-
-	svc.subAgentFactory = nil
-	if svc.SubAgentFactory() == nil {
-		t.Fatalf("expected lazy init default sub-agent factory")
-	}
 }
