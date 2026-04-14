@@ -493,6 +493,30 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("encode request failed with nil context", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{writeErr: errors.New("write failed")}, nil
+			},
+			requestIDFn: func() string { return "wake-12-nil" },
+		}
+
+		_, err := dispatcher.Dispatch(nil, DispatchRequest{
+			RawURL: "neocode://review?path=README.md",
+		})
+		if err == nil {
+			t.Fatal("expected encode error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+	})
+
 	t.Run("decode response failed", func(t *testing.T) {
 		dispatcher := &Dispatcher{
 			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
@@ -503,6 +527,30 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 		}
 
 		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+			RawURL: "neocode://review?path=README.md",
+		})
+		if err == nil {
+			t.Fatal("expected decode error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+		}
+	})
+
+	t.Run("decode response failed with nil context", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{readBuffer: bytes.NewBufferString("not-json")}, nil
+			},
+			requestIDFn: func() string { return "wake-13-nil" },
+		}
+
+		_, err := dispatcher.Dispatch(nil, DispatchRequest{
 			RawURL: "neocode://review?path=README.md",
 		})
 		if err == nil {

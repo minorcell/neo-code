@@ -153,9 +153,13 @@ func sanitizeWorkdir(workdir string) (string, error) {
 		return "", nil
 	}
 
-	cleaned := filepath.Clean(workdir)
-	if strings.Contains(cleaned, "..") {
+	if strings.Contains(workdir, "..") {
 		return "", newParseError(ParseErrorCodeUnsafePath, "unsafe workdir path")
+	}
+
+	cleaned := filepath.Clean(workdir)
+	if !filepath.IsAbs(cleaned) {
+		return "", newParseError(ParseErrorCodeUnsafePath, "workdir must be absolute path")
 	}
 	return cleaned, nil
 }

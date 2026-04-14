@@ -4,11 +4,15 @@ import (
 	"errors"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestParseNeoCodeURLSuccess(t *testing.T) {
-	intent, err := ParseNeoCodeURL("neocode://review?path=README.md&session_id=s-1&workdir=/tmp/ws&mode=fast")
+	workdir := testAbsoluteWorkdir()
+	intent, err := ParseNeoCodeURL(
+		"neocode://review?path=README.md&session_id=s-1&workdir=" + url.QueryEscape(workdir) + "&mode=fast",
+	)
 	if err != nil {
 		t.Fatalf("parse neocode url: %v", err)
 	}
@@ -18,8 +22,8 @@ func TestParseNeoCodeURLSuccess(t *testing.T) {
 	if intent.SessionID != "s-1" {
 		t.Fatalf("session_id = %q, want %q", intent.SessionID, "s-1")
 	}
-	if intent.Workdir != filepath.Clean("/tmp/ws") {
-		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean("/tmp/ws"))
+	if intent.Workdir != filepath.Clean(workdir) {
+		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean(workdir))
 	}
 	if got := intent.Params["path"]; got != "README.md" {
 		t.Fatalf("params[path] = %q, want %q", got, "README.md")
@@ -43,12 +47,13 @@ func TestParseNeoCodeURLWithActionInPath(t *testing.T) {
 }
 
 func TestParseNeoCodeURLSanitizesWorkdir(t *testing.T) {
-	intent, err := ParseNeoCodeURL("neocode://review?path=README.md&workdir=/tmp/ws/../project")
+	workdir := testAbsoluteWorkdir() + string(filepath.Separator) + "."
+	intent, err := ParseNeoCodeURL("neocode://review?path=README.md&workdir=" + url.QueryEscape(workdir))
 	if err != nil {
 		t.Fatalf("parse neocode url: %v", err)
 	}
-	if intent.Workdir != filepath.Clean("/tmp/ws/../project") {
-		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean("/tmp/ws/../project"))
+	if intent.Workdir != filepath.Clean(workdir) {
+		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean(workdir))
 	}
 }
 
@@ -83,6 +88,11 @@ func TestParseNeoCodeURLInvalidCases(t *testing.T) {
 			rawURL:   "neocode://review?path=README.md&workdir=../../etc",
 			wantCode: ParseErrorCodeUnsafePath,
 		},
+		{
+			name:     "non absolute workdir path",
+			rawURL:   "neocode://review?path=README.md&workdir=workspace/project",
+			wantCode: ParseErrorCodeUnsafePath,
+		},
 	}
 
 	for _, tt := range tests {
@@ -101,6 +111,13 @@ func TestParseNeoCodeURLInvalidCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testAbsoluteWorkdir() string {
+	if runtime.GOOS == "windows" {
+		return `C:\workspace\neo-code`
+	}
+	return "/tmp/workspace/neo-code"
 }
 
 func TestIsSupportedWakeAction(t *testing.T) {

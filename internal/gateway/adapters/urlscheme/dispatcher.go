@@ -115,7 +115,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	}
 	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(requestFrame); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctx != nil && ctx.Err() != nil {
+			ctxErr := ctx.Err()
 			return DispatchResult{}, toDispatchError(ctxErr)
 		}
 		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request frame: %v", err))
@@ -127,7 +128,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	}
 	decoder := json.NewDecoder(conn)
 	if err := decoder.Decode(&responseFrame); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctx != nil && ctx.Err() != nil {
+			ctxErr := ctx.Err()
 			return DispatchResult{}, toDispatchError(ctxErr)
 		}
 		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response frame: %v", err))
