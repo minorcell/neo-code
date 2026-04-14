@@ -21,8 +21,11 @@ func TestWorkerLifecycleCompleted(t *testing.T) {
 			Done:  true,
 			Output: Output{
 				Summary:     "done",
+				Findings:    []string{"root cause fixed"},
 				Patches:     []string{"a.go"},
+				Risks:       []string{"need integration verify"},
 				NextActions: []string{"run tests"},
+				Artifacts:   []string{"test report"},
 			},
 		}, nil
 	}))
@@ -193,7 +196,17 @@ func TestWorkerFactoryCreate(t *testing.T) {
 
 	factory := NewWorkerFactory(func(role Role, policy RolePolicy) Engine {
 		return EngineFunc(func(ctx context.Context, input StepInput) (StepOutput, error) {
-			return StepOutput{Done: true, Output: Output{Summary: "ok"}}, nil
+			return StepOutput{
+				Done: true,
+				Output: Output{
+					Summary:     "ok",
+					Findings:    []string{"f1"},
+					Patches:     []string{"p1"},
+					Risks:       []string{"r1"},
+					NextActions: []string{"n1"},
+					Artifacts:   []string{"a1"},
+				},
+			}, nil
 		})
 	})
 
@@ -241,5 +254,123 @@ func TestWorkerRejectsInvalidOutputContract(t *testing.T) {
 	}
 	if result.State != StateFailed || result.StopReason != StopReasonError {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestWorkerStartCapabilityPolicyGuard(t *testing.T) {
+	t.Parallel()
+
+	policy, err := DefaultRolePolicy(RoleReviewer)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+
+	w, err := NewWorker(RoleReviewer, policy, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+
+	if err := w.Start(Task{ID: "t-cap", Goal: "goal"}, Budget{}, Capability{
+		AllowedTools: []string{"filesystem_read_file", "bash"},
+	}); err == nil {
+		t.Fatalf("expected disallowed capability tool to fail")
+	}
+
+	w2, err := NewWorker(RoleReviewer, policy, nil)
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	if err := w2.Start(Task{ID: "t-cap-ok", Goal: "goal"}, Budget{}, Capability{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := w2.Stop(StopReasonCanceled); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	result, err := w2.Result()
+	if err != nil {
+		t.Fatalf("Result() error = %v", err)
+	}
+	if len(result.Capability.AllowedTools) != len(policy.AllowedTools) {
+		t.Fatalf("capability tools = %v, want policy tools %v", result.Capability.AllowedTools, policy.AllowedTools)
+	}
+}
+
+func TestWorkerTraceWindow(t *testing.T) {
+	t.Parallel()
+
+	policy, err := DefaultRolePolicy(RoleResearcher)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+
+	var observedTraceLen int
+	w, err := NewWorker(RoleResearcher, policy, EngineFunc(func(ctx context.Context, input StepInput) (StepOutput, error) {
+		observedTraceLen = len(input.Trace)
+		return StepOutput{
+			Done: true,
+			Output: Output{
+				Summary:     "done",
+				Findings:    []string{"f1"},
+				Patches:     []string{"p1"},
+				Risks:       []string{"r1"},
+				NextActions: []string{"n1"},
+				Artifacts:   []string{"a1"},
+			},
+		}, nil
+	}))
+	if err != nil {
+		t.Fatalf("NewWorker() error = %v", err)
+	}
+	impl, ok := w.(*worker)
+	if !ok {
+		t.Fatalf("expected *worker implementation")
+	}
+	impl.trace = make([]string, traceWindowSize+4)
+	for i := range impl.trace {
+		impl.trace[i] = "trace"
+	}
+	impl.state = StateRunning
+	impl.task = Task{ID: "trace", Goal: "goal"}
+	impl.budget = Budget{MaxSteps: 5, Timeout: time.Second}
+	impl.capability = Capability{}
+	impl.startedAt = time.Now()
+
+	if _, err := w.Step(context.Background()); err != nil {
+		t.Fatalf("Step() error = %v", err)
+	}
+	if observedTraceLen != traceWindowSize {
+		t.Fatalf("trace len = %d, want %d", observedTraceLen, traceWindowSize)
+	}
+}
+
+func TestWorkerNilAndValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewWorker(Role("bad"), RolePolicy{}, nil); err == nil {
+		t.Fatalf("expected invalid role error")
+	}
+	if _, err := NewWorker(RoleCoder, RolePolicy{Role: RoleReviewer, SystemPrompt: "p", AllowedTools: []string{"bash"}, RequiredSections: []string{"summary"}}, nil); err == nil {
+		t.Fatalf("expected role mismatch error")
+	}
+
+	var nilWorker *worker
+	if err := nilWorker.Start(Task{}, Budget{}, Capability{}); err == nil {
+		t.Fatalf("expected nil worker start error")
+	}
+	if _, err := nilWorker.Step(context.Background()); err == nil {
+		t.Fatalf("expected nil worker step error")
+	}
+	if err := nilWorker.Stop(StopReasonCanceled); err == nil {
+		t.Fatalf("expected nil worker stop error")
+	}
+	if _, err := nilWorker.Result(); err == nil {
+		t.Fatalf("expected nil worker result error")
+	}
+	if nilWorker.State() != StateIdle {
+		t.Fatalf("nil worker state = %q, want %q", nilWorker.State(), StateIdle)
+	}
+	nilPolicy := nilWorker.Policy()
+	if nilPolicy.Role != "" || nilPolicy.SystemPrompt != "" || len(nilPolicy.AllowedTools) != 0 || len(nilPolicy.RequiredSections) != 0 {
+		t.Fatalf("nil worker policy should be empty, got %+v", nilPolicy)
 	}
 }

@@ -27,6 +27,8 @@ type worker struct {
 	lastErr    string
 }
 
+const traceWindowSize = 16
+
 // NewWorker 根据角色、策略与引擎创建一个 WorkerRuntime 实例。
 func NewWorker(role Role, policy RolePolicy, engine Engine) (WorkerRuntime, error) {
 	if !role.Valid() {
@@ -70,7 +72,11 @@ func (w *worker) Start(task Task, budget Budget, capability Capability) error {
 
 	w.task = task
 	w.budget = budget.normalize(w.policy.DefaultBudget)
-	w.capability = capability.normalize()
+	effectiveCapability, err := bindCapabilityToPolicy(capability.normalize(), w.policy)
+	if err != nil {
+		return err
+	}
+	w.capability = effectiveCapability
 	w.trace = nil
 	w.stepCount = 0
 	w.output = Output{}
@@ -115,13 +121,18 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 		Budget:     w.budget,
 		Capability: w.capability,
 		StepIndex:  w.stepCount + 1,
-		Trace:      append([]string(nil), w.trace...),
+		Trace:      cloneRecentTrace(w.trace, traceWindowSize),
 	}
 	w.mu.Unlock()
 
 	stepOutput, err := w.engine.RunStep(ctx, input)
 	if err != nil {
 		w.mu.Lock()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			result := w.finishLocked(StateCanceled, StopReasonCanceled, Output{}, nil)
+			w.mu.Unlock()
+			return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
+		}
 		result := w.finishLocked(StateFailed, StopReasonError, Output{}, err)
 		w.mu.Unlock()
 		return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
@@ -159,6 +170,48 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 		Step:  w.stepCount,
 		Delta: delta,
 	}, nil
+}
+
+// bindCapabilityToPolicy 将 capability 约束在角色策略允许的工具集合内。
+func bindCapabilityToPolicy(capability Capability, policy RolePolicy) (Capability, error) {
+	allowedPolicyTools := dedupeAndTrim(policy.AllowedTools)
+	allowedSet := make(map[string]struct{}, len(allowedPolicyTools))
+	for _, tool := range allowedPolicyTools {
+		allowedSet[strings.ToLower(strings.TrimSpace(tool))] = struct{}{}
+	}
+
+	if len(capability.AllowedTools) == 0 {
+		capability.AllowedTools = append([]string(nil), allowedPolicyTools...)
+		return capability, nil
+	}
+
+	effective := make([]string, 0, len(capability.AllowedTools))
+	disallowed := make([]string, 0)
+	for _, tool := range capability.AllowedTools {
+		normalized := strings.ToLower(strings.TrimSpace(tool))
+		if _, ok := allowedSet[normalized]; !ok {
+			disallowed = append(disallowed, tool)
+			continue
+		}
+		effective = append(effective, tool)
+	}
+	if len(disallowed) > 0 {
+		return Capability{}, errorsf("capability contains disallowed tools: %s", strings.Join(disallowed, ", "))
+	}
+	capability.AllowedTools = effective
+	return capability, nil
+}
+
+// cloneRecentTrace 复制最近 limit 条 trace，避免每步复制完整历史导致复杂度放大。
+func cloneRecentTrace(trace []string, limit int) []string {
+	if len(trace) == 0 {
+		return nil
+	}
+	if limit <= 0 || len(trace) <= limit {
+		return append([]string(nil), trace...)
+	}
+	start := len(trace) - limit
+	return append([]string(nil), trace[start:]...)
 }
 
 // Stop 主动终止运行中的 worker，并按终止原因映射最终状态。

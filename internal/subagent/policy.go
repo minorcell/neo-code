@@ -33,7 +33,7 @@ func (p RolePolicy) Validate() error {
 	if len(dedupeAndTrim(p.RequiredSections)) == 0 {
 		return errorsf("role policy required sections is empty")
 	}
-	if err := validateOutputContract(p, Output{Summary: "probe"}); err != nil {
+	if _, err := normalizeRequiredSections(p.RequiredSections); err != nil {
 		return err
 	}
 	return nil

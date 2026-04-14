@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"neo-code/internal/subagent"
 )
@@ -125,6 +126,70 @@ func TestServiceRunSubAgentTaskFailureFlows(t *testing.T) {
 			EventSubAgentFailed,
 		})
 	})
+
+	t.Run("context canceled should emit canceled", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewWithFactory(nil, nil, nil, nil, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+			return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+				cancel()
+				<-ctx.Done()
+				return subagent.StepOutput{}, ctx.Err()
+			})
+		}))
+
+		result, err := service.RunSubAgentTask(ctx, SubAgentTaskInput{
+			RunID: "sub-run-canceled",
+			Role:  subagent.RoleReviewer,
+			Task: subagent.Task{
+				ID:   "task-cancel",
+				Goal: "review",
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected canceled error")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
+		if result.State != subagent.StateCanceled {
+			t.Fatalf("result state = %q, want %q", result.State, subagent.StateCanceled)
+		}
+		if result.StopReason != subagent.StopReasonCanceled {
+			t.Fatalf("stop reason = %q, want %q", result.StopReason, subagent.StopReasonCanceled)
+		}
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{
+			EventSubAgentStarted,
+			EventSubAgentProgress,
+			EventSubAgentCanceled,
+		})
+	})
+
+	t.Run("worker start failed by disallowed capability", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewWithFactory(nil, nil, nil, nil, nil)
+		_, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+			RunID: "sub-run-start-failed",
+			Role:  subagent.RoleReviewer,
+			Task: subagent.Task{
+				ID:   "task-start-failed",
+				Goal: "review",
+			},
+			Capability: subagent.Capability{
+				AllowedTools: []string{"bash"},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected start error")
+		}
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{EventSubAgentFailed})
+	})
 }
 
 func TestServiceRunSubAgentTaskInputValidation(t *testing.T) {
@@ -150,5 +215,19 @@ func TestServiceRunSubAgentTaskInputValidation(t *testing.T) {
 		},
 	}); err == nil {
 		t.Fatalf("expected invalid role error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(2 * time.Millisecond)
+	if _, err := service.RunSubAgentTask(ctx, SubAgentTaskInput{
+		RunID: "sub-run-timeout",
+		Role:  subagent.RoleCoder,
+		Task: subagent.Task{
+			ID:   "task-timeout",
+			Goal: "goal",
+		},
+	}); err == nil {
+		t.Fatalf("expected context error")
 	}
 }

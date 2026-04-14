@@ -64,16 +64,28 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 	for {
 		stepResult, stepErr := worker.Step(ctx)
-		_ = s.emit(ctx, EventSubAgentProgress, input.RunID, input.SessionID, SubAgentEventPayload{
-			Role:   input.Role,
-			TaskID: input.Task.ID,
-			State:  stepResult.State,
-			Step:   stepResult.Step,
-			Delta:  stepResult.Delta,
-			Error:  errorText(stepErr),
-		})
+		if stepResult.State == "" {
+			stepResult.State = worker.State()
+		}
+		emitSubAgentProgress(s, input, stepResult, stepErr)
 
 		if stepErr != nil {
+			if errors.Is(stepErr, context.Canceled) || errors.Is(stepErr, context.DeadlineExceeded) {
+				_ = worker.Stop(subagent.StopReasonCanceled)
+				result, resultErr := worker.Result()
+				if resultErr != nil {
+					result = subagent.Result{
+						Role:       input.Role,
+						TaskID:     input.Task.ID,
+						State:      subagent.StateCanceled,
+						StopReason: subagent.StopReasonCanceled,
+						Error:      errorText(stepErr),
+					}
+				}
+				emitSubAgentTerminal(s, ctx, input, result)
+				return result, stepErr
+			}
+
 			result, resultErr := worker.Result()
 			if resultErr != nil {
 				_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
@@ -107,6 +119,27 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 			return result, nil
 		}
 		return result, errors.New(result.Error)
+	}
+}
+
+// emitSubAgentProgress 非阻塞发射进度事件，避免慢消费者反压执行路径。
+func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subagent.StepResult, stepErr error) {
+	payload := SubAgentEventPayload{
+		Role:   input.Role,
+		TaskID: input.Task.ID,
+		State:  stepResult.State,
+		Step:   stepResult.Step,
+		Delta:  stepResult.Delta,
+		Error:  errorText(stepErr),
+	}
+	select {
+	case s.events <- RuntimeEvent{
+		Type:      EventSubAgentProgress,
+		RunID:     input.RunID,
+		SessionID: input.SessionID,
+		Payload:   payload,
+	}:
+	default:
 	}
 }
 
