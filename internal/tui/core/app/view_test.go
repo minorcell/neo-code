@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/lipgloss"
 
+	providertypes "neo-code/internal/provider/types"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -53,7 +55,7 @@ func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing
 	app.applyComponentLayout(false)
 
 	lay := app.computeLayout()
-	wantTranscriptHeight, activityHeight, menuHeight, _ := app.waterfallMetrics(app.transcript.Width, lay.rightHeight)
+	wantTranscriptHeight, activityHeight, menuHeight, _ := app.waterfallMetrics(app.transcript.Width, lay.contentHeight)
 	if app.transcript.Height != wantTranscriptHeight {
 		t.Fatalf("expected transcript height %d, got %d", wantTranscriptHeight, app.transcript.Height)
 	}
@@ -72,5 +74,58 @@ func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing
 	}
 	if inputY != transcriptY+wantTranscriptHeight+activityHeight+menuHeight {
 		t.Fatalf("expected input Y %d, got %d", transcriptY+wantTranscriptHeight+activityHeight+menuHeight, inputY)
+	}
+}
+
+func TestComputeLayoutUsesRenderedHeaderHeight(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 30
+
+	lay := app.computeLayout()
+	header := app.renderHeader(lay.contentWidth)
+	if got := lipgloss.Height(header); got != headerBarHeight {
+		t.Fatalf("expected header height %d, got %d", headerBarHeight, got)
+	}
+	if strings.Contains(header, "\x1b[") {
+		t.Fatalf("expected header to avoid ANSI escapes, got %q", header)
+	}
+}
+
+func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	block, _ := app.renderMessageBlockWithCopy(providertypes.Message{
+		Role:    roleUser,
+		Content: "hello right aligned",
+	}, 72, 1)
+
+	plain := copyCodeANSIPattern.ReplaceAllString(block, "")
+	lines := strings.Split(plain, "\n")
+
+	var (
+		tagLine     string
+		contentLine string
+	)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.Contains(line, messageTagUser) {
+			tagLine = line
+		}
+		if strings.Contains(line, "hello right aligned") {
+			contentLine = line
+		}
+	}
+	if tagLine == "" || contentLine == "" {
+		t.Fatalf("expected user tag and content lines, got %q", plain)
+	}
+
+	tagRightEdge := lipgloss.Width(strings.TrimRight(tagLine, " "))
+	bodyRightEdge := lipgloss.Width(strings.TrimRight(contentLine, " "))
+	if tagRightEdge != bodyRightEdge {
+		t.Fatalf("expected user tag and body right edges to match, got tag=%d body=%d\n%q\n%q", tagRightEdge, bodyRightEdge, tagLine, contentLine)
 	}
 }
