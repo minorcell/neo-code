@@ -247,6 +247,32 @@ func (failingLoader) Load(ctx context.Context) (Snapshot, error) {
 	return Snapshot{}, os.ErrPermission
 }
 
+type flakyLoader struct {
+	calls int
+}
+
+func (l *flakyLoader) Load(ctx context.Context) (Snapshot, error) {
+	l.calls++
+	if l.calls == 1 {
+		return Snapshot{}, os.ErrPermission
+	}
+	return Snapshot{
+		Skills: []Skill{{
+			Descriptor: Descriptor{
+				ID:   "recovered",
+				Name: "Recovered",
+				Source: Source{
+					Kind: SourceKindLocal,
+				},
+				Scope: ScopeExplicit,
+			},
+			Content: Content{
+				Instruction: "ok",
+			},
+		}},
+	}, nil
+}
+
 func TestMemoryRegistryRefreshFailure(t *testing.T) {
 	t.Parallel()
 
@@ -262,6 +288,31 @@ func TestMemoryRegistryRefreshFailure(t *testing.T) {
 	issues := registry.Issues()
 	if len(issues) == 0 || issues[0].Code != IssueRefreshFailed {
 		t.Fatalf("expected refresh failed issue, got %+v", issues)
+	}
+}
+
+func TestMemoryRegistryEnsureLoadedRetriesAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	loader := &flakyLoader{}
+	registry := NewRegistry(loader)
+
+	if _, err := registry.List(context.Background(), ListInput{}); err == nil {
+		t.Fatalf("expected first list error")
+	}
+	if loader.calls != 1 {
+		t.Fatalf("expected 1 load call after first list, got %d", loader.calls)
+	}
+
+	list, err := registry.List(context.Background(), ListInput{})
+	if err != nil {
+		t.Fatalf("expected second list success, got %v", err)
+	}
+	if loader.calls != 2 {
+		t.Fatalf("expected 2 load calls after retry, got %d", loader.calls)
+	}
+	if len(list) != 1 || list[0].ID != "recovered" {
+		t.Fatalf("unexpected list after retry: %+v", list)
 	}
 }
 

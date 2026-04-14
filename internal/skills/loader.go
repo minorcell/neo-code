@@ -14,6 +14,7 @@ import (
 )
 
 const skillFileName = "SKILL.md"
+const defaultMaxSkillFileBytes int64 = 1 << 20
 
 var headingPattern = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+?)\s*$`)
 
@@ -23,8 +24,10 @@ type LocalLoader struct {
 
 	absPath            func(string) (string, error)
 	statPath           func(string) (os.FileInfo, error)
+	lstatPath          func(string) (os.FileInfo, error)
 	readDir            func(string) ([]os.DirEntry, error)
 	readFile           func(string) ([]byte, error)
+	maxFileBytes       int64
 	validateDescriptor func(Descriptor) error
 }
 
@@ -34,8 +37,10 @@ func NewLocalLoader(root string) *LocalLoader {
 		root:               strings.TrimSpace(root),
 		absPath:            filepath.Abs,
 		statPath:           os.Stat,
+		lstatPath:          os.Lstat,
 		readDir:            os.ReadDir,
 		readFile:           os.ReadFile,
+		maxFileBytes:       defaultMaxSkillFileBytes,
 		validateDescriptor: Descriptor.Validate,
 	}
 }
@@ -58,6 +63,10 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 	if statPath == nil {
 		statPath = os.Stat
 	}
+	lstatPath := l.lstatPath
+	if lstatPath == nil {
+		lstatPath = os.Lstat
+	}
 	readDir := l.readDir
 	if readDir == nil {
 		readDir = os.ReadDir
@@ -69,6 +78,10 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 	validateDescriptor := l.validateDescriptor
 	if validateDescriptor == nil {
 		validateDescriptor = Descriptor.Validate
+	}
+	maxFileBytes := l.maxFileBytes
+	if maxFileBytes <= 0 {
+		maxFileBytes = defaultMaxSkillFileBytes
 	}
 
 	absRoot, err := absPath(root)
@@ -119,6 +132,42 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		}
 
 		skillPath := filepath.Join(skillDir, skillFileName)
+		fileInfo, statErr := lstatPath(skillPath)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				snapshot.Issues = append(snapshot.Issues, LoadIssue{
+					Code:    IssueSkillFileMissing,
+					Path:    skillPath,
+					Message: "missing SKILL.md",
+					Err:     statErr,
+				})
+				continue
+			}
+			snapshot.Issues = append(snapshot.Issues, LoadIssue{
+				Code:    IssueReadFailed,
+				Path:    skillPath,
+				Message: "stat skill file failed",
+				Err:     statErr,
+			})
+			continue
+		}
+		if !fileInfo.Mode().IsRegular() {
+			snapshot.Issues = append(snapshot.Issues, LoadIssue{
+				Code:    IssueReadFailed,
+				Path:    skillPath,
+				Message: "skill file is not regular file",
+			})
+			continue
+		}
+		if fileInfo.Size() > maxFileBytes {
+			snapshot.Issues = append(snapshot.Issues, LoadIssue{
+				Code:    IssueReadFailed,
+				Path:    skillPath,
+				Message: fmt.Sprintf("skill file exceeds size limit (%d bytes)", maxFileBytes),
+			})
+			continue
+		}
+
 		data, readErr := readFile(skillPath)
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
@@ -310,14 +359,20 @@ func splitFrontMatter(raw string) (meta string, body string, has bool, err error
 		return "", trimmed, false, nil
 	}
 
-	rest := strings.TrimPrefix(trimmed, "---\n")
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
+	lines := strings.Split(trimmed, "\n")
+	endLine := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			endLine = i
+			break
+		}
+	}
+	if endLine < 0 {
 		return "", "", false, errors.New("frontmatter end marker not found")
 	}
 
-	meta = strings.TrimSpace(rest[:end])
-	body = strings.TrimSpace(rest[end+len("\n---\n"):])
+	meta = strings.TrimSpace(strings.Join(lines[1:endLine], "\n"))
+	body = strings.TrimSpace(strings.Join(lines[endLine+1:], "\n"))
 	return meta, body, true, nil
 }
 

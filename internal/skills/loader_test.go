@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -178,6 +179,114 @@ func TestLocalLoaderLoadBoundaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalLoaderLoadFrontmatterEOF(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkillFile(t, root, "eof-frontmatter", `---
+id: eof-frontmatter
+name: EOF Frontmatter
+---`)
+
+	loader := NewLocalLoader(root)
+	snapshot, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.Skills) != 0 {
+		t.Fatalf("expected no loaded skill, got %d", len(snapshot.Skills))
+	}
+
+	var invalidMetaFound bool
+	var emptyContentFound bool
+	for _, issue := range snapshot.Issues {
+		if issue.Code == IssueInvalidMetadata {
+			invalidMetaFound = true
+		}
+		if issue.Code == IssueEmptyContent {
+			emptyContentFound = true
+		}
+	}
+	if invalidMetaFound {
+		t.Fatalf("unexpected invalid metadata issue, got %+v", snapshot.Issues)
+	}
+	if !emptyContentFound {
+		t.Fatalf("expected empty content issue, got %+v", snapshot.Issues)
+	}
+}
+
+func TestLocalLoaderLoadFileConstraints(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non regular file reports read issue", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		writeSkillFile(t, root, "good", "## Instruction\ngood")
+
+		badDir := filepath.Join(root, "bad")
+		if err := os.MkdirAll(filepath.Join(badDir, skillFileName), 0o755); err != nil {
+			t.Fatalf("mkdir bad skill dir: %v", err)
+		}
+
+		loader := NewLocalLoader(root)
+		snapshot, err := loader.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if len(snapshot.Skills) != 1 {
+			t.Fatalf("expected 1 loaded skill, got %d", len(snapshot.Skills))
+		}
+
+		found := false
+		for _, issue := range snapshot.Issues {
+			if issue.Code == IssueReadFailed && strings.Contains(issue.Message, "not regular") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected non-regular read issue, got %+v", snapshot.Issues)
+		}
+	})
+
+	t.Run("oversized file reports read issue", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		writeSkillFile(t, root, "good", "## Instruction\ngood")
+
+		largeDir := filepath.Join(root, "large")
+		if err := os.MkdirAll(largeDir, 0o755); err != nil {
+			t.Fatalf("mkdir large dir: %v", err)
+		}
+		large := bytes.Repeat([]byte("a"), int(defaultMaxSkillFileBytes)+1)
+		if err := os.WriteFile(filepath.Join(largeDir, skillFileName), large, 0o644); err != nil {
+			t.Fatalf("write large SKILL.md: %v", err)
+		}
+
+		loader := NewLocalLoader(root)
+		snapshot, err := loader.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if len(snapshot.Skills) != 1 {
+			t.Fatalf("expected 1 loaded skill, got %d", len(snapshot.Skills))
+		}
+
+		found := false
+		for _, issue := range snapshot.Issues {
+			if issue.Code == IssueReadFailed && strings.Contains(issue.Message, "size limit") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected oversize read issue, got %+v", snapshot.Issues)
+		}
+	})
 }
 
 func writeSkillFile(t *testing.T, root string, dir string, content string) {

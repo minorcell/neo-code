@@ -42,8 +42,6 @@ func (r *MemoryRegistry) Refresh(ctx context.Context) error {
 	snapshot, err := r.loader.Load(ctx)
 	if err != nil {
 		r.mu.Lock()
-		r.loaded = true
-		r.byID = map[string]Skill{}
 		r.issues = []LoadIssue{{
 			Code:    IssueRefreshFailed,
 			Message: "skills refresh failed",
