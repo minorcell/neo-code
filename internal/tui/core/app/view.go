@@ -17,7 +17,7 @@ type layout struct {
 	contentHeight int
 }
 
-const headerBarHeight = 1
+const headerBarHeight = 2
 
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
@@ -42,32 +42,24 @@ func (a App) View() string {
 }
 
 func (a App) renderHeader(width int) string {
-	status := a.state.StatusText
+	status := compactStatusText(a.state.StatusText, max(18, width/3))
 	if a.state.IsAgentRunning {
 		if a.runProgressKnown {
-			progressBar := a.progress
-			progressBar.Width = tuiutils.Clamp(width/7, 12, 26)
 			progressLabel := tuiutils.Fallback(strings.TrimSpace(a.runProgressLabel), tuiutils.Fallback(status, statusRunning))
-			status = progressBar.ViewAs(a.runProgressValue) + " " + progressLabel
-		} else {
-			status = a.spinner.View() + " " + tuiutils.Fallback(status, statusRunning)
+			percent := int(a.runProgressValue*100 + 0.5)
+			status = fmt.Sprintf("%d%% %s", percent, progressLabel)
+		} else if status != statusThinking {
+			status = tuiutils.Fallback(status, statusRunning)
 		}
 	}
+	status = tuiutils.Fallback(status, statusReady)
 
-	brand := a.styles.headerBrand.Render("NeoCode")
-
-	modelStatus := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		a.styles.badgeUser.Render(a.state.CurrentModel),
-		a.statusBadge(status),
-	)
-
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		brand,
-		modelStatus,
-	)
-	return a.styles.headerBar.Width(width).Height(2).Render(header)
+	model := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentModel), "unknown-model")
+	headerText := fmt.Sprintf("NeoCode | %s | %s", model, status)
+	if lipgloss.Width(headerText) > width {
+		headerText = tuiutils.TrimMiddle(headerText, max(8, width))
+	}
+	return a.styles.headerBar.Width(width).Height(headerBarHeight).Render(headerText)
 }
 
 func (a App) renderBody(lay layout) string {
@@ -98,6 +90,12 @@ func (a App) renderWaterfall(width int, height int) string {
 	transcript := a.styles.streamContent.Width(width).Height(transcriptHeight).Render(a.transcript.View())
 
 	parts := []string{transcript}
+	if a.state.IsAgentRunning && a.state.StatusText == statusThinking {
+		thinkingStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(oliveGray)).
+			Italic(true)
+		parts = append(parts, thinkingStyle.Render("Thinking..."))
+	}
 	if activity := a.renderActivityPreview(width); activity != "" {
 		parts = append(parts, activity)
 	}
@@ -226,8 +224,20 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	} else {
 		contentBlock, copyButtons = a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
 	}
-	parts := []string{tagStyle.Render(tag), contentBlock}
-	block := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	tagLine := tagStyle.Render(tag)
+	blockAlign := lipgloss.Left
+	if message.Role == roleUser {
+		blockAlign = lipgloss.Right
+		rightInset := bodyStyle.GetMarginRight() - tagStyle.GetPaddingRight()
+		if rightInset < 0 {
+			rightInset = 0
+		}
+		if rightInset > 0 {
+			tagLine = tagStyle.Copy().MarginRight(rightInset).Render(tag)
+		}
+	}
+	parts := []string{tagLine, contentBlock}
+	block := lipgloss.JoinVertical(blockAlign, parts...)
 
 	if message.Role == roleUser {
 		return lipgloss.PlaceHorizontal(width, lipgloss.Right, block), nil

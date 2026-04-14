@@ -7,32 +7,29 @@ import (
 )
 
 const (
-	parchment   = "#f5f4ed"
-	ivory       = "#faf9f5"
-	pureWhite   = "#ffffff"
-	warmSand    = "#e8e6dc"
-	darkSurface = "#30302e"
-	deepDark    = "#141413"
+	purpleBg      = "#1a1625"
+	purpleBg2     = "#251f35"
+	purpleSurface = "#352d47"
 
-	anthropicNearBlack = "#141413"
-	terracotta         = "#c96442"
-	coralAccent        = "#d97757"
+	lightText  = "#e8e6f0"
+	lightText2 = "#c8c6d8"
+	midGray    = "#7a7890"
 
-	errorCrimson = "#b53333"
-	focusBlue    = "#3898ec"
+	purpleAccent = "#a78bfa"
+	purpleLight  = "#c4b5fd"
+	coralAccent  = "#f09070"
 
-	charcoalWarm = "#4d4c48"
-	oliveGray    = "#5e5d59"
-	stoneGray    = "#87867f"
-	darkWarm     = "#3d3d3a"
-	warmSilver   = "#b0aea5"
+	errorRed      = "#f87171"
+	successGreen  = "#34d399"
+	warningYellow = "#fbbf24"
 
-	borderCream = "#f0eee6"
-	borderWarm  = "#e8e6dc"
-	borderDark  = "#30302e"
-	ringWarm    = "#d1cfc5"
-	ringSubtle  = "#dedc01"
-	ringDeep    = "#c2c0b6"
+	charcoal   = "#4a4560"
+	oliveGray  = "#6b6588"
+	stoneGray  = "#9089a8"
+	warmSilver = "#a9a4b8"
+
+	borderDark  = "#3d3654"
+	borderLight = "#4a4268"
 )
 
 type styles struct {
@@ -83,96 +80,85 @@ type styles struct {
 }
 
 func newStyles() styles {
+	subtleText := lipgloss.AdaptiveColor{Light: oliveGray, Dark: lightText2}
+	headerAccent := lipgloss.AdaptiveColor{Light: coralAccent, Dark: purpleLight}
+
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(borderWarm)).
-		UnsetBackground().
+		BorderForeground(lipgloss.Color(borderDark)).
 		Padding(0, 1)
 
 	return styles{
 		doc: lipgloss.NewStyle().
 			Padding(1, 2, 0, 2).
-			UnsetBackground().
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			UnsetBackground(),
 		headerBar: lipgloss.NewStyle().
-			UnsetBackground().
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			Underline(true),
+			UnsetBackground(),
 		headerBrand: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(terracotta)).
+			Foreground(headerAccent).
 			UnsetBackground().
 			Padding(0, 1),
 		panel: panel,
 		panelFocused: panel.Copy().
-			BorderForeground(lipgloss.Color(terracotta)),
+			BorderForeground(lipgloss.Color(purpleAccent)),
 		panelTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(lightText)),
 		panelSubtitle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)),
 		panelBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground(),
+			Foreground(lipgloss.Color(lightText)),
 		empty: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(stoneGray)).
+			Foreground(lipgloss.Color(midGray)).
 			Padding(1, 0),
 		sessionRow: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground(),
+			Foreground(lipgloss.Color(lightText)),
 		sessionRowActive: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground(),
+			Foreground(lipgloss.Color(lightText)),
 		sessionRowFocused: lipgloss.NewStyle().
 			Padding(0, 1).
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground().
+			Foreground(lipgloss.Color(lightText)).
 			Bold(true),
 		sessionMeta: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)),
 		sessionMetaActive: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(lightText)),
 		sessionMetaFocus: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(terracotta)),
+			Foreground(lipgloss.Color(purpleAccent)),
 		streamTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(lightText)),
 		streamMeta: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)),
 		streamContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground(),
-		messageUserTag:  tagStyle(charcoalWarm),
-		messageAgentTag: tagStyle(terracotta),
+			Foreground(lipgloss.Color(lightText)),
+		messageUserTag:  tagStyle(purpleAccent),
+		messageAgentTag: tagStyle(purpleLight),
 		messageBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)).
-			UnsetBackground().
+			Foreground(lipgloss.Color(lightText2)).
 			MarginLeft(2),
 		messageUserBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(terracotta)).
-			UnsetBackground().
+			Foreground(lipgloss.Color(purpleAccent)).
 			Bold(true).
-			MarginRight(2),
+			MarginRight(8),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)).
-			UnsetBackground().
 			Italic(true),
 		inlineError: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(errorCrimson)).
-			UnsetBackground().
+			Foreground(lipgloss.Color(errorRed)).
 			Bold(true),
 		inlineSystem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(oliveGray)).
-			UnsetBackground(),
+			Foreground(lipgloss.Color(oliveGray)),
 		codeBlock: lipgloss.NewStyle().
 			MarginLeft(1).
-			Padding(0, 0).
+			Padding(1, 0).
 			UnsetBackground().
 			Border(lipgloss.NormalBorder()).
 			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(borderDark)),
+			BorderForeground(lipgloss.Color(borderLight)),
 		codeText: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(warmSilver)),
 		codeCopyButton: lipgloss.NewStyle().
@@ -180,41 +166,37 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(coralAccent)).
 			Underline(true),
 		commandMenu: lipgloss.NewStyle().
-			UnsetBackground().
-			Padding(1, 1),
+			MarginTop(1),
 		commandMenuTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(terracotta)),
+			Foreground(lipgloss.Color(purpleAccent)),
 		commandUsage: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(lightText)),
 		commandUsageMatch: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(terracotta)),
+			Foreground(lipgloss.Color(purpleAccent)),
 		commandDesc: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)),
 		inputPrefix: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(terracotta)).
+			Foreground(lipgloss.Color(purpleAccent)).
 			Bold(true),
 		inputLine: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(lightText)),
 		inputBox: lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(borderWarm)).
-			UnsetBackground().
+			BorderForeground(lipgloss.Color(borderDark)).
 			Padding(0, 1),
 		inputBoxFocused: lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(focusBlue)).
-			UnsetBackground().
+			BorderForeground(lipgloss.Color(purpleAccent)).
 			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(oliveGray)).
-			UnsetBackground(),
-		badgeUser:    badge("", charcoalWarm),
+			Foreground(subtleText),
+		badgeUser:    badge("", purpleAccent),
 		badgeAgent:   badge("", coralAccent),
-		badgeSuccess: badge("", oliveGray),
-		badgeWarning: badge("", charcoalWarm),
-		badgeError:   badge("", errorCrimson),
+		badgeSuccess: badge("", successGreen),
+		badgeWarning: badge("", warningYellow),
+		badgeError:   badge("", errorRed),
 		badgeMuted:   badge("", stoneGray),
 	}
 }
@@ -223,7 +205,6 @@ func tagStyle(fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).
-		UnsetBackground().
 		Padding(0, 1)
 }
 
@@ -231,7 +212,6 @@ func badge(bg string, fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).
-		UnsetBackground().
 		Padding(0, 1)
 }
 
