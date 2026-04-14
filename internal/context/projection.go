@@ -17,14 +17,7 @@ const (
 func ProjectToolMessagesForModel(messages []providertypes.Message) []providertypes.Message {
 	for i := range messages {
 		message := messages[i]
-		if message.Role != providertypes.RoleTool {
-			continue
-		}
-		if len(message.ToolMetadata) == 0 {
-			continue
-		}
-		content := strings.TrimSpace(message.Content)
-		if content == "" || content == microCompactClearedMessage {
+		if !isProjectableToolMessage(message) {
 			continue
 		}
 		messages[i].Content = tools.FormatToolMessageForModel(message)
@@ -109,13 +102,14 @@ func matchedToolCallSpan(messages []providertypes.Message, assistantIndex int) [
 		return nil
 	}
 
-	matched := make(map[string]int, len(required))
+	matched := make(map[string]struct{}, len(required))
+	toolIndexes := make([]int, 0, len(required))
 	for index := assistantIndex + 1; index < len(messages); index++ {
 		toolMessage := messages[index]
 		if toolMessage.Role != providertypes.RoleTool {
 			break
 		}
-		if !isInjectableToolMessage(toolMessage) {
+		if !isProjectableToolMessage(toolMessage) {
 			continue
 		}
 
@@ -126,26 +120,23 @@ func matchedToolCallSpan(messages []providertypes.Message, assistantIndex int) [
 		if _, exists := matched[callID]; exists {
 			continue
 		}
-		matched[callID] = index
+		matched[callID] = struct{}{}
+		toolIndexes = append(toolIndexes, index)
 	}
 
 	if len(matched) != len(required) {
 		return nil
 	}
 
-	span := make([]int, 0, len(matched)+1)
+	span := make([]int, 0, len(toolIndexes)+1)
 	span = append(span, assistantIndex)
-	for index := assistantIndex + 1; index < len(messages); index++ {
-		toolMessage := messages[index]
-		if toolMessage.Role != providertypes.RoleTool {
-			break
-		}
-		callID := strings.TrimSpace(toolMessage.ToolCallID)
-		if matchedIndex, ok := matched[callID]; ok && matchedIndex == index {
-			span = append(span, index)
-		}
-	}
+	span = append(span, toolIndexes...)
 	return span
+}
+
+// isProjectableToolMessage 判断 tool 消息是否满足“可注入且可投影”条件。
+func isProjectableToolMessage(message providertypes.Message) bool {
+	return isInjectableToolMessage(message) && len(message.ToolMetadata) > 0
 }
 
 // isInjectableToolMessage 判断 tool 消息是否仍适合作为模型可见上下文继续注入。
@@ -190,7 +181,7 @@ func sanitizeProjectedToolContent(content string) string {
 
 	index := strings.Index(content, contentMarker)
 	if index < 0 {
-		return content
+		return sanitizeRawToolContent(content)
 	}
 
 	prefix := strings.TrimRight(content[:index], "\n")
@@ -205,6 +196,23 @@ func sanitizeProjectedToolContent(content string) string {
 		lines = append(lines, "[content truncated for memo extraction]")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sanitizeRawToolContent 对未命中投影标记的 tool 文本做保底摘要化，避免透传完整原始输出。
+func sanitizeRawToolContent(content string) string {
+	body := strings.TrimSpace(content)
+	if body == "" {
+		return ""
+	}
+	limited, truncated := truncateUTF8(body, recentWindowToolContentCharLimit)
+	if !truncated {
+		return body
+	}
+	return strings.Join([]string{
+		"content_excerpt:",
+		limited,
+		"[content truncated for memo extraction]",
+	}, "\n")
 }
 
 // truncateUTF8 按 rune 数量截断字符串，返回截断后的文本及是否发生截断。

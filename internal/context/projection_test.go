@@ -59,16 +59,38 @@ func TestProjectToolMessagesForModelSkipsMessagesThatCannotBeProjected(t *testin
 func TestBuildRecentMessagesForModelBoundaries(t *testing.T) {
 	t.Parallel()
 
-	if got := BuildRecentMessagesForModel(nil, 10); got != nil {
-		t.Fatalf("expected nil for empty messages, got %+v", got)
+	tests := []struct {
+		name     string
+		messages []providertypes.Message
+		limit    int
+	}{
+		{
+			name:     "empty messages",
+			messages: nil,
+			limit:    10,
+		},
+		{
+			name:     "non-positive limit",
+			messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}},
+			limit:    0,
+		},
+		{
+			name: "no keepable anchor",
+			messages: []providertypes.Message{
+				{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan"},
+			},
+			limit: 10,
+		},
 	}
-	if got := BuildRecentMessagesForModel([]providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}}, 0); got != nil {
-		t.Fatalf("expected nil for non-positive limit, got %+v", got)
-	}
-	if got := BuildRecentMessagesForModel([]providertypes.Message{
-		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan"},
-	}, 10); got != nil {
-		t.Fatalf("expected nil when no keepable anchor exists, got %+v", got)
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := BuildRecentMessagesForModel(tt.messages, tt.limit); got != nil {
+				t.Fatalf("expected nil, got %+v", got)
+			}
+		})
 	}
 }
 
@@ -132,11 +154,11 @@ func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) 
 				{ID: "call-5", Name: "bash", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "one"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "two"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "three"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "four"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: "five"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "one", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "two", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "three", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "four", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: "five", ToolMetadata: map[string]string{"tool_name": "bash"}},
 	}
 
 	messages := []providertypes.Message{
@@ -210,11 +232,11 @@ func TestMatchedToolCallSpanRequiresInjectableResponsesAndSkipsDuplicates(t *tes
 				{ID: "call-2", Name: "filesystem_read_file", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: ""},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "first result"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "duplicate result"},
-		{Role: providertypes.RoleTool, ToolCallID: "ignored", Content: "ignored result"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "second result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "first result", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "duplicate result", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "ignored", Content: "ignored result", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "second result", ToolMetadata: map[string]string{"tool_name": "filesystem_read_file"}},
 		{Role: providertypes.RoleUser, Content: "after"},
 	}
 
@@ -224,6 +246,24 @@ func TestMatchedToolCallSpanRequiresInjectableResponsesAndSkipsDuplicates(t *tes
 	}
 	if span[0] != 0 || span[1] != 2 || span[2] != 5 {
 		t.Fatalf("unexpected span indexes %+v", span)
+	}
+}
+
+func TestMatchedToolCallSpanRejectsResponsesWithoutProjectionMetadata(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "raw result"},
+	}
+
+	if span := matchedToolCallSpan(messages, 0); span != nil {
+		t.Fatalf("expected nil span when tool metadata is missing, got %+v", span)
 	}
 }
 
@@ -265,5 +305,18 @@ func TestIsInjectableToolMessage(t *testing.T) {
 				t.Fatalf("isInjectableToolMessage() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSanitizeProjectedToolContentFallsBackForRawPayload(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Repeat("x", recentWindowToolContentCharLimit+10)
+	sanitized := sanitizeProjectedToolContent(raw)
+	if !strings.Contains(sanitized, "content_excerpt:") {
+		t.Fatalf("expected raw payload to be excerpted, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
+		t.Fatalf("expected truncation marker, got %q", sanitized)
 	}
 }

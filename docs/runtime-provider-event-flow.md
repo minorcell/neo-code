@@ -44,8 +44,9 @@
 - 调度时会绑定当次 provider/model 快照，后台任务不会重新读取全局当前配置，避免把历史会话消息发送到后续切换后的 provider。
 - 自动提取失败只记日志，不额外发出 TUI 事件，也不影响主链路完成。
 - `memo` 的最近消息窗口会复用 `internal/context` 的只读投影规则，只保留 provider-safe 的消息序列。
-- assistant 含 `tool_calls` 时，只有在窗口内能同时保留对应 `tool` 响应时才会注入；缺响应的 assistant/tool 片段会整组丢弃。
-- 保留的 `tool` 消息会先投影为模型可消费的结构化文本；空内容和已被 micro compact 清空的旧工具结果不会进入提取窗口。
+- assistant 含 `tool_calls` 时，只有在窗口内能同时保留对应 `tool` 响应时才会注入；缺响应、空内容或已被 micro compact 清空的 assistant/tool 片段会整组丢弃，保留项会先投影为模型可消费的结构化文本。
+- recent window 的总消息数有硬预算：`min(limit*2, 24)`；超过预算的整段 tool span 会被跳过，避免窗口体积失控。
+- 进入 `memo` 提取前，tool 文本会二次收敛为 `content_excerpt`，并按 `600` rune 上限截断。
 
 补充约束：
 - 同一 turn 内的 provider retry 只重放冻结后的 turn 快照，不会重新读取配置。
