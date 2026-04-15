@@ -276,13 +276,9 @@ func mapJSONRPCCodeToDispatchCode(code int) string {
 }
 
 // decodeResponseFrameResult 将 JSON-RPC result 安全解码回 MessageFrame。
-func decodeResponseFrameResult(result any) (gateway.MessageFrame, error) {
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return gateway.MessageFrame{}, err
-	}
+func decodeResponseFrameResult(result json.RawMessage) (gateway.MessageFrame, error) {
 	var frame gateway.MessageFrame
-	if err := json.Unmarshal(raw, &frame); err != nil {
+	if err := json.Unmarshal(result, &frame); err != nil {
 		return gateway.MessageFrame{}, err
 	}
 	return frame, nil

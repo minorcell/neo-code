@@ -23,6 +23,21 @@ func TestNormalizeJSONRPCRequestPing(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestPingWithNumericID(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`123`),
+		Method:  MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize ping request with numeric id: %v", rpcErr)
+	}
+	if normalized.RequestID != "123" {
+		t.Fatalf("request_id = %q, want %q", normalized.RequestID, "123")
+	}
+}
+
 func TestNormalizeJSONRPCRequestWakeOpenURL(t *testing.T) {
 	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
@@ -77,6 +92,36 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			request: JSONRPCRequest{
 				JSONRPC: "1.0",
 				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayPing,
+			},
+			wantCode:        JSONRPCCodeInvalidRequest,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "invalid id object",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`{}`),
+				Method:  MethodGatewayPing,
+			},
+			wantCode:        JSONRPCCodeInvalidRequest,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "invalid id array",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`[]`),
+				Method:  MethodGatewayPing,
+			},
+			wantCode:        JSONRPCCodeInvalidRequest,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "invalid id boolean",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`true`),
 				Method:  MethodGatewayPing,
 			},
 			wantCode:        JSONRPCCodeInvalidRequest,
@@ -142,15 +187,36 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 }
 
 func TestJSONRPCHelpers(t *testing.T) {
-	response := NewJSONRPCResultResponse(json.RawMessage(`"req-1"`), map[string]string{"message": "ok"})
+	response, rpcErr := NewJSONRPCResultResponse(json.RawMessage(`"req-1"`), map[string]string{"message": "ok"})
+	if rpcErr != nil {
+		t.Fatalf("new jsonrpc result response: %v", rpcErr)
+	}
 	if response.JSONRPC != JSONRPCVersion {
 		t.Fatalf("jsonrpc = %q, want %q", response.JSONRPC, JSONRPCVersion)
 	}
 	if string(response.ID) != `"req-1"` {
 		t.Fatalf("id = %s, want %s", response.ID, `"req-1"`)
 	}
+	var result map[string]string
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("decode result raw message: %v", err)
+	}
+	if result["message"] != "ok" {
+		t.Fatalf(`result["message"] = %q, want %q`, result["message"], "ok")
+	}
 
-	rpcErr := NewJSONRPCError(JSONRPCCodeInternalError, "boom", GatewayCodeInternalError)
+	_, rpcErr = NewJSONRPCResultResponse(json.RawMessage(`"req-chan"`), map[string]any{"bad": make(chan int)})
+	if rpcErr == nil {
+		t.Fatal("expected result encode error")
+	}
+	if rpcErr.Code != JSONRPCCodeInternalError {
+		t.Fatalf("rpc code = %d, want %d", rpcErr.Code, JSONRPCCodeInternalError)
+	}
+	if gatewayCode := GatewayCodeFromJSONRPCError(rpcErr); gatewayCode != GatewayCodeInternalError {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, GatewayCodeInternalError)
+	}
+
+	rpcErr = NewJSONRPCError(JSONRPCCodeInternalError, "boom", GatewayCodeInternalError)
 	errorResponse := NewJSONRPCErrorResponse(json.RawMessage(`"req-2"`), rpcErr)
 	if errorResponse.Error == nil {
 		t.Fatal("error response should include rpc error payload")

@@ -88,6 +88,12 @@ func isSafeReviewPath(path string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if filepath.VolumeName(trimmed) != "" {
+		return false
+	}
+	if hasBlockedWindowsPathPrefix(trimmed) {
+		return false
+	}
 	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "\\") {
 		return false
 	}
@@ -102,6 +108,12 @@ func isSafeReviewPath(path string) bool {
 		return false
 	}
 	return true
+}
+
+// hasBlockedWindowsPathPrefix 检查是否命中 Windows 底层设备路径前缀，避免绕过常规路径校验。
+func hasBlockedWindowsPathPrefix(path string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(path), "/", "\\")
+	return strings.HasPrefix(normalized, `\\?\`) || strings.HasPrefix(normalized, `\\.\`)
 }
 
 // containsParentTraversalSegment 按路径段语义识别目录回退段，避免子串匹配导致误伤。

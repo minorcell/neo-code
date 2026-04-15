@@ -60,7 +60,7 @@ type JSONRPCRequest struct {
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
 }
 
@@ -137,13 +137,22 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 	}
 }
 
-// NewJSONRPCResultResponse 创建 JSON-RPC 成功响应。
-func NewJSONRPCResultResponse(id json.RawMessage, result any) JSONRPCResponse {
+// NewJSONRPCResultResponse 创建 JSON-RPC 成功响应，并将 result 编码为 RawMessage。
+func NewJSONRPCResultResponse(id json.RawMessage, result any) (JSONRPCResponse, *JSONRPCError) {
+	rawResult, err := json.Marshal(result)
+	if err != nil {
+		return JSONRPCResponse{}, NewJSONRPCError(
+			JSONRPCCodeInternalError,
+			"failed to encode jsonrpc result",
+			GatewayCodeInternalError,
+		)
+	}
+
 	return JSONRPCResponse{
 		JSONRPC: JSONRPCVersion,
 		ID:      cloneJSONRawMessage(id),
-		Result:  result,
-	}
+		Result:  json.RawMessage(rawResult),
+	}, nil
 }
 
 // NewJSONRPCErrorResponse 创建 JSON-RPC 错误响应。
@@ -204,35 +213,44 @@ func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
 		)
 	}
 
-	if trimmed[0] == '"' {
-		var decoded string
-		if err := json.Unmarshal(trimmed, &decoded); err != nil {
-			return "", NewJSONRPCError(
-				JSONRPCCodeInvalidRequest,
-				"invalid field: id",
-				GatewayCodeInvalidFrame,
-			)
-		}
-		decoded = strings.TrimSpace(decoded)
-		if decoded == "" {
-			return "", NewJSONRPCError(
-				JSONRPCCodeInvalidRequest,
-				"invalid field: id",
-				GatewayCodeInvalidFrame,
-			)
-		}
-		return decoded, nil
-	}
-
-	identifier := strings.TrimSpace(string(trimmed))
-	if identifier == "" {
+	var decoded any
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
 		return "", NewJSONRPCError(
 			JSONRPCCodeInvalidRequest,
 			"invalid field: id",
 			GatewayCodeInvalidFrame,
 		)
 	}
-	return identifier, nil
+
+	switch typedID := decoded.(type) {
+	case string:
+		typedID = strings.TrimSpace(typedID)
+		if typedID == "" {
+			return "", NewJSONRPCError(
+				JSONRPCCodeInvalidRequest,
+				"invalid field: id",
+				GatewayCodeInvalidFrame,
+			)
+		}
+		return typedID, nil
+	case float64:
+		identifier := strings.TrimSpace(string(trimmed))
+		if identifier == "" {
+			return "", NewJSONRPCError(
+				JSONRPCCodeInvalidRequest,
+				"invalid field: id",
+				GatewayCodeInvalidFrame,
+			)
+		}
+		_ = typedID
+		return identifier, nil
+	default:
+		return "", NewJSONRPCError(
+			JSONRPCCodeInvalidRequest,
+			"invalid field: id",
+			GatewayCodeInvalidFrame,
+		)
+	}
 }
 
 // decodeWakeIntentParams 对 wake.openUrl 的 params 执行延迟反序列化与最小校验。

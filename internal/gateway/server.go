@@ -386,7 +386,11 @@ func (s *Server) dispatchRPCRequest(
 
 	responseFrame := s.dispatchFrame(ctx, frame, runtimePort)
 	if responseFrame.Type != FrameTypeError {
-		return protocol.NewJSONRPCResultResponse(normalized.ID, responseFrame)
+		rpcResponse, encodeErr := protocol.NewJSONRPCResultResponse(normalized.ID, responseFrame)
+		if encodeErr != nil {
+			return protocol.NewJSONRPCErrorResponse(normalized.ID, encodeErr)
+		}
+		return rpcResponse
 	}
 
 	frameErr := responseFrame.Error

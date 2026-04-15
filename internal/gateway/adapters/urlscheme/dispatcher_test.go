@@ -54,14 +54,14 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 		if err := encoder.Encode(protocol.JSONRPCResponse{
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      rpcRequest.ID,
-			Result: gateway.MessageFrame{
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
 				Type:      gateway.FrameTypeAck,
 				Action:    gateway.FrameActionWakeOpenURL,
 				RequestID: "wake-1",
 				Payload: map[string]any{
 					"message": "wake intent accepted",
 				},
-			},
+			}),
 		}); err != nil {
 			t.Errorf("encode response rpc: %v", err)
 		}
@@ -149,11 +149,11 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 		_ = encoder.Encode(protocol.JSONRPCResponse{
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      rpcRequest.ID,
-			Result: gateway.MessageFrame{
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
 				Type:      gateway.FrameTypeEvent,
 				Action:    gateway.FrameActionWakeOpenURL,
 				RequestID: "wake-3",
-			},
+			}),
 		})
 	}()
 
@@ -193,11 +193,11 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 		_ = encoder.Encode(protocol.JSONRPCResponse{
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      rpcRequest.ID,
-			Result: gateway.MessageFrame{
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
 				Type:      gateway.FrameTypeAck,
 				Action:    gateway.FrameActionWakeOpenURL,
 				RequestID: "wake-mismatch",
-			},
+			}),
 		})
 	}()
 
@@ -795,11 +795,11 @@ func TestDispatcherJSONRPCHelpers(t *testing.T) {
 		t.Fatal("unknown rpc code should map to internal_error")
 	}
 
-	if _, err := decodeResponseFrameResult(map[string]any{"bad": make(chan int)}); err == nil {
-		t.Fatal("expected decodeResponseFrameResult marshal failure")
-	}
-	if _, err := decodeResponseFrameResult("not-frame"); err == nil {
+	if _, err := decodeResponseFrameResult(json.RawMessage(`"not-frame"`)); err == nil {
 		t.Fatal("expected decodeResponseFrameResult unmarshal failure")
+	}
+	if _, err := decodeResponseFrameResult(json.RawMessage(`{"type":"ack","action":"wake.openUrl","request_id":"x"`)); err == nil {
+		t.Fatal("expected decodeResponseFrameResult malformed json failure")
 	}
 
 	if _, err := marshalJSONRawMessage(make(chan int)); err == nil {
@@ -867,4 +867,14 @@ func (a stubDispatchAddr) Network() string {
 
 func (a stubDispatchAddr) String() string {
 	return string(a)
+}
+
+func mustMarshalRawJSON(t *testing.T, payload any) json.RawMessage {
+	t.Helper()
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal raw json: %v", err)
+	}
+	return json.RawMessage(raw)
 }

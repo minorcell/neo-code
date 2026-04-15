@@ -203,12 +203,8 @@ func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, 
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")
 	}
-	raw, err := json.Marshal(response.Result)
-	if err != nil {
-		return MessageFrame{}, err
-	}
 	var frame MessageFrame
-	if err := json.Unmarshal(raw, &frame); err != nil {
+	if err := json.Unmarshal(response.Result, &frame); err != nil {
 		return MessageFrame{}, err
 	}
 	return frame, nil
