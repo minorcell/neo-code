@@ -6,6 +6,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 )
 
@@ -21,6 +22,8 @@ type runState struct {
 	compactApplied          bool
 	reactiveCompactAttempts int
 	rememberedThisRun       bool
+	turn                    int
+	phase                   controlplane.Phase
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
