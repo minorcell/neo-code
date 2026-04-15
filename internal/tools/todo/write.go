@@ -116,43 +116,43 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) error {
 		return call.SessionMutator.ReplaceTodos(input.Items)
 	case actionAdd:
 		if input.Item == nil {
-			return fmt.Errorf("todo_write: action %q requires item", actionAdd)
+			return fmt.Errorf("%w: action %q requires item", errTodoInvalidArguments, actionAdd)
 		}
 		return call.SessionMutator.AddTodo(*input.Item)
 	case actionUpdate:
 		if input.ID == "" || input.Patch == nil {
-			return fmt.Errorf("todo_write: action %q requires id and patch", actionUpdate)
+			return fmt.Errorf("%w: action %q requires id and patch", errTodoInvalidArguments, actionUpdate)
 		}
 		return call.SessionMutator.UpdateTodo(input.ID, input.Patch.toSessionPatch(), input.ExpectedRevision)
 	case actionSetStatus:
 		if input.ID == "" {
-			return fmt.Errorf("todo_write: action %q requires id", actionSetStatus)
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionSetStatus)
 		}
 		if !input.Status.Valid() {
-			return fmt.Errorf("todo_write: action %q requires valid status", actionSetStatus)
+			return fmt.Errorf("%w: action %q requires valid status", errTodoInvalidArguments, actionSetStatus)
 		}
 		return call.SessionMutator.SetTodoStatus(input.ID, input.Status, input.ExpectedRevision)
 	case actionRemove:
 		if input.ID == "" {
-			return fmt.Errorf("todo_write: action %q requires id", actionRemove)
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionRemove)
 		}
 		return call.SessionMutator.DeleteTodo(input.ID)
 	case actionClaim:
 		if input.ID == "" {
-			return fmt.Errorf("todo_write: action %q requires id", actionClaim)
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionClaim)
 		}
 		if strings.TrimSpace(input.OwnerType) == "" || strings.TrimSpace(input.OwnerID) == "" {
-			return fmt.Errorf("todo_write: action %q requires owner_type and owner_id", actionClaim)
+			return fmt.Errorf("%w: action %q requires owner_type and owner_id", errTodoInvalidArguments, actionClaim)
 		}
 		return call.SessionMutator.ClaimTodo(input.ID, input.OwnerType, input.OwnerID, input.ExpectedRevision)
 	case actionComplete:
 		if input.ID == "" {
-			return fmt.Errorf("todo_write: action %q requires id", actionComplete)
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionComplete)
 		}
 		return call.SessionMutator.CompleteTodo(input.ID, input.Artifacts, input.ExpectedRevision)
 	case actionFail:
 		if input.ID == "" {
-			return fmt.Errorf("todo_write: action %q requires id", actionFail)
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionFail)
 		}
 		return call.SessionMutator.FailTodo(input.ID, input.Reason, input.ExpectedRevision)
 	default:

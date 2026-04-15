@@ -289,6 +289,11 @@ func TestToolExecuteReasonMapping(t *testing.T) {
 			wantReason: reasonTodoNotFound,
 		},
 		{
+			name:       "invalid arguments from dispatch",
+			input:      newMutator(`{"action":"update","id":"a"}`),
+			wantReason: reasonInvalidArguments,
+		},
+		{
 			name:  "invalid transition",
 			input: newMutator(`{"action":"complete","id":"a","expected_revision":1}`),
 			prepare: func(m *stubMutator) error {
@@ -346,6 +351,30 @@ func TestParseInput(t *testing.T) {
 	_, err = parseInput([]byte(`{`))
 	if err == nil {
 		t.Fatalf("parseInput() expected error for invalid json")
+	}
+
+	tooLong := strings.Repeat("x", maxTodoWriteTextLen+1)
+	_, err = parseInput([]byte(`{"action":"add","item":{"id":"a","content":"` + tooLong + `"}}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+		t.Fatalf("parseInput() expected invalid arguments for too long content, err=%v", err)
+	}
+
+	items := make([]string, maxTodoWriteItems+1)
+	for idx := range items {
+		items[idx] = `{"id":"t` + string(rune('a'+(idx%26))) + `","content":"ok"}`
+	}
+	_, err = parseInput([]byte(`{"action":"plan","items":[` + strings.Join(items, ",") + `]}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+		t.Fatalf("parseInput() expected invalid arguments for too many items, err=%v", err)
+	}
+
+	tooManyDeps := make([]string, maxTodoWriteListItems+1)
+	for idx := range tooManyDeps {
+		tooManyDeps[idx] = `"dep"`
+	}
+	_, err = parseInput([]byte(`{"action":"add","item":{"id":"a","content":"x","dependencies":[` + strings.Join(tooManyDeps, ",") + `]}}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+		t.Fatalf("parseInput() expected invalid arguments for too many dependencies, err=%v", err)
 	}
 }
 
