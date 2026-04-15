@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,15 +35,21 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	}
 
 	var promptInjected bool
+	var signatureSeq int32
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				seq := atomic.AddInt32(&signatureSeq, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
 					promptInjected = true
 				}
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
-				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_err", "{}")
+				events <- providertypes.NewToolCallDeltaStreamEvent(
+					0,
+					"call_err",
+					`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
+				)
 				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
 				return nil
 			},
@@ -76,19 +83,7 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	events := collectRuntimeEvents(service.Events())
 
 	// Verify StopReason is error and specifies the streak limit
-	assertEventContains(t, events, EventStopReasonDecided)
-
-	for _, e := range events {
-		if e.Type == EventStopReasonDecided {
-			payload := e.Payload.(StopReasonDecidedPayload)
-			if payload.Reason != controlplane.StopReasonError {
-				t.Errorf("expected StopReasonError, got %s", payload.Reason)
-			}
-			if payload.Detail != ErrNoProgressStreakLimit.Error() {
-				t.Errorf("expected detail to be %q, got %q", ErrNoProgressStreakLimit.Error(), payload.Detail)
-			}
-		}
-	}
+	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrNoProgressStreakLimit.Error())
 
 	if !promptInjected {
 		t.Error("expected self-healing prompt to be injected before streak limit is reached, but it wasn't")
@@ -119,13 +114,19 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	}
 
 	var providerCalls int32
+	var signatureSeq int32
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 				call := int(atomic.AddInt32(&providerCalls, 1))
 				if call <= 4 {
+					seq := atomic.AddInt32(&signatureSeq, 1)
 					events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
-					events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_mixed", "{}")
+					events <- providertypes.NewToolCallDeltaStreamEvent(
+						0,
+						"call_mixed",
+						`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
+					)
 					events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
 					return nil
 				}
@@ -161,14 +162,7 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	for _, e := range events {
-		if e.Type == EventStopReasonDecided {
-			payload := e.Payload.(StopReasonDecidedPayload)
-			if payload.Reason != controlplane.StopReasonSuccess {
-				t.Fatalf("expected stop reason success, got %s", payload.Reason)
-			}
-		}
-	}
+	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
 }
 
 func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
@@ -184,11 +178,14 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 		},
 	}
 
+	var executeCalls int32
+	var providerCalls int32
 	toolManager := &stubToolManager{
 		specs: []providertypes.ToolSpec{
 			{Name: "tool_repeat"},
 		},
 		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeCalls, 1)
 			return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
 		},
 	}
@@ -197,6 +194,7 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				atomic.AddInt32(&providerCalls, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingRepeatReminder) {
 					promptInjected = true
 				}
@@ -230,21 +228,77 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 
-	assertEventContains(t, events, EventStopReasonDecided)
-	for _, e := range events {
-		if e.Type == EventStopReasonDecided {
-			payload := e.Payload.(StopReasonDecidedPayload)
-			if payload.Reason != controlplane.StopReasonError {
-				t.Errorf("expected StopReasonError, got %s", payload.Reason)
-			}
-			if payload.Detail != ErrRepeatCycleLimit.Error() {
-				t.Errorf("expected detail to be %q, got %q", ErrRepeatCycleLimit.Error(), payload.Detail)
-			}
-		}
-	}
+	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrRepeatCycleLimit.Error())
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
+	}
+	if executeCalls != 3 {
+		t.Fatalf("expected break on the 3rd identical tool execution, got %d", executeCalls)
+	}
+	if providerCalls != 3 {
+		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
+	}
+}
+
+func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-repeat-fail", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-repeat-fail",
+		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxNoProgressStreak:  10,
+			MaxRepeatCycleStreak: 3,
+		},
+	}
+
+	var executeCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "tool_repeat_fail"},
+		},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeCalls, 1)
+			return tools.ToolResult{Name: input.Name, Content: "error", IsError: true}, nil
+		},
+	}
+
+	var providerCalls int32
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				atomic.AddInt32(&providerCalls, 1)
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat_fail", "tool_repeat_fail")
+				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat_fail", `{"path":"x"}`)
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(
+		manager,
+		toolManager,
+		newMemoryStore(),
+		providerFactory,
+		nil,
+	)
+
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-repeat-fail-streak",
+		Content: "trigger repeat fail loop",
+	})
+	if !errors.Is(err, ErrRepeatCycleLimit) {
+		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
+	}
+	if executeCalls != 3 {
+		t.Fatalf("expected failed repeated calls to break on the 3rd execution, got %d", executeCalls)
+	}
+	if providerCalls != 3 {
+		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
 	}
 }
 
@@ -358,5 +412,22 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
+	}
+}
+
+func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {
+	t.Helper()
+	assertEventContains(t, events, EventStopReasonDecided)
+	for _, e := range events {
+		if e.Type != EventStopReasonDecided {
+			continue
+		}
+		payload := e.Payload.(StopReasonDecidedPayload)
+		if payload.Reason != wantReason {
+			t.Fatalf("expected stop reason %s, got %s", wantReason, payload.Reason)
+		}
+		if wantDetail != "" && payload.Detail != wantDetail {
+			t.Fatalf("expected detail to be %q, got %q", wantDetail, payload.Detail)
+		}
 	}
 }

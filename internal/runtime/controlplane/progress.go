@@ -30,27 +30,29 @@ type ProgressState struct {
 // ApplyProgressEvidence 根据证据更新分值与 streak。
 func ApplyProgressEvidence(state ProgressState, records []ProgressEvidenceRecord, currentSignature string) ProgressState {
 	next := state.LastScore
-	isRepeated := false
+	hasToolAttempt := currentSignature != ""
+	isRepeated := hasToolAttempt && state.LastSignature != "" && currentSignature == state.LastSignature
 
-	if len(records) > 0 {
-		if currentSignature != "" && currentSignature == state.LastSignature {
-			isRepeated = true
+	if hasToolAttempt {
+		if isRepeated {
+			next.RepeatCycleStreak++
+		} else {
+			next.RepeatCycleStreak = 1
 		}
+	} else {
+		next.RepeatCycleStreak = 0
 	}
 
-	nextSignature := currentSignature
+	nextSignature := ""
+	if hasToolAttempt {
+		nextSignature = currentSignature
+	}
 
-	if len(records) == 0 {
-		next.NoProgressStreak++
-		next.RepeatCycleStreak = 0
-		nextSignature = "" // Clear signature on failure to only count consecutive successes
-	} else if isRepeated {
-		next.NoProgressStreak++
-		next.RepeatCycleStreak++
-	} else {
+	if len(records) > 0 && !isRepeated {
 		next.NoProgressStreak = 0
-		next.RepeatCycleStreak = 0
 		next.ScoreDelta++
+	} else {
+		next.NoProgressStreak++
 	}
 
 	return ProgressState{
