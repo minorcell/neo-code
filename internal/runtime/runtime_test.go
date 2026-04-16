@@ -39,6 +39,12 @@ type failingStore struct {
 	ignoreContextErr bool
 }
 
+type autoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+
+func (f autoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+	return f(ctx, cfg)
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{sessions: map[string]agentsession.Session{}}
 }
@@ -542,6 +548,76 @@ func TestServiceRun(t *testing.T) {
 				}
 				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
 					t.Fatalf("expected persisted tool metadata to keep tool name, got %+v", session.Messages[2].ToolMetadata)
+				}
+			},
+		},
+		{
+			name:  "metadata-only tool result is projected on follow-up provider round",
+			input: UserInput{RunID: "run-tool-metadata-only", Content: "inspect file"},
+			providerStreams: [][]providertypes.StreamEvent{
+				{
+					providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
+					providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"README.md"}`),
+				},
+				{
+					providertypes.NewTextDeltaStreamEvent("done"),
+				},
+			},
+			registerTool: &stubTool{
+				name: "filesystem_read_file",
+				executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+					return tools.ToolResult{
+						Name:    "filesystem_read_file",
+						Content: "",
+						Metadata: map[string]any{
+							"path": "README.md",
+						},
+					}, nil
+				},
+			},
+			contextBuilder: &stubContextBuilder{
+				buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+					return agentcontext.BuildResult{
+						SystemPrompt: "stub system prompt",
+						Messages:     projectToolMessagesForProviderTest(input.Messages),
+					}, nil
+				},
+			},
+			expectProviderCalls: 2,
+			expectToolCalls:     1,
+			expectMessageRoles:  []string{"user", "assistant", "tool", "assistant"},
+			expectEventTypes:    []EventType{EventUserMessage, EventToolStart, EventToolResult, EventAgentDone},
+			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
+				t.Helper()
+				if len(scripted.requests) != 2 {
+					t.Fatalf("expected 2 provider requests, got %d", len(scripted.requests))
+				}
+				second := scripted.requests[1]
+				foundToolResult := false
+				for _, message := range second.Messages {
+					if message.Role == providertypes.RoleTool &&
+						message.ToolCallID == "call-1" &&
+						strings.Contains(message.Content, "tool result") &&
+						strings.Contains(message.Content, "tool: filesystem_read_file") &&
+						strings.Contains(message.Content, "meta.path: README.md") {
+						foundToolResult = true
+						if strings.Contains(message.Content, "content:\n") {
+							t.Fatalf("expected metadata-only projection to omit content section, got %q", message.Content)
+						}
+						break
+					}
+				}
+				if !foundToolResult {
+					t.Fatalf("expected projected metadata-only tool result in second provider request: %+v", second.Messages)
+				}
+
+				session := onlySession(t, store)
+				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "" {
+					t.Fatalf("expected persisted tool message to keep empty raw content, got %+v", session.Messages[2])
+				}
+				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
+					session.Messages[2].ToolMetadata["path"] != "README.md" {
+					t.Fatalf("expected persisted metadata-only tool message to keep sanitized metadata, got %+v", session.Messages[2].ToolMetadata)
 				}
 			},
 		},
@@ -1686,7 +1762,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 								{
 									ID:        fmt.Sprintf("loop-call-%d", i),
 									Name:      "filesystem_edit",
-									Arguments: `{"path":"x"}`,
+									Arguments: fmt.Sprintf(`{"path":"x", "iteration": %d}`, i),
 								},
 							},
 						},
@@ -3031,17 +3107,7 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 
 // projectToolMessagesForProviderTest 模拟 context 层在 provider 请求前对 tool 消息做的只读投影。
 func projectToolMessagesForProviderTest(messages []providertypes.Message) []providertypes.Message {
-	projected := append([]providertypes.Message(nil), messages...)
-	for i, message := range projected {
-		if message.Role != providertypes.RoleTool || len(message.ToolMetadata) == 0 {
-			continue
-		}
-		next := message
-		next.Content = tools.FormatToolMessageForModel(message)
-		next.ToolMetadata = nil
-		projected[i] = next
-	}
-	return projected
+	return agentcontext.ProjectToolMessagesForModel(cloneMessages(messages))
 }
 
 func containsError(err error, target string) bool {
@@ -4126,6 +4192,7 @@ func TestRestoreSessionTokensNewSession(t *testing.T) {
 func TestAutoCompactThresholdEnabled(t *testing.T) {
 	t.Parallel()
 
+	service := &Service{}
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
@@ -4135,7 +4202,7 @@ func TestAutoCompactThresholdEnabled(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
 	if threshold != 50000 {
 		t.Fatalf("expected threshold == 50000, got %d", threshold)
 	}
@@ -4144,6 +4211,7 @@ func TestAutoCompactThresholdEnabled(t *testing.T) {
 func TestAutoCompactThresholdDisabled(t *testing.T) {
 	t.Parallel()
 
+	service := &Service{}
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
@@ -4153,7 +4221,7 @@ func TestAutoCompactThresholdDisabled(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
 	if threshold != 0 {
 		t.Fatalf("expected threshold == 0, got %d", threshold)
 	}
@@ -4161,6 +4229,32 @@ func TestAutoCompactThresholdDisabled(t *testing.T) {
 
 func TestAutoCompactThresholdZeroValue(t *testing.T) {
 	t.Parallel()
+
+	service := &Service{}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:             true,
+				InputTokenThreshold: 0,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 0 {
+		t.Fatalf("expected threshold == 0, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdUsesResolver(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 88000, nil
+		},
+	))
 
 	cfg := config.Config{
 		Context: config.ContextConfig{
@@ -4171,9 +4265,185 @@ func TestAutoCompactThresholdZeroValue(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
-	if threshold != 0 {
-		t.Fatalf("expected threshold == 0, got %d", threshold)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected resolver threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverErrors(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 0, errors.New("resolver failed")
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsZeroWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 0, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsNegativeWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return -1, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdImplicitModeWithoutResolverUsesFallback(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected implicit mode fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdForStateCachesResolverResultWithinRun(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-hit", newRuntimeSession("session-cache-hit"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 88000 {
+		t.Fatalf("expected cached resolver threshold == 88000, got %d and %d", threshold1, threshold2)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("expected resolver to be called once, got %d", resolveCalls)
+	}
+}
+
+func TestAutoCompactThresholdForStateRecomputesWhenCacheKeyChanges(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			if strings.TrimSpace(cfg.CurrentModel) == "gpt-5.1" {
+				return 99000, nil
+			}
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-miss", newRuntimeSession("session-cache-miss"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	cfg.CurrentModel = "gpt-5.1"
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 99000 {
+		t.Fatalf("expected thresholds [88000, 99000], got [%d, %d]", threshold1, threshold2)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expected resolver to be called twice after key change, got %d", resolveCalls)
 	}
 }
 

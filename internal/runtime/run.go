@@ -2,6 +2,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +20,37 @@ import (
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
+
+const selfHealingReminder = "System Reminder: You have made multiple consecutive attempts without making substantial progress. Please stop your current repetitive or ineffective strategy. Carefully review the previous errors, change your approach, or ask the user directly for help."
+const selfHealingRepeatReminder = "System Reminder: You are repeatedly calling the same tool with the exact same arguments. This is an infinite loop. Please change your parameters, try a different tool, or ask the user for help."
+
+// computeToolSignature 计算单轮执行的工具签名，用于循环检测。
+func computeToolSignature(calls []providertypes.ToolCall) string {
+	if len(calls) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, call := range calls {
+		sb.WriteString(call.Name)
+		sb.WriteString(":")
+
+		// 尝试将 JSON 参数进行规范化序列化，以消除空格、换行和字段顺序带来的哈希差异
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(call.Arguments), &parsed); err == nil {
+			if canonicalBytes, err := json.Marshal(parsed); err == nil {
+				sb.WriteString(string(canonicalBytes))
+			} else {
+				sb.WriteString(call.Arguments) // 序列化失败，降级为原始字符串
+			}
+		} else {
+			sb.WriteString(call.Arguments) // 解析失败，降级为原始字符串
+		}
+
+		sb.WriteString(";")
+	}
+	hash := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(hash[:])
+}
 
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
@@ -44,19 +78,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	initialCfg := s.configManager.Get()
 	sessionID := strings.TrimSpace(input.SessionID)
-	releaseSessionLock := func() {}
+	releaseSessionLock := s.bindSessionLock(sessionID)
 	defer func() {
 		releaseSessionLock()
 	}()
-
-	if sessionID != "" {
-		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
-		sessionMu.Lock()
-		releaseSessionLock = func() {
-			sessionMu.Unlock()
-			releaseLockRef()
-		}
-	}
 
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
 	if err != nil {
@@ -64,12 +89,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	if sessionID == "" {
-		sessionMu, releaseLockRef := s.acquireSessionLock(session.ID)
-		sessionMu.Lock()
-		releaseSessionLock = func() {
-			sessionMu.Unlock()
-			releaseLockRef()
-		}
+		releaseSessionLock = s.bindSessionLock(session.ID)
 	}
 
 	state := newRunState(input.RunID, session)
@@ -131,33 +151,39 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
 
 			var evidence []controlplane.ProgressEvidenceRecord
-			hasProgress := false
 			toolCallCount := len(turnResult.assistant.ToolCalls)
+			currentSignature := computeToolSignature(turnResult.assistant.ToolCalls)
+
 			state.mu.Lock()
 			if len(state.session.Messages) >= toolCallCount {
 				for i := len(state.session.Messages) - toolCallCount; i < len(state.session.Messages); i++ {
-					msg := state.session.Messages[i]
-					if msg.Role == providertypes.RoleTool && !msg.IsError {
-						hasProgress = true
+					if msg := state.session.Messages[i]; msg.Role == providertypes.RoleTool && !msg.IsError {
+						evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
 						break
 					}
 				}
 			}
-			state.mu.Unlock()
 
-			if hasProgress {
-				evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
-			}
-
-			state.mu.Lock()
-			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence)
+			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence, currentSignature)
 			streak := state.progress.LastScore.NoProgressStreak
+			repeatStreak := state.progress.LastScore.RepeatCycleStreak
 			currentScore := state.progress.LastScore
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 
-			if streak >= noProgressStreakLimit {
+			repeatLimit := snapshot.config.Runtime.MaxRepeatCycleStreak
+			if repeatLimit <= 0 {
+				repeatLimit = config.DefaultMaxRepeatCycleStreak
+			}
+
+			if repeatStreak >= repeatLimit {
+				err = ErrRepeatCycleLimit
+				return err
+			}
+
+			limit := snapshot.noProgressStreakLimit
+			if streak >= limit {
 				err = ErrNoProgressStreakLimit
 				return err
 			}
@@ -190,7 +216,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		},
 		Compact: agentcontext.CompactOptions{
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
-			AutoCompactThreshold:          autoCompactThreshold(cfg),
+			AutoCompactThreshold:          s.autoCompactThresholdForState(ctx, cfg, state),
 			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
 			ReadTimeMaxMessageSpans:       cfg.Context.Compact.ReadTimeMaxMessageSpans,
 		},
@@ -221,20 +247,66 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		return turnSnapshot{}, false, err
 	}
 
+	state.mu.Lock()
+	streak := state.progress.LastScore.NoProgressStreak
+	repeatStreak := state.progress.LastScore.RepeatCycleStreak
+	state.mu.Unlock()
+
+	limit := resolveNoProgressStreakLimit(cfg.Runtime)
+<<<<<<< codex/issue-294-auto-compact-threshold
+	systemPrompt := withSelfHealingReminder(builtContext.SystemPrompt, streak, limit)
+=======
+	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
+	systemPrompt := builtContext.SystemPrompt
+
+	if repeatStreak == repeatLimit-1 {
+		trimmed := strings.TrimSpace(systemPrompt)
+		if trimmed == "" {
+			systemPrompt = selfHealingRepeatReminder
+		} else {
+			systemPrompt = trimmed + "\n\n" + selfHealingRepeatReminder
+		}
+	} else if streak == limit-1 {
+		trimmed := strings.TrimSpace(systemPrompt)
+		if trimmed == "" {
+			systemPrompt = selfHealingReminder
+		} else {
+			systemPrompt = trimmed + "\n\n" + selfHealingReminder
+		}
+	}
+>>>>>>> main
+
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
-		config:         cfg,
-		providerConfig: resolvedProvider.ToRuntimeConfig(),
-		model:          model,
-		workdir:        activeWorkdir,
-		toolTimeout:    time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		config:                cfg,
+		providerConfig:        resolvedProvider.ToRuntimeConfig(),
+		model:                 model,
+		workdir:               activeWorkdir,
+		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,
+		noProgressStreakLimit: limit,
 		request: providertypes.GenerateRequest{
 			Model:        model,
-			SystemPrompt: builtContext.SystemPrompt,
+			SystemPrompt: systemPrompt,
 			Messages:     builtContext.Messages,
 			Tools:        toolSpecs,
 		},
 	}, false, nil
+}
+
+// resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
+func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
+	if rc.MaxNoProgressStreak <= 0 {
+		return config.DefaultMaxNoProgressStreak
+	}
+	return rc.MaxNoProgressStreak
+}
+
+// resolveRepeatCycleStreakLimit 统一解析重复调用循环阈值。
+func resolveRepeatCycleStreakLimit(rc config.RuntimeConfig) int {
+	if rc.MaxRepeatCycleStreak <= 0 {
+		return config.DefaultMaxRepeatCycleStreak
+	}
+	return rc.MaxRepeatCycleStreak
 }
 
 // callProviderWithRetry 使用冻结后的 turnSnapshot 执行 provider 调用与必要重试。
@@ -331,11 +403,39 @@ func (s *Service) applyCompactForState(
 }
 
 // autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。
-func autoCompactThreshold(cfg config.Config) int {
-	if cfg.Context.AutoCompact.Enabled && cfg.Context.AutoCompact.InputTokenThreshold > 0 {
+func (s *Service) autoCompactThreshold(ctx context.Context, cfg config.Config) int {
+	return s.autoCompactThresholdForState(ctx, cfg, nil)
+}
+
+// autoCompactThresholdForState 返回当前配置下的自动 compact 触发阈值，并在单次 run 内按关键输入缓存结果。
+func (s *Service) autoCompactThresholdForState(ctx context.Context, cfg config.Config, state *runState) int {
+	if !cfg.Context.AutoCompact.Enabled {
+		return 0
+	}
+	if cfg.Context.AutoCompact.InputTokenThreshold > 0 {
 		return cfg.Context.AutoCompact.InputTokenThreshold
 	}
-	return 0
+
+	key := autoCompactCacheKeyFromConfig(cfg)
+	if state != nil && state.autoCompactCache.valid && state.autoCompactCache.key == key {
+		return state.autoCompactCache.threshold
+	}
+
+	threshold := fallbackAutoCompactThreshold(cfg)
+	if s != nil && s.autoCompactThresholdResolver != nil {
+		resolvedThreshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
+		if err == nil && resolvedThreshold > 0 {
+			threshold = resolvedThreshold
+		}
+	}
+	if state != nil {
+		state.autoCompactCache = autoCompactThresholdCache{
+			key:       key,
+			threshold: threshold,
+			valid:     true,
+		}
+	}
+	return threshold
 }
 
 // degradeKeepRecentMessages 根据 reactive compact 尝试次数逐步减少保留消息数。
@@ -347,4 +447,50 @@ func degradeKeepRecentMessages(base int, attempt int) int {
 		return 1
 	}
 	return base
+}
+
+// fallbackAutoCompactThreshold 返回自动推导失败时仍可继续使用的保底阈值。
+func fallbackAutoCompactThreshold(cfg config.Config) int {
+	if cfg.Context.AutoCompact.FallbackInputTokenThreshold > 0 {
+		return cfg.Context.AutoCompact.FallbackInputTokenThreshold
+	}
+	return 0
+}
+
+// bindSessionLock 获取并持有指定会话锁，返回对应的释放函数。
+func (s *Service) bindSessionLock(sessionID string) func() {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return func() {}
+	}
+	sessionMu, releaseLockRef := s.acquireSessionLock(id)
+	sessionMu.Lock()
+	return func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}
+}
+
+// withSelfHealingReminder 在无进展临界轮次注入自愈提醒，保持提示词拼接规则集中。
+func withSelfHealingReminder(systemPrompt string, streak int, limit int) string {
+	if streak != limit-1 {
+		return systemPrompt
+	}
+	trimmed := strings.TrimSpace(systemPrompt)
+	if trimmed == "" {
+		return selfHealingReminder
+	}
+	return trimmed + "\n\n" + selfHealingReminder
+}
+
+// autoCompactCacheKeyFromConfig 提取会影响自动压缩阈值解析的配置维度，用于 run 内缓存命中判断。
+func autoCompactCacheKeyFromConfig(cfg config.Config) autoCompactThresholdCacheKey {
+	return autoCompactThresholdCacheKey{
+		provider:                  strings.TrimSpace(cfg.SelectedProvider),
+		model:                     strings.TrimSpace(cfg.CurrentModel),
+		autoCompactEnabled:        cfg.Context.AutoCompact.Enabled,
+		autoCompactInputThreshold: cfg.Context.AutoCompact.InputTokenThreshold,
+		autoCompactReserveTokens:  cfg.Context.AutoCompact.ReserveTokens,
+		autoCompactFallback:       cfg.Context.AutoCompact.FallbackInputTokenThreshold,
+	}
 }
