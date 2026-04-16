@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -70,9 +69,6 @@ type todoPatchInput struct {
 	Acceptance    *[]string                `json:"acceptance,omitempty"`
 	Artifacts     *[]string                `json:"artifacts,omitempty"`
 	FailureReason *string                  `json:"failure_reason,omitempty"`
-	RetryCount    *int                     `json:"retry_count,omitempty"`
-	RetryLimit    *int                     `json:"retry_limit,omitempty"`
-	NextRetryAt   *time.Time               `json:"next_retry_at,omitempty"`
 }
 
 func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
@@ -89,9 +85,6 @@ func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
 		Acceptance:    p.Acceptance,
 		Artifacts:     p.Artifacts,
 		FailureReason: p.FailureReason,
-		RetryCount:    p.RetryCount,
-		RetryLimit:    p.RetryLimit,
-		NextRetryAt:   p.NextRetryAt,
 	}
 }
 
@@ -108,9 +101,6 @@ type todoWireItem struct {
 	Acceptance    []string                `json:"acceptance,omitempty"`
 	Artifacts     []string                `json:"artifacts,omitempty"`
 	FailureReason string                  `json:"failure_reason,omitempty"`
-	RetryCount    int                     `json:"retry_count,omitempty"`
-	RetryLimit    int                     `json:"retry_limit,omitempty"`
-	NextRetryAt   time.Time               `json:"next_retry_at,omitempty"`
 	Revision      int64                   `json:"revision,omitempty"`
 }
 
@@ -203,9 +193,6 @@ func decodeLegacyItem(rawItem json.RawMessage) (agentsession.TodoItem, error) {
 		Acceptance:    wire.Acceptance,
 		Artifacts:     wire.Artifacts,
 		FailureReason: wire.FailureReason,
-		RetryCount:    wire.RetryCount,
-		RetryLimit:    wire.RetryLimit,
-		NextRetryAt:   wire.NextRetryAt,
 		Revision:      wire.Revision,
 	}, nil
 }

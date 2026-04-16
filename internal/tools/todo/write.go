@@ -75,15 +75,6 @@ func (t *Tool) Schema() map[string]any {
 			"failure_reason": map[string]any{
 				"type": "string",
 			},
-			"retry_count": map[string]any{
-				"type": "integer",
-			},
-			"retry_limit": map[string]any{
-				"type": "integer",
-			},
-			"next_retry_at": map[string]any{
-				"type": "string",
-			},
 			"revision": map[string]any{
 				"type": "integer",
 			},

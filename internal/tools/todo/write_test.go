@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -432,9 +431,6 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 	acceptance := []string{"done"}
 	artifacts := []string{"out.txt"}
 	reason := "failed"
-	retryCount := 2
-	retryLimit := 4
-	nextRetryAt := time.Now().Add(2 * time.Minute).UTC()
 
 	input := &todoPatchInput{
 		Content:       &content,
@@ -446,9 +442,6 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 		Acceptance:    &acceptance,
 		Artifacts:     &artifacts,
 		FailureReason: &reason,
-		RetryCount:    &retryCount,
-		RetryLimit:    &retryLimit,
-		NextRetryAt:   &nextRetryAt,
 	}
 	patch := input.toSessionPatch()
 
@@ -463,15 +456,6 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 	emptyPatch := (*todoPatchInput)(nil).toSessionPatch()
 	if encoded, err := json.Marshal(emptyPatch); err != nil || len(encoded) == 0 {
 		t.Fatalf("nil patch conversion should still be serializable, err=%v", err)
-	}
-	if patch.RetryCount == nil || *patch.RetryCount != retryCount {
-		t.Fatalf("RetryCount patch mismatch: %+v", patch.RetryCount)
-	}
-	if patch.RetryLimit == nil || *patch.RetryLimit != retryLimit {
-		t.Fatalf("RetryLimit patch mismatch: %+v", patch.RetryLimit)
-	}
-	if patch.NextRetryAt == nil || !patch.NextRetryAt.Equal(nextRetryAt) {
-		t.Fatalf("NextRetryAt patch mismatch: %+v", patch.NextRetryAt)
 	}
 }
 
