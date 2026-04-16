@@ -405,13 +405,16 @@ func (s *Service) autoCompactThresholdForState(ctx context.Context, cfg config.C
 	}
 
 	threshold := fallbackAutoCompactThreshold(cfg)
+	cacheable := true
 	if s != nil && s.autoCompactThresholdResolver != nil {
 		resolvedThreshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
-		if err == nil && resolvedThreshold > 0 {
+		if err != nil {
+			cacheable = false
+		} else if resolvedThreshold > 0 {
 			threshold = resolvedThreshold
 		}
 	}
-	if state != nil {
+	if state != nil && cacheable {
 		state.autoCompactCache = autoCompactThresholdCache{
 			key:       key,
 			threshold: threshold,
