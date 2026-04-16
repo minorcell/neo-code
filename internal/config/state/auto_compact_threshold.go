@@ -70,7 +70,7 @@ func ResolveAutoCompactThreshold(
 
 	models, err := catalogs.ListProviderModelsSnapshot(ctx, input)
 	if err != nil {
-		return resolution, nil
+		return resolution, err
 	}
 
 	modelID := provider.NormalizeKey(cfg.CurrentModel)

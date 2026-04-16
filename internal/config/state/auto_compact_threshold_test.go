@@ -9,6 +9,14 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
+func assertAutoCompactResolution(t *testing.T, got AutoCompactThresholdResolution, wantThreshold int, wantSource AutoCompactThresholdSource) {
+	t.Helper()
+
+	if got.Threshold != wantThreshold || got.Source != wantSource {
+		t.Fatalf("expected threshold=%d source=%s, got %+v", wantThreshold, wantSource, got)
+	}
+}
+
 func TestResolveAutoCompactThresholdDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -19,9 +27,7 @@ func TestResolveAutoCompactThresholdDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 0 || resolution.Source != AutoCompactThresholdSourceDisabled {
-		t.Fatalf("expected disabled resolution, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 0, AutoCompactThresholdSourceDisabled)
 }
 
 func TestResolveAutoCompactThresholdExplicitWins(t *testing.T) {
@@ -35,9 +41,7 @@ func TestResolveAutoCompactThresholdExplicitWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 42000 || resolution.Source != AutoCompactThresholdSourceExplicit {
-		t.Fatalf("expected explicit resolution, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 42000, AutoCompactThresholdSourceExplicit)
 }
 
 func TestResolveAutoCompactThresholdDerivedFromContextWindow(t *testing.T) {
@@ -60,9 +64,7 @@ func TestResolveAutoCompactThresholdDerivedFromContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 118072 || resolution.Source != AutoCompactThresholdSourceDerived {
-		t.Fatalf("expected derived threshold, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 118072, AutoCompactThresholdSourceDerived)
 }
 
 func TestResolveAutoCompactThresholdFallsBackWhenWindowTooSmall(t *testing.T) {
@@ -85,9 +87,7 @@ func TestResolveAutoCompactThresholdFallsBackWhenWindowTooSmall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 88000 || resolution.Source != AutoCompactThresholdSourceFallback {
-		t.Fatalf("expected fallback threshold, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 88000, AutoCompactThresholdSourceFallback)
 }
 
 func TestResolveAutoCompactThresholdFallsBackWhenModelMissing(t *testing.T) {
@@ -105,9 +105,7 @@ func TestResolveAutoCompactThresholdFallsBackWhenModelMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 88000 || resolution.Source != AutoCompactThresholdSourceFallback {
-		t.Fatalf("expected missing model to use fallback, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 88000, AutoCompactThresholdSourceFallback)
 }
 
 func TestResolveAutoCompactThresholdFallsBackWhenSelectedProviderInvalid(t *testing.T) {
@@ -123,9 +121,7 @@ func TestResolveAutoCompactThresholdFallsBackWhenSelectedProviderInvalid(t *test
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 88000 || resolution.Source != AutoCompactThresholdSourceFallback {
-		t.Fatalf("expected invalid selection to use fallback, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 88000, AutoCompactThresholdSourceFallback)
 }
 
 func TestResolveAutoCompactThresholdFallsBackWhenCatalogInputResolutionFails(t *testing.T) {
@@ -141,9 +137,7 @@ func TestResolveAutoCompactThresholdFallsBackWhenCatalogInputResolutionFails(t *
 	if err != nil {
 		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
 	}
-	if resolution.Threshold != 88000 || resolution.Source != AutoCompactThresholdSourceFallback {
-		t.Fatalf("expected invalid catalog input to use fallback, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 88000, AutoCompactThresholdSourceFallback)
 }
 
 func TestResolveAutoCompactThresholdFallsBackWhenSnapshotLookupFails(t *testing.T) {
@@ -157,10 +151,8 @@ func TestResolveAutoCompactThresholdFallsBackWhenSnapshotLookupFails(t *testing.
 	resolution, err := ResolveAutoCompactThreshold(context.Background(), cfg, catalogMethodsStub{
 		snapshotErr: errors.New("snapshot failed"),
 	})
-	if err != nil {
-		t.Fatalf("ResolveAutoCompactThreshold() error = %v", err)
+	if err == nil {
+		t.Fatalf("ResolveAutoCompactThreshold() error = nil, want non-nil")
 	}
-	if resolution.Threshold != 88000 || resolution.Source != AutoCompactThresholdSourceFallback {
-		t.Fatalf("expected snapshot error to use fallback, got %+v", resolution)
-	}
+	assertAutoCompactResolution(t, resolution, 88000, AutoCompactThresholdSourceFallback)
 }
