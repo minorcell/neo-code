@@ -44,6 +44,7 @@ const (
 const providerAddSelectTimeout = 10 * time.Second
 
 var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
+var persistProviderUserEnvVar = config.PersistUserEnvVar
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -2366,8 +2367,6 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 
 	return func() tea.Msg {
 		apiKeyEnv := providerAddAPIKeyEnv(request.Name)
-		_ = os.Setenv(apiKeyEnv, request.APIKey)
-
 		if err := config.SaveCustomProvider(
 			baseDir,
 			request.Name,
@@ -2381,6 +2380,37 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			return providerAddResultMsg{
 				Name:  request.Name,
 				Error: sanitizeProviderAddError(fmt.Errorf("save provider config: %w", err), request.APIKey, baseDir),
+			}
+		}
+		if err := config.PersistEnvVar(baseDir, apiKeyEnv, request.APIKey); err != nil {
+			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
+				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
+			}
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("persist api key: %w", err), request.APIKey, baseDir),
+			}
+		}
+		if err := persistProviderUserEnvVar(apiKeyEnv, request.APIKey); err != nil {
+			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
+				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
+			}
+			return providerAddResultMsg{
+				Name: request.Name,
+				Error: sanitizeProviderAddError(
+					fmt.Errorf("persist user environment variable: %w", err),
+					request.APIKey,
+					baseDir,
+				),
+			}
+		}
+		if err := os.Setenv(apiKeyEnv, request.APIKey); err != nil {
+			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
+				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
+			}
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("apply api key env: %w", err), request.APIKey, baseDir),
 			}
 		}
 		if _, err := configManager.Reload(context.Background()); err != nil {

@@ -228,6 +228,10 @@ func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
 }
 
 func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
+	restorePersistUserEnv := persistProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error { return nil }
+	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
+
 	providerName := "team-gateway"
 	modelID := "gateway-model"
 	service := stubProviderService{
@@ -273,6 +277,13 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 	if got := strings.TrimSpace(os.Getenv(envName)); got != "sk-test-123" {
 		t.Fatalf("expected API key in env %s, got %q", envName, got)
 	}
+	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
+	if readErr != nil {
+		t.Fatalf("expected persisted env file, read error = %v", readErr)
+	}
+	if !strings.Contains(string(envData), envName+"=sk-test-123") {
+		t.Fatalf("expected env file to persist API key, got %q", string(envData))
+	}
 
 	next, _ := app.Update(msg)
 	app = next.(App)
@@ -288,6 +299,10 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 }
 
 func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
+	restorePersistUserEnv := persistProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error { return nil }
+	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
+
 	secretKey := "sk-secret-456"
 	service := stubProviderService{
 		selectErr: errors.New("authentication failed for key " + secretKey),
