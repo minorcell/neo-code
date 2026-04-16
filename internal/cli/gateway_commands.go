@@ -193,6 +193,10 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	if err := gatewayConfig.Validate(); err != nil {
 		return fmt.Errorf("gateway config override invalid: %w", err)
 	}
+	acl, err := buildGatewayControlPlaneACL(gatewayConfig.Security.ACLMode)
+	if err != nil {
+		return err
+	}
 
 	tokenFile := strings.TrimSpace(options.TokenFile)
 	if tokenFile == "" {
@@ -207,7 +211,6 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	if gatewayConfig.Observability.Enabled() {
 		metrics = gateway.NewGatewayMetrics()
 	}
-	acl := gateway.NewStrictControlPlaneACL()
 	relay := gateway.NewStreamRelay(gateway.StreamRelayOptions{
 		Logger:  logger,
 		Metrics: metrics,
@@ -267,6 +270,20 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	}()
 
 	return ipcServer.Serve(signalContext, nil)
+}
+
+// buildGatewayControlPlaneACL 基于配置构造控制面 ACL 策略，未知模式直接拒绝启动。
+func buildGatewayControlPlaneACL(aclMode string) (*gateway.ControlPlaneACL, error) {
+	normalizedACLMode := strings.ToLower(strings.TrimSpace(aclMode))
+	if normalizedACLMode == "" {
+		normalizedACLMode = string(gateway.ACLModeStrict)
+	}
+	switch normalizedACLMode {
+	case string(gateway.ACLModeStrict):
+		return gateway.NewStrictControlPlaneACL(), nil
+	default:
+		return nil, fmt.Errorf("unsupported gateway acl mode %q", aclMode)
+	}
 }
 
 // applyGatewayFlagOverrides 将 CLI flags 覆盖到网关配置，优先级高于 config.yaml。

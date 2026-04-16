@@ -385,6 +385,59 @@ func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T)
 	}
 }
 
+func TestDefaultGatewayCommandRunnerRejectsInvalidACLMode(t *testing.T) {
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+		ACLMode:       "custom",
+	})
+	if err == nil {
+		t.Fatal("expected invalid acl mode error")
+	}
+	if !strings.Contains(err.Error(), "gateway config override invalid") {
+		t.Fatalf("error = %v, want contains %q", err, "gateway config override invalid")
+	}
+	if !strings.Contains(err.Error(), "acl_mode must be") {
+		t.Fatalf("error = %v, want contains %q", err, "acl_mode must be")
+	}
+}
+
+func TestBuildGatewayControlPlaneACL(t *testing.T) {
+	t.Run("strict mode", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("strict")
+		if err != nil {
+			t.Fatalf("buildGatewayControlPlaneACL() error = %v", err)
+		}
+		if acl == nil {
+			t.Fatal("expected non-nil acl")
+		}
+	})
+
+	t.Run("empty mode uses strict", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("  ")
+		if err != nil {
+			t.Fatalf("buildGatewayControlPlaneACL() error = %v", err)
+		}
+		if acl == nil {
+			t.Fatal("expected non-nil acl")
+		}
+	})
+
+	t.Run("unsupported mode", func(t *testing.T) {
+		acl, err := buildGatewayControlPlaneACL("allow-all")
+		if err == nil {
+			t.Fatal("expected unsupported mode error")
+		}
+		if acl != nil {
+			t.Fatalf("acl = %#v, want nil", acl)
+		}
+		if !strings.Contains(err.Error(), "unsupported gateway acl mode") {
+			t.Fatalf("error = %v, want contains unsupported mode message", err)
+		}
+	})
+}
+
 func TestDefaultNewGatewayServer(t *testing.T) {
 	server, err := defaultNewGatewayServer(gateway.ServerOptions{
 		ListenAddress: "stub://gateway",

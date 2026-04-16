@@ -151,9 +151,6 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 	}
 
 	metrics := options.Metrics
-	if metrics == nil {
-		metrics = NewGatewayMetrics()
-	}
 	allowedOrigins := normalizeControlPlaneOrigins(options.AllowedOrigins)
 	if len(allowedOrigins) == 0 {
 		allowedOrigins = defaultControlPlaneOrigins()
@@ -414,11 +411,15 @@ func (s *NetworkServer) handlePrometheusMetrics(writer http.ResponseWriter, requ
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.metrics == nil {
+		http.Error(writer, "metrics disabled", http.StatusServiceUnavailable)
+		return
+	}
 	if !s.isObservabilityRequestAuthorized(request) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.metrics == nil || s.metrics.Registry() == nil {
+	if s.metrics.Registry() == nil {
 		http.Error(writer, "metrics unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -431,15 +432,19 @@ func (s *NetworkServer) handleJSONMetrics(writer http.ResponseWriter, request *h
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.metrics == nil {
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]any{
+			"error": "metrics disabled",
+		})
+		return
+	}
 	if !s.isObservabilityRequestAuthorized(request) {
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	payload := map[string]any{"metrics": map[string]map[string]float64{}}
-	if s.metrics != nil {
-		payload["metrics"] = s.metrics.Snapshot()
-	}
-	writeJSONResponse(writer, http.StatusOK, payload)
+	writeJSONResponse(writer, http.StatusOK, map[string]any{
+		"metrics": s.metrics.Snapshot(),
+	})
 }
 
 // isObservabilityRequestAuthorized 校验 metrics 端点访问 Token。
@@ -448,9 +453,6 @@ func (s *NetworkServer) isObservabilityRequestAuthorized(request *http.Request) 
 		return true
 	}
 	token := extractBearerToken(request.Header.Get("Authorization"))
-	if token == "" && request.URL != nil {
-		token = strings.TrimSpace(request.URL.Query().Get("token"))
-	}
 	return s.authenticator.ValidateToken(token)
 }
 

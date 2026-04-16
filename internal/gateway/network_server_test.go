@@ -652,6 +652,7 @@ func TestNetworkServerStreamsReceiveGatewayEventNotification(t *testing.T) {
 func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
 	server := newTestNetworkServer(t, NetworkServerOptions{
 		Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		Metrics:       NewGatewayMetrics(),
 	})
 	testContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -689,6 +690,15 @@ func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
 		t.Fatalf("/metrics status = %d, want %d", metricsResponse.StatusCode, http.StatusUnauthorized)
 	}
 
+	queryTokenMetricsResponse, err := http.Get("http://" + listenAddress + "/metrics?token=gateway-token")
+	if err != nil {
+		t.Fatalf("get /metrics with query token: %v", err)
+	}
+	defer queryTokenMetricsResponse.Body.Close()
+	if queryTokenMetricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/metrics with query token status = %d, want %d", queryTokenMetricsResponse.StatusCode, http.StatusUnauthorized)
+	}
+
 	authorizedMetricsRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/metrics", nil)
 	if err != nil {
 		t.Fatalf("new /metrics request: %v", err)
@@ -715,6 +725,74 @@ func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
 	defer authorizedJSONMetricsResponse.Body.Close()
 	if authorizedJSONMetricsResponse.StatusCode != http.StatusOK {
 		t.Fatalf("authorized /metrics.json status = %d, want %d", authorizedJSONMetricsResponse.StatusCode, http.StatusOK)
+	}
+
+	queryTokenJSONMetricsResponse, err := http.Get("http://" + listenAddress + "/metrics.json?token=gateway-token")
+	if err != nil {
+		t.Fatalf("get /metrics.json with query token: %v", err)
+	}
+	defer queryTokenJSONMetricsResponse.Body.Close()
+	if queryTokenJSONMetricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf(
+			"/metrics.json with query token status = %d, want %d",
+			queryTokenJSONMetricsResponse.StatusCode,
+			http.StatusUnauthorized,
+		)
+	}
+}
+
+func TestNetworkServerMetricsEndpointReturnsUnavailableWhenDisabled(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Metrics: nil,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	metricsResponse, err := http.Get("http://" + listenAddress + "/metrics")
+	if err != nil {
+		t.Fatalf("get /metrics: %v", err)
+	}
+	defer metricsResponse.Body.Close()
+	if metricsResponse.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/metrics status = %d, want %d", metricsResponse.StatusCode, http.StatusServiceUnavailable)
+	}
+	metricsBody, err := io.ReadAll(metricsResponse.Body)
+	if err != nil {
+		t.Fatalf("read /metrics response body: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(metricsBody)), "metrics disabled") {
+		t.Fatalf("/metrics body = %q, want contains %q", string(metricsBody), "metrics disabled")
+	}
+
+	metricsJSONResponse, err := http.Get("http://" + listenAddress + "/metrics.json")
+	if err != nil {
+		t.Fatalf("get /metrics.json: %v", err)
+	}
+	defer metricsJSONResponse.Body.Close()
+	if metricsJSONResponse.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/metrics.json status = %d, want %d", metricsJSONResponse.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	var metricsJSONBody map[string]any
+	if err := json.NewDecoder(metricsJSONResponse.Body).Decode(&metricsJSONBody); err != nil {
+		t.Fatalf("decode /metrics.json body: %v", err)
+	}
+	if metricsJSONBody["error"] != "metrics disabled" {
+		t.Fatalf("/metrics.json error = %v, want %q", metricsJSONBody["error"], "metrics disabled")
 	}
 }
 
