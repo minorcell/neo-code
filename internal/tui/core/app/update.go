@@ -45,6 +45,7 @@ const providerAddSelectTimeout = 10 * time.Second
 
 var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
 var persistProviderUserEnvVar = config.PersistUserEnvVar
+var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -2367,6 +2368,28 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 
 	return func() tea.Msg {
 		apiKeyEnv := providerAddAPIKeyEnv(request.Name)
+		previousEnvValue, hadPreviousEnv := os.LookupEnv(apiKeyEnv)
+
+		rollback := func(processEnvApplied bool, userEnvPersisted bool, envPersisted bool, providerSaved bool, originalErr error) error {
+			return rollbackProviderAddSideEffects(
+				baseDir,
+				request.Name,
+				apiKeyEnv,
+				processEnvApplied,
+				userEnvPersisted,
+				envPersisted,
+				hadPreviousEnv,
+				previousEnvValue,
+				providerSaved,
+				originalErr,
+			)
+		}
+
+		providerSaved := false
+		envPersisted := false
+		userEnvPersisted := false
+		processEnvApplied := false
+
 		if err := config.SaveCustomProvider(
 			baseDir,
 			request.Name,
@@ -2382,19 +2405,17 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 				Error: sanitizeProviderAddError(fmt.Errorf("save provider config: %w", err), request.APIKey, baseDir),
 			}
 		}
+		providerSaved = true
 		if err := config.PersistEnvVar(baseDir, apiKeyEnv, request.APIKey); err != nil {
-			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
-				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
-			}
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			return providerAddResultMsg{
 				Name:  request.Name,
 				Error: sanitizeProviderAddError(fmt.Errorf("persist api key: %w", err), request.APIKey, baseDir),
 			}
 		}
+		envPersisted = true
 		if err := persistProviderUserEnvVar(apiKeyEnv, request.APIKey); err != nil {
-			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
-				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
-			}
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			return providerAddResultMsg{
 				Name: request.Name,
 				Error: sanitizeProviderAddError(
@@ -2404,19 +2425,17 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 				),
 			}
 		}
+		userEnvPersisted = true
 		if err := os.Setenv(apiKeyEnv, request.APIKey); err != nil {
-			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
-				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
-			}
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			return providerAddResultMsg{
 				Name:  request.Name,
 				Error: sanitizeProviderAddError(fmt.Errorf("apply api key env: %w", err), request.APIKey, baseDir),
 			}
 		}
+		processEnvApplied = true
 		if _, err := configManager.Reload(context.Background()); err != nil {
-			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
-				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
-			}
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			return providerAddResultMsg{
 				Name:  request.Name,
 				Error: sanitizeProviderAddError(fmt.Errorf("reload config snapshot: %w", err), request.APIKey, baseDir),
@@ -2428,9 +2447,7 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 
 		selection, err := providerSvc.SelectProvider(ctx, request.Name)
 		if err != nil {
-			if rollbackErr := config.DeleteCustomProvider(baseDir, request.Name); rollbackErr != nil {
-				err = fmt.Errorf("%w (rollback failed: %v)", err, rollbackErr)
-			}
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			if errors.Is(err, context.DeadlineExceeded) {
 				err = fmt.Errorf(
 					"model discovery timed out after %s; check base URL, API key, and network connectivity",
@@ -2448,6 +2465,57 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			Model: strings.TrimSpace(selection.ModelID),
 		}
 	}
+}
+
+// rollbackProviderAddSideEffects 回滚 provider add 过程中已落地的副作用，避免失败后残留配置与密钥。
+func rollbackProviderAddSideEffects(
+	baseDir string,
+	providerName string,
+	apiKeyEnv string,
+	processEnvApplied bool,
+	userEnvPersisted bool,
+	envPersisted bool,
+	hadPreviousEnv bool,
+	previousEnvValue string,
+	providerSaved bool,
+	originalErr error,
+) error {
+	rollbackErrs := make([]error, 0, 4)
+
+	if processEnvApplied {
+		if hadPreviousEnv {
+			if err := os.Setenv(apiKeyEnv, previousEnvValue); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore process env: %w", err))
+			}
+		} else {
+			if err := os.Unsetenv(apiKeyEnv); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("unset process env: %w", err))
+			}
+		}
+	}
+
+	if userEnvPersisted {
+		if err := deleteProviderUserEnvVar(apiKeyEnv); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("delete user env: %w", err))
+		}
+	}
+
+	if envPersisted {
+		if err := config.RemovePersistedEnvVar(baseDir, apiKeyEnv); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("remove persisted env: %w", err))
+		}
+	}
+
+	if providerSaved {
+		if err := config.DeleteCustomProvider(baseDir, providerName); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("delete provider config: %w", err))
+		}
+	}
+
+	if len(rollbackErrs) == 0 {
+		return originalErr
+	}
+	return fmt.Errorf("%w (rollback failed: %v)", originalErr, errors.Join(rollbackErrs...))
 }
 
 func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {

@@ -976,6 +976,72 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 	}
 }
 
+func TestSaveCustomProviderRejectsUnsafeProviderName(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	invalidNames := []string{
+		"",
+		" ",
+		"../escape",
+		"..",
+		"team/gateway",
+		`team\gateway`,
+		"/tmp/abs",
+		"中文",
+	}
+	for _, name := range invalidNames {
+		err := SaveCustomProvider(
+			baseDir,
+			name,
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"CUSTOM_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatalf("expected SaveCustomProvider to reject %q", name)
+		}
+	}
+}
+
+func TestDeleteCustomProviderRejectsUnsafeProviderName(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	invalidNames := []string{
+		"",
+		"../escape",
+		"team/gateway",
+		`team\gateway`,
+	}
+	for _, name := range invalidNames {
+		if err := DeleteCustomProvider(baseDir, name); err == nil {
+			t.Fatalf("expected DeleteCustomProvider to reject %q", name)
+		}
+	}
+}
+
+func TestDeleteCustomProviderRemovesProviderDir(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	providerName := "team-gateway"
+	providerDir := filepath.Join(baseDir, providersDirName, providerName)
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	if err := DeleteCustomProvider(baseDir, providerName); err != nil {
+		t.Fatalf("DeleteCustomProvider() error = %v", err)
+	}
+	if _, err := os.Stat(providerDir); !os.IsNotExist(err) {
+		t.Fatalf("expected provider dir to be removed, stat err = %v", err)
+	}
+}
+
 func TestLoaderLoadsUnknownCustomProviderDriverUsingTopLevelBaseURL(t *testing.T) {
 	t.Parallel()
 
