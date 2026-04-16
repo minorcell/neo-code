@@ -235,7 +235,7 @@ func (a App) renderProviderAddForm() string {
 		case providerAddFieldAPIVersion:
 			fields = append(fields, renderField{label: "API Version", value: a.providerAddForm.APIVersion})
 		case providerAddFieldAPIKey:
-			fields = append(fields, renderField{label: "API Key", value: a.providerAddForm.APIKey, required: true})
+			fields = append(fields, renderField{label: "API Key", value: maskedSecret(a.providerAddForm.APIKey), required: true})
 		}
 	}
 
@@ -266,6 +266,14 @@ func (a App) renderProviderAddForm() string {
 	sb.WriteString("\n[Tab] switch field  [Enter] confirm  [Esc] cancel")
 
 	return sb.String()
+}
+
+// maskedSecret 将敏感输入渲染为固定掩码，避免在终端界面泄露明文。
+func maskedSecret(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return "******"
 }
 
 func (a App) renderPrompt(width int) string {

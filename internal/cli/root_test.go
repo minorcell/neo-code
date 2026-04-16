@@ -1006,6 +1006,16 @@ func TestDefaultGlobalPreloadKeepsExistingProcessEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultGlobalPreloadReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := defaultGlobalPreload(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
 func TestWriteURLDispatchSuccessOutput(t *testing.T) {
 	var buffer bytes.Buffer
 	err := writeURLDispatchSuccessOutput(&buffer, urlscheme.DispatchResult{

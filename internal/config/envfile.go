@@ -101,6 +101,46 @@ func LoadPersistedEnv(baseDir string) error {
 	return nil
 }
 
+// RemovePersistedEnvVar 从持久化 .env 文件中删除指定键；文件不存在时视为成功。
+func RemovePersistedEnvVar(baseDir string, key string) error {
+	normalizedKey := strings.TrimSpace(key)
+	if normalizedKey == "" {
+		return errors.New("config: env key is empty")
+	}
+	if strings.ContainsAny(normalizedKey, " \t\r\n=") {
+		return fmt.Errorf("config: env key %q is invalid", normalizedKey)
+	}
+
+	envPath := EnvFilePath(baseDir)
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("config: read env file: %w", err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		currentKey, _, ok := parseEnvAssignment(line)
+		if ok && currentKey == normalizedKey {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
+	content := strings.Join(filtered, "\n")
+	content = strings.TrimRight(content, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("config: write env file: %w", err)
+	}
+	return nil
+}
+
 func parseEnvAssignment(line string) (string, string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {

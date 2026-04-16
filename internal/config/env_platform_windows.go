@@ -36,3 +36,31 @@ func PersistUserEnvVar(key string, value string) error {
 	}
 	return nil
 }
+
+// DeleteUserEnvVar 删除 Windows 用户级环境变量，不存在时视为成功。
+func DeleteUserEnvVar(key string) error {
+	normalizedKey := strings.TrimSpace(key)
+	if normalizedKey == "" {
+		return errors.New("config: env key is empty")
+	}
+	if strings.ContainsAny(normalizedKey, " \t\r\n=") {
+		return fmt.Errorf("config: env key %q is invalid", normalizedKey)
+	}
+
+	envKey, err := registry.OpenKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.SET_VALUE)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("config: open windows user env: %w", err)
+	}
+	defer envKey.Close()
+
+	if err := envKey.DeleteValue(normalizedKey); err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("config: delete windows user env %q: %w", normalizedKey, err)
+	}
+	return nil
+}

@@ -332,6 +332,129 @@ func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
 	}
 }
 
+func TestSubmitProviderAddFormRollsBackPersistedStateOnSelectFailure(t *testing.T) {
+	restorePersistUserEnv := persistProviderUserEnvVar
+	restoreDeleteUserEnv := deleteProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error { return nil }
+	deleteProviderUserEnvVar = func(key string) error { return nil }
+	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
+	t.Cleanup(func() { deleteProviderUserEnvVar = restoreDeleteUserEnv })
+
+	providerName := "rollback-gateway"
+	envName := providerAddAPIKeyEnv(providerName)
+	restoreEnv := captureEnv(t, envName)
+	defer restoreEnv()
+	if err := os.Setenv(envName, "previous-value"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+
+	service := stubProviderService{
+		selectErr: errors.New("select failed"),
+	}
+	app, _ := newTestAppWithProviderService(t, service)
+	app.startProviderAddForm()
+	app.providerAddForm.Name = providerName
+	app.providerAddForm.Driver = provider.DriverOpenAICompat
+	app.providerAddForm.BaseURL = "https://rollback.example.com/v1"
+	app.providerAddForm.APIKey = "sk-failed-rollback"
+	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+
+	cmd := app.submitProviderAddForm()
+	if cmd == nil {
+		t.Fatalf("expected async command")
+	}
+	msg := cmd()
+	result, ok := msg.(providerAddResultMsg)
+	if !ok {
+		t.Fatalf("expected providerAddResultMsg, got %T", msg)
+	}
+	if strings.TrimSpace(result.Error) == "" {
+		t.Fatalf("expected failure result")
+	}
+
+	if got := os.Getenv(envName); got != "previous-value" {
+		t.Fatalf("expected process env restored, got %q", got)
+	}
+
+	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
+	if readErr != nil {
+		t.Fatalf("read env file: %v", readErr)
+	}
+	if strings.Contains(string(envData), envName+"=") {
+		t.Fatalf("expected persisted env key rollback, got %q", string(envData))
+	}
+
+	providerPath := filepath.Join(app.configManager.BaseDir(), "providers", providerName)
+	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
+		t.Fatalf("expected provider dir rollback, stat err = %v", err)
+	}
+}
+
+func TestSubmitProviderAddFormRollsBackOnUserEnvPersistFailure(t *testing.T) {
+	restorePersistUserEnv := persistProviderUserEnvVar
+	restoreDeleteUserEnv := deleteProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error { return errors.New("user env failed") }
+	deleteProviderUserEnvVar = func(key string) error { return nil }
+	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
+	t.Cleanup(func() { deleteProviderUserEnvVar = restoreDeleteUserEnv })
+
+	providerName := "user-env-fail"
+	envName := providerAddAPIKeyEnv(providerName)
+	restoreEnv := captureEnv(t, envName)
+	defer restoreEnv()
+	_ = os.Unsetenv(envName)
+
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.providerAddForm.Name = providerName
+	app.providerAddForm.Driver = provider.DriverOpenAICompat
+	app.providerAddForm.BaseURL = "https://rollback.example.com/v1"
+	app.providerAddForm.APIKey = "sk-failed"
+	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+
+	cmd := app.submitProviderAddForm()
+	if cmd == nil {
+		t.Fatalf("expected async command")
+	}
+	msg := cmd()
+	result, ok := msg.(providerAddResultMsg)
+	if !ok {
+		t.Fatalf("expected providerAddResultMsg, got %T", msg)
+	}
+	if strings.TrimSpace(result.Error) == "" {
+		t.Fatalf("expected failure result")
+	}
+
+	if got := os.Getenv(envName); got != "" {
+		t.Fatalf("expected process env to stay unset, got %q", got)
+	}
+
+	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
+	if readErr != nil {
+		t.Fatalf("read env file: %v", readErr)
+	}
+	if strings.Contains(string(envData), envName+"=") {
+		t.Fatalf("expected persisted env key rollback, got %q", string(envData))
+	}
+
+	providerPath := filepath.Join(app.configManager.BaseDir(), "providers", providerName)
+	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
+		t.Fatalf("expected provider dir rollback, stat err = %v", err)
+	}
+}
+
+func captureEnv(t *testing.T, key string) func() {
+	t.Helper()
+	value, exists := os.LookupEnv(key)
+	return func() {
+		if exists {
+			_ = os.Setenv(key, value)
+			return
+		}
+		_ = os.Unsetenv(key)
+	}
+}
+
 func TestAppUpdateBasic(t *testing.T) {
 	app, _ := newTestApp(t)
 
