@@ -80,8 +80,19 @@ func New(cfg Config) *Tool {
 
 // newHTTPClient 创建禁止自动重定向的客户端，避免跨域重定向绕过上层网络权限校验。
 func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: timeout}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialAddress, err := resolveDialAddress(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, network, dialAddress)
+	}
+
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -205,6 +216,48 @@ func validateFetchTarget(ctx context.Context, target string) error {
 		}
 	}
 	return nil
+}
+
+// resolveDialAddress 在真实拨号前校验并收敛最终目标地址，避免 DNS 重绑定导致的 TOCTOU 绕过。
+func resolveDialAddress(ctx context.Context, address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("%s: invalid dial address", toolName)
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("%s: url host is empty", toolName)
+	}
+	if bypassTargetValidation(ctx) {
+		return address, nil
+	}
+	if isLocalHostName(host) {
+		return "", fmt.Errorf("%s: target host is blocked", toolName)
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return "", fmt.Errorf("%s: target host is blocked", toolName)
+		}
+		return net.JoinHostPort(ip.String(), port), nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	records, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return "", fmt.Errorf("%s: resolve host: %w", toolName, err)
+	}
+	for _, record := range records {
+		if isBlockedIP(record.IP) {
+			continue
+		}
+		return net.JoinHostPort(record.IP.String(), port), nil
+	}
+	if len(records) == 0 {
+		return "", fmt.Errorf("%s: resolve host: empty result", toolName)
+	}
+	return "", fmt.Errorf("%s: target host is blocked", toolName)
 }
 
 // bypassTargetValidation 判断当前上下文是否显式跳过目标地址安全校验，仅供包内测试使用。

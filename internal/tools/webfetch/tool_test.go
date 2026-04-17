@@ -430,3 +430,23 @@ func TestToolExecuteBlocksLocalAndPrivateTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchBlocksLoopbackAtDial(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	tool := New(Config{
+		Timeout:               2 * time.Second,
+		MaxResponseBytes:      config.DefaultWebFetchMaxResponseBytes,
+		SupportedContentTypes: config.DefaultWebFetchSupportedContentTypes(),
+	})
+
+	_, err := tool.fetch(context.Background(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "target host is blocked") {
+		t.Fatalf("expected loopback dial to be blocked, got %v", err)
+	}
+}
