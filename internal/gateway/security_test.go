@@ -35,3 +35,19 @@ func TestNormalizeRequestSource(t *testing.T) {
 		t.Fatalf("normalized source = %q, want %q", got, RequestSourceUnknown)
 	}
 }
+
+func TestACLModeAndNilBehavior(t *testing.T) {
+	var nilACL *ControlPlaneACL
+	if mode := nilACL.Mode(); mode != ACLModeStrict {
+		t.Fatalf("mode = %q, want %q", mode, ACLModeStrict)
+	}
+	if !nilACL.IsAllowed(RequestSourceUnknown, "") {
+		t.Fatal("nil acl should allow by default")
+	}
+
+	acl := NewStrictControlPlaneACL()
+	acl.enabled = false
+	if !acl.IsAllowed(RequestSourceUnknown, "") {
+		t.Fatal("disabled acl should allow all requests")
+	}
+}

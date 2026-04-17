@@ -519,6 +519,57 @@ func TestDecodeJSONRPCRequestFromReaderTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestNetworkServerVersionAndObservabilityAuthHelpers(t *testing.T) {
+	server := &NetworkServer{
+		authenticator: stubTokenAuthenticator{token: "token-1"},
+	}
+
+	t.Run("version method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/version", nil)
+		server.handleVersionRequest(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+
+	t.Run("version get returns build info", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/version", nil)
+		server.handleVersionRequest(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode version response: %v", err)
+		}
+		if payload["version"] == "" || payload["commit"] == "" {
+			t.Fatalf("unexpected version payload: %#v", payload)
+		}
+	})
+
+	t.Run("observability auth uses bearer token", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.Header.Set("Authorization", "Bearer token-1")
+		if !server.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected valid bearer token to pass")
+		}
+		request.Header.Set("Authorization", "Bearer wrong")
+		if server.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected invalid token to be rejected")
+		}
+	})
+
+	t.Run("observability auth bypass when authenticator nil", func(t *testing.T) {
+		openServer := &NetworkServer{}
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		if !openServer.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected request to pass without authenticator")
+		}
+	})
+}
+
 func TestNetworkServerCloseInterruptsStreams(t *testing.T) {
 	server := newTestNetworkServer(t, NetworkServerOptions{})
 	testContext, cancel := context.WithCancel(context.Background())

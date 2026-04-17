@@ -64,3 +64,86 @@ func TestRequestContextHelpers(t *testing.T) {
 		t.Fatal("expected to load logger")
 	}
 }
+
+func TestRequestContextNilAndTypeMismatchBranches(t *testing.T) {
+	t.Run("nil input", func(t *testing.T) {
+		if source := RequestSourceFromContext(nil); source != RequestSourceUnknown {
+			t.Fatalf("source = %q, want %q", source, RequestSourceUnknown)
+		}
+		if token := RequestTokenFromContext(nil); token != "" {
+			t.Fatalf("token = %q, want empty", token)
+		}
+		if _, ok := ConnectionAuthStateFromContext(nil); ok {
+			t.Fatal("expected missing auth state")
+		}
+		if _, ok := TokenAuthenticatorFromContext(nil); ok {
+			t.Fatal("expected missing authenticator")
+		}
+		if _, ok := RequestACLFromContext(nil); ok {
+			t.Fatal("expected missing acl")
+		}
+		if _, ok := GatewayMetricsFromContext(nil); ok {
+			t.Fatal("expected missing metrics")
+		}
+		if _, ok := GatewayLoggerFromContext(nil); ok {
+			t.Fatal("expected missing logger")
+		}
+	})
+
+	t.Run("nil context in with helpers", func(t *testing.T) {
+		ctx := WithRequestSource(nil, " WS ")
+		ctx = WithRequestToken(ctx, " token ")
+		ctx = WithConnectionAuthState(ctx, NewConnectionAuthState())
+		ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token"})
+		ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+		ctx = WithGatewayMetrics(ctx, NewGatewayMetrics())
+		ctx = WithGatewayLogger(ctx, log.New(os.Stderr, "", 0))
+
+		if source := RequestSourceFromContext(ctx); source != RequestSourceWS {
+			t.Fatalf("source = %q, want %q", source, RequestSourceWS)
+		}
+		if token := RequestTokenFromContext(ctx); token != "token" {
+			t.Fatalf("token = %q, want %q", token, "token")
+		}
+	})
+
+	t.Run("type mismatch", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), requestSourceContextKey{}, 1)
+		ctx = context.WithValue(ctx, requestTokenContextKey{}, 2)
+		ctx = context.WithValue(ctx, connectionAuthStateContextKey{}, "state")
+		ctx = context.WithValue(ctx, tokenAuthenticatorContextKey{}, "auth")
+		ctx = context.WithValue(ctx, requestACLContextKey{}, "acl")
+		ctx = context.WithValue(ctx, gatewayMetricsContextKey{}, "metrics")
+		ctx = context.WithValue(ctx, gatewayLoggerContextKey{}, "logger")
+
+		if source := RequestSourceFromContext(ctx); source != RequestSourceUnknown {
+			t.Fatalf("source = %q, want %q", source, RequestSourceUnknown)
+		}
+		if token := RequestTokenFromContext(ctx); token != "" {
+			t.Fatalf("token = %q, want empty", token)
+		}
+		if _, ok := ConnectionAuthStateFromContext(ctx); ok {
+			t.Fatal("expected type mismatch for auth state")
+		}
+		if _, ok := TokenAuthenticatorFromContext(ctx); ok {
+			t.Fatal("expected type mismatch for authenticator")
+		}
+		if _, ok := RequestACLFromContext(ctx); ok {
+			t.Fatal("expected type mismatch for acl")
+		}
+		if _, ok := GatewayMetricsFromContext(ctx); ok {
+			t.Fatal("expected type mismatch for metrics")
+		}
+		if _, ok := GatewayLoggerFromContext(ctx); ok {
+			t.Fatal("expected type mismatch for logger")
+		}
+	})
+}
+
+func TestConnectionAuthStateNilReceiver(t *testing.T) {
+	var state *ConnectionAuthState
+	state.MarkAuthenticated()
+	if state.IsAuthenticated() {
+		t.Fatal("nil state should remain unauthenticated")
+	}
+}

@@ -188,3 +188,39 @@ func TestBuildCredentialsAndValidation(t *testing.T) {
 		t.Fatal("blank token should be invalid")
 	}
 }
+
+func TestDefaultAuthPathAndLoadOrCreateNilManager(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+
+	defaultPath, err := DefaultAuthPath()
+	if err != nil {
+		t.Fatalf("default auth path: %v", err)
+	}
+	expectedPath := filepath.Join(tempHome, DefaultAuthRelativePath)
+	if defaultPath != expectedPath {
+		t.Fatalf("default auth path = %q, want %q", defaultPath, expectedPath)
+	}
+
+	manager, err := NewManager("")
+	if err != nil {
+		t.Fatalf("new manager with default path: %v", err)
+	}
+	if manager.Path() != expectedPath {
+		t.Fatalf("manager path = %q, want %q", manager.Path(), expectedPath)
+	}
+
+	token, err := LoadTokenFromFile("")
+	if err != nil {
+		t.Fatalf("load token from default path: %v", err)
+	}
+	if token != manager.Token() {
+		t.Fatalf("token = %q, want %q", token, manager.Token())
+	}
+
+	var nilManager *Manager
+	if err := nilManager.loadOrCreate(); err == nil {
+		t.Fatal("expected nil manager loadOrCreate error")
+	}
+}
