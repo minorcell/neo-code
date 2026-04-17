@@ -30,22 +30,12 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	}
 
 	switch frame.Action {
-	case FrameActionAuthenticate:
+	case FrameActionAuthenticate, FrameActionBindStream, FrameActionWakeOpenURL:
 		if frame.Payload == nil {
 			return NewMissingRequiredFieldError("payload")
 		}
 		return nil
-	case FrameActionPing:
-		return nil
-	case FrameActionBindStream:
-		if frame.Payload == nil {
-			return NewMissingRequiredFieldError("payload")
-		}
-		return nil
-	case FrameActionWakeOpenURL:
-		if frame.Payload == nil {
-			return NewMissingRequiredFieldError("payload")
-		}
+	case FrameActionPing, FrameActionCancel, FrameActionListSessions:
 		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
@@ -55,8 +45,6 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		}
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
-	case FrameActionCancel, FrameActionListSessions:
-		return nil
 	default:
 		return NewFrameError(ErrorCodeInvalidAction, "invalid action")
 	}

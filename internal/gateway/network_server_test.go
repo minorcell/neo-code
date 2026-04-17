@@ -136,7 +136,10 @@ func TestWithCORSAllowlistBehavior(t *testing.T) {
 }
 
 func TestNetworkServerHTTPRPCAndCORS(t *testing.T) {
-	server := newTestNetworkServer(t, NetworkServerOptions{})
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+		ACL:           NewStrictControlPlaneACL(),
+	})
 	testContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -162,6 +165,7 @@ func TestNetworkServerHTTPRPCAndCORS(t *testing.T) {
 	}
 	request.Header.Set("Origin", "http://localhost:3000")
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer gateway-token")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("post /rpc: %v", err)
@@ -226,7 +230,11 @@ func TestNetworkServerRejectsDisallowedCORSOrigin(t *testing.T) {
 }
 
 func TestNetworkServerRPCErrorBranches(t *testing.T) {
-	server := newTestNetworkServer(t, NetworkServerOptions{MaxRequestBytes: 16})
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		MaxRequestBytes: 16,
+		Authenticator:   staticTokenAuthenticator{token: "gateway-token"},
+		ACL:             NewStrictControlPlaneACL(),
+	})
 	testContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -262,6 +270,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("new request: %v", err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer gateway-token")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatalf("post /rpc: %v", err)
@@ -286,6 +295,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("new request: %v", err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer gateway-token")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatalf("post /rpc: %v", err)
@@ -341,7 +351,7 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("acl denied rpc maps to http 401", func(t *testing.T) {
+	t.Run("acl denied rpc maps to http 403", func(t *testing.T) {
 		deniedACL := &ControlPlaneACL{
 			mode:    ACLModeStrict,
 			allow:   map[RequestSource]map[string]struct{}{RequestSourceHTTP: {}},
@@ -383,8 +393,8 @@ func TestNetworkServerRPCErrorBranches(t *testing.T) {
 			t.Fatalf("post /rpc: %v", err)
 		}
 		defer response.Body.Close()
-		if response.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusForbidden)
 		}
 	})
 }
@@ -734,11 +744,11 @@ func TestNetworkServerVersionAndObservabilityAuthHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("observability auth bypass when authenticator nil", func(t *testing.T) {
+	t.Run("observability auth denies when authenticator nil", func(t *testing.T) {
 		openServer := &NetworkServer{}
 		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-		if !openServer.isObservabilityRequestAuthorized(request) {
-			t.Fatal("expected request to pass without authenticator")
+		if openServer.isObservabilityRequestAuthorized(request) {
+			t.Fatal("expected request to be rejected without authenticator")
 		}
 	})
 }

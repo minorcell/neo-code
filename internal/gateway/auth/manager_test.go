@@ -145,8 +145,12 @@ func TestResolveAuthPathAndEnsureDirError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve custom path: %v", err)
 	}
-	if resolvedCustomPath != filepath.Clean(customPath) {
-		t.Fatalf("resolved custom path = %q, want %q", resolvedCustomPath, filepath.Clean(customPath))
+	expectedCustomPath, err := filepath.Abs(filepath.Clean(customPath))
+	if err != nil {
+		t.Fatalf("abs custom path: %v", err)
+	}
+	if resolvedCustomPath != expectedCustomPath {
+		t.Fatalf("resolved custom path = %q, want %q", resolvedCustomPath, expectedCustomPath)
 	}
 
 	baseDir := t.TempDir()

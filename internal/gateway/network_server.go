@@ -465,7 +465,7 @@ func (s *NetworkServer) isObservabilityRequestAuthorized(request *http.Request) 
 // isControlPlaneHTTPRequestAuthorized 校验 HTTP 控制面请求是否携带并通过 Bearer Token。
 func (s *NetworkServer) isControlPlaneHTTPRequestAuthorized(request *http.Request) bool {
 	if s.authenticator == nil {
-		return true
+		return false
 	}
 	token := extractBearerToken(request.Header.Get("Authorization"))
 	return s.authenticator.ValidateToken(token)
@@ -475,6 +475,21 @@ func (s *NetworkServer) isControlPlaneHTTPRequestAuthorized(request *http.Reques
 func (s *NetworkServer) handleRPCRequest(writer http.ResponseWriter, request *http.Request, runtimePort RuntimePort) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.isControlPlaneHTTPRequestAuthorized(request) {
+		writeJSONRPCHTTPResponse(
+			writer,
+			http.StatusUnauthorized,
+			protocol.NewJSONRPCErrorResponse(
+				nil,
+				protocol.NewJSONRPCError(
+					protocol.MapGatewayCodeToJSONRPCCode(ErrorCodeUnauthorized.String()),
+					"unauthorized",
+					ErrorCodeUnauthorized.String(),
+				),
+			),
+		)
 		return
 	}
 
@@ -875,8 +890,10 @@ func writeJSONRPCHTTPResponse(writer http.ResponseWriter, statusCode int, respon
 func resolveJSONRPCHTTPStatusCode(response protocol.JSONRPCResponse) int {
 	gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error)
 	switch gatewayCode {
-	case ErrorCodeUnauthorized.String(), ErrorCodeAccessDenied.String():
+	case ErrorCodeUnauthorized.String():
 		return http.StatusUnauthorized
+	case ErrorCodeAccessDenied.String():
+		return http.StatusForbidden
 	default:
 		return http.StatusOK
 	}

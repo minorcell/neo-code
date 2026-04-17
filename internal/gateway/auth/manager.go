@@ -145,7 +145,11 @@ func (m *Manager) loadOrCreate() error {
 func resolveAuthPath(path string) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed != "" {
-		return filepath.Clean(trimmed), nil
+		absolutePath, err := filepath.Abs(filepath.Clean(trimmed))
+		if err != nil {
+			return "", fmt.Errorf("gateway auth: resolve auth path: %w", err)
+		}
+		return absolutePath, nil
 	}
 
 	homeDir, err := os.UserHomeDir()
