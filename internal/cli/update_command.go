@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +18,11 @@ type updateCommandOptions struct {
 }
 
 var runUpdateCommand = defaultUpdateCommandRunner
+var doUpdate = updater.DoUpdate
+
+var updateCommandTimeout = 5 * time.Minute
+
+const updateTimeoutErrorTemplate = "\u66f4\u65b0\u8d85\u65f6\uff08%s\uff09\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5"
 
 // newUpdateCommand 创建 update 子命令并绑定升级参数。
 func newUpdateCommand() *cobra.Command {
@@ -53,8 +60,18 @@ func newUpdateCommand() *cobra.Command {
 
 // defaultUpdateCommandRunner 执行手动升级流程并返回升级结果。
 func defaultUpdateCommandRunner(ctx context.Context, options updateCommandOptions) (updater.UpdateResult, error) {
-	return updater.DoUpdate(ctx, updater.UpdateOptions{
+	updateCtx, cancel := context.WithTimeout(ctx, updateCommandTimeout)
+	defer cancel()
+
+	result, err := doUpdate(updateCtx, updater.UpdateOptions{
 		CurrentVersion:    version.Current(),
 		IncludePrerelease: options.IncludePrerelease,
 	})
+	if err != nil {
+		if errors.Is(updateCtx.Err(), context.DeadlineExceeded) {
+			return updater.UpdateResult{}, fmt.Errorf(updateTimeoutErrorTemplate, updateCommandTimeout)
+		}
+		return updater.UpdateResult{}, err
+	}
+	return result, nil
 }

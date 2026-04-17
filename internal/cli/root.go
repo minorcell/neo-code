@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,8 +21,12 @@ var launchRootProgram = defaultRootProgramLauncher
 var newRootProgram = app.NewProgram
 var runGlobalPreload = defaultGlobalPreload
 var runSilentUpdateCheck = defaultSilentUpdateCheck
+var readCurrentVersion = version.Current
+var checkLatestRelease = updater.CheckLatest
 
 const silentUpdateCheckTimeout = 3 * time.Second
+
+var ansiEscapeSequencePattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
 
 // GlobalFlags 描述 CLI 根命令当前支持的全局参数。
 type GlobalFlags struct {
@@ -52,7 +57,9 @@ func NewRootCommand() *cobra.Command {
 			if err := runGlobalPreload(cmd.Context()); err != nil {
 				return err
 			}
-			runSilentUpdateCheck(cmd.Context())
+			if !shouldSkipSilentUpdateCheck(cmd) {
+				runSilentUpdateCheck(cmd.Context())
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -107,7 +114,7 @@ func defaultGlobalPreload(ctx context.Context) error {
 
 // defaultSilentUpdateCheck 在后台异步检查新版本并缓存退出后提示文案。
 func defaultSilentUpdateCheck(ctx context.Context) {
-	currentVersion := version.Current()
+	currentVersion := readCurrentVersion()
 	if !version.IsSemverRelease(currentVersion) {
 		return
 	}
@@ -117,17 +124,19 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 		checkCtx, cancel := context.WithTimeout(parent, silentUpdateCheckTimeout)
 		defer cancel()
 
-		result, err := updater.CheckLatest(checkCtx, updater.CheckOptions{
+		result, err := checkLatestRelease(checkCtx, updater.CheckOptions{
 			CurrentVersion:    currentVersion,
 			IncludePrerelease: false,
 		})
 		if err != nil || !result.HasUpdate {
 			return
 		}
-		if strings.TrimSpace(result.LatestVersion) == "" {
+
+		latestVersion := sanitizeVersionForTerminal(result.LatestVersion)
+		if latestVersion == "" {
 			return
 		}
-		setUpdateNotice(fmt.Sprintf("🚀 发现新版本: %s，运行 neocode update 即可升级", result.LatestVersion))
+		setUpdateNotice(fmt.Sprintf("\u53d1\u73b0\u65b0\u7248\u672c: %s\uff0c\u8fd0\u884c neocode update \u5373\u53ef\u5347\u7ea7", latestVersion))
 	}(parentCtx, currentVersion)
 }
 
@@ -137,4 +146,30 @@ func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(cmd.Name()), "url-dispatch")
+}
+
+// shouldSkipSilentUpdateCheck 判断当前命令是否应跳过静默更新检测。
+func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(cmd.Name())) {
+	case "url-dispatch", "update":
+		return true
+	default:
+		return false
+	}
+}
+
+// sanitizeVersionForTerminal 清洗远端版本字符串，避免 ANSI 控制序列或不可见字符污染终端输出。
+func sanitizeVersionForTerminal(version string) string {
+	cleaned := ansiEscapeSequencePattern.ReplaceAllString(version, "")
+	var builder strings.Builder
+	builder.Grow(len(cleaned))
+	for _, ch := range cleaned {
+		if ch >= 0x20 && ch <= 0x7e {
+			builder.WriteRune(ch)
+		}
+	}
+	return strings.TrimSpace(builder.String())
 }
