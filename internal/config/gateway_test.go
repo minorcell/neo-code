@@ -167,6 +167,32 @@ gateway:
 			t.Fatalf("expected parse gateway config error, got %v", err)
 		}
 	})
+
+	t.Run("unknown gateway field returns parse error", func(t *testing.T) {
+		t.Parallel()
+		baseDir := t.TempDir()
+		configPath := filepath.Join(baseDir, configName)
+		content := `
+selected_provider: openai
+current_model: gpt-5.4
+shell: bash
+gateway:
+  security:
+    acl_mode: strict
+    token_fiel: /tmp/typo-auth.json
+`
+		if err := os.WriteFile(configPath, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+
+		_, err := LoadGatewayConfig(context.Background(), baseDir)
+		if err == nil {
+			t.Fatal("expected unknown gateway field parse error")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "field") {
+			t.Fatalf("error = %v, want contains unknown field diagnostic", err)
+		}
+	})
 }
 
 func TestGatewaySecurityConfigApplyDefaultsAndValidateBranches(t *testing.T) {

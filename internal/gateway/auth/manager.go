@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,15 @@ const (
 const (
 	authDirPerm  = 0o700
 	authFilePerm = 0o600
+)
+
+const (
+	authTempFilePattern = ".auth.json.tmp-*"
+)
+
+var (
+	errUnsafeCredentialPath  = errors.New("unsafe credential path")
+	errInvalidCredentialBody = errors.New("invalid credential body")
 )
 
 // Credentials 表示持久化在磁盘上的认证凭证结构。
@@ -116,6 +126,9 @@ func (m *Manager) loadOrCreate() error {
 		m.credentials = credentials
 		return nil
 	}
+	if readErr != nil && !isRecoverableCredentialReadError(readErr) {
+		return readErr
+	}
 
 	createdCredentials, createErr := buildCredentials(time.Now().UTC())
 	if createErr != nil {
@@ -147,6 +160,9 @@ func ensureAuthDir(dir string) error {
 	if err := os.MkdirAll(dir, authDirPerm); err != nil {
 		return fmt.Errorf("gateway auth: create auth dir: %w", err)
 	}
+	if err := ensureSafeCredentialDirectory(dir); err != nil {
+		return err
+	}
 	if err := applyAuthDirPermission(dir); err != nil {
 		return err
 	}
@@ -155,6 +171,10 @@ func ensureAuthDir(dir string) error {
 
 // readCredentials 读取并解析认证凭证文件。
 func readCredentials(path string) (Credentials, error) {
+	if err := ensureSafeCredentialFilePath(path, false); err != nil {
+		return Credentials{}, err
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Credentials{}, fmt.Errorf("gateway auth: read auth file: %w", err)
@@ -162,7 +182,7 @@ func readCredentials(path string) (Credentials, error) {
 
 	var credentials Credentials
 	if err := json.Unmarshal(raw, &credentials); err != nil {
-		return Credentials{}, fmt.Errorf("gateway auth: decode auth file: %w", err)
+		return Credentials{}, fmt.Errorf("gateway auth: decode auth file: %w: %w", errInvalidCredentialBody, err)
 	}
 	return credentials, nil
 }
@@ -197,9 +217,50 @@ func writeCredentials(path string, credentials Credentials) error {
 		return fmt.Errorf("gateway auth: encode credentials: %w", err)
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(path, raw, authFilePerm); err != nil {
-		return fmt.Errorf("gateway auth: write auth file: %w", err)
+	if err := ensureSafeCredentialFilePath(path, true); err != nil {
+		return err
 	}
+
+	authDir := filepath.Dir(path)
+	if err := ensureSafeCredentialDirectory(authDir); err != nil {
+		return err
+	}
+
+	tempFile, err := os.CreateTemp(authDir, authTempFilePattern)
+	if err != nil {
+		return fmt.Errorf("gateway auth: create temp auth file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(raw); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("gateway auth: write temp auth file: %w", err)
+	}
+	if err := tempFile.Sync(); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("gateway auth: sync temp auth file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("gateway auth: close temp auth file: %w", err)
+	}
+
+	if err := applyAuthFilePermission(tempPath); err != nil {
+		return err
+	}
+	if err := ensureSafeCredentialFilePath(path, true); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("gateway auth: replace auth file atomically: %w", err)
+	}
+	cleanupTemp = false
+
 	if err := applyAuthFilePermission(path); err != nil {
 		return err
 	}
@@ -209,4 +270,45 @@ func writeCredentials(path string, credentials Credentials) error {
 // isValidCredentials 判断凭证内容是否完整可用。
 func isValidCredentials(credentials Credentials) bool {
 	return credentials.Version >= credentialSchemaVersion && strings.TrimSpace(credentials.Token) != ""
+}
+
+// isRecoverableCredentialReadError 判断读取凭证失败是否允许走自动重建流程。
+func isRecoverableCredentialReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return errors.Is(err, errInvalidCredentialBody)
+}
+
+// ensureSafeCredentialDirectory 校验凭证目录不是链接路径，避免目录级别劫持。
+func ensureSafeCredentialDirectory(dir string) error {
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("gateway auth: inspect auth dir: %w", err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("gateway auth: auth dir is symbolic link: %w", errUnsafeCredentialPath)
+	}
+	return nil
+}
+
+// ensureSafeCredentialFilePath 校验凭证文件路径不为软链接/危险硬链接。
+func ensureSafeCredentialFilePath(path string, allowNotExist bool) error {
+	fileInfo, err := os.Lstat(path)
+	if err != nil {
+		if allowNotExist && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("gateway auth: inspect auth file: %w", err)
+	}
+	if fileInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("gateway auth: auth file is symbolic link: %w", errUnsafeCredentialPath)
+	}
+	if isUnsafeCredentialHardLink(fileInfo) {
+		return fmt.Errorf("gateway auth: auth file is hard link: %w", errUnsafeCredentialPath)
+	}
+	return nil
 }

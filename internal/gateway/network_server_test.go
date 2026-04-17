@@ -508,6 +508,81 @@ func TestNetworkServerWebSocketReadTimeoutDoesNotKillIdleConnection(t *testing.T
 	}
 }
 
+func TestNetworkServerWebSocketUnauthenticatedConnectionTimeout(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator:                staticTokenAuthenticator{token: "gateway-token"},
+		ACL:                          NewStrictControlPlaneACL(),
+		MaxStreamConnections:         1,
+		UnauthenticatedWSGracePeriod: 120 * time.Millisecond,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = wsConn.Close() })
+
+	waitForWebSocketConnectionCount(t, server, 1, 2*time.Second)
+	waitForWebSocketConnectionCount(t, server, 0, 2*time.Second)
+
+	waitForWebSocketClosed(t, wsConn, 2*time.Second)
+}
+
+func TestNetworkServerWebSocketAuthenticatedConnectionBypassesTimeout(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator:                staticTokenAuthenticator{token: "gateway-token"},
+		ACL:                          NewStrictControlPlaneACL(),
+		UnauthenticatedWSGracePeriod: 120 * time.Millisecond,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws?token=gateway-token", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = wsConn.Close() })
+
+	time.Sleep(250 * time.Millisecond)
+	if err := websocket.Message.Send(wsConn, `{"jsonrpc":"2.0","id":"ws-auth-ok","method":"gateway.ping","params":{}}`); err != nil {
+		t.Fatalf("send ping after auth grace period: %v", err)
+	}
+	ackFrame := receiveWSAckFrame(t, wsConn)
+	if ackFrame.RequestID != "ws-auth-ok" {
+		t.Fatalf("request_id = %q, want %q", ackFrame.RequestID, "ws-auth-ok")
+	}
+}
+
 func TestNetworkServerWebSocketDispatchContextCancelledOnShutdown(t *testing.T) {
 	originalDispatch := dispatchRPCRequestFn
 	t.Cleanup(func() { dispatchRPCRequestFn = originalDispatch })
@@ -638,12 +713,12 @@ func TestNetworkServerVersionAndObservabilityAuthHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("version requires bearer token when authenticator enabled", func(t *testing.T) {
+	t.Run("version remains public when authenticator enabled", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/version", nil)
 		server.handleVersionRequest(recorder, request)
-		if recorder.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 		}
 	})
 
@@ -826,22 +901,8 @@ func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
 		t.Fatalf("get /healthz: %v", err)
 	}
 	defer healthResponse.Body.Close()
-	if healthResponse.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("/healthz status = %d, want %d", healthResponse.StatusCode, http.StatusUnauthorized)
-	}
-
-	authorizedHealthRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/healthz", nil)
-	if err != nil {
-		t.Fatalf("new /healthz request: %v", err)
-	}
-	authorizedHealthRequest.Header.Set("Authorization", "Bearer gateway-token")
-	authorizedHealthResponse, err := http.DefaultClient.Do(authorizedHealthRequest)
-	if err != nil {
-		t.Fatalf("authorized get /healthz: %v", err)
-	}
-	defer authorizedHealthResponse.Body.Close()
-	if authorizedHealthResponse.StatusCode != http.StatusOK {
-		t.Fatalf("authorized /healthz status = %d, want %d", authorizedHealthResponse.StatusCode, http.StatusOK)
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("/healthz status = %d, want %d", healthResponse.StatusCode, http.StatusOK)
 	}
 
 	versionResponse, err := http.Get("http://" + listenAddress + "/version")
@@ -849,22 +910,8 @@ func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
 		t.Fatalf("get /version: %v", err)
 	}
 	defer versionResponse.Body.Close()
-	if versionResponse.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("/version status = %d, want %d", versionResponse.StatusCode, http.StatusUnauthorized)
-	}
-
-	authorizedVersionRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/version", nil)
-	if err != nil {
-		t.Fatalf("new /version request: %v", err)
-	}
-	authorizedVersionRequest.Header.Set("Authorization", "Bearer gateway-token")
-	authorizedVersionResponse, err := http.DefaultClient.Do(authorizedVersionRequest)
-	if err != nil {
-		t.Fatalf("authorized get /version: %v", err)
-	}
-	defer authorizedVersionResponse.Body.Close()
-	if authorizedVersionResponse.StatusCode != http.StatusOK {
-		t.Fatalf("authorized /version status = %d, want %d", authorizedVersionResponse.StatusCode, http.StatusOK)
+	if versionResponse.StatusCode != http.StatusOK {
+		t.Fatalf("/version status = %d, want %d", versionResponse.StatusCode, http.StatusOK)
 	}
 
 	metricsResponse, err := http.Get("http://" + listenAddress + "/metrics")
@@ -1056,6 +1103,48 @@ func waitForNetworkAddress(t *testing.T, server *NetworkServer) string {
 			}
 		}
 	}
+}
+
+// waitForWebSocketConnectionCount 轮询等待 WS 连接数达到目标值，便于验证超时剔除是否生效。
+func waitForWebSocketConnectionCount(t *testing.T, server *NetworkServer, want int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			t.Fatalf("timed out waiting websocket connections = %d, got %d", want, got)
+		case <-ticker.C:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			if got == want {
+				return
+			}
+		}
+	}
+}
+
+// waitForWebSocketClosed 循环读取直到连接关闭；会忽略关闭前可能滞留在缓冲区中的心跳消息。
+func waitForWebSocketClosed(t *testing.T, wsConn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_ = wsConn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		var rawMessage string
+		err := websocket.Message.Receive(wsConn, &rawMessage)
+		if err != nil {
+			return
+		}
+	}
+	t.Fatal("expected websocket connection to be closed before timeout")
 }
 
 // receiveWSAckFrame 连续读取 WS 消息直到拿到 JSON-RPC ACK 结果帧。

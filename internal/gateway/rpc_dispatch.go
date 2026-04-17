@@ -12,13 +12,14 @@ import (
 func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, runtimePort RuntimePort) protocol.JSONRPCResponse {
 	startedAt := requestStartTime()
 	method := strings.TrimSpace(request.Method)
+	metricMethod := normalizeMethodMetricLabel(method)
 	source := string(RequestSourceFromContext(ctx))
 	metrics, _ := GatewayMetricsFromContext(ctx)
 
 	normalized, rpcErr := protocol.NormalizeJSONRPCRequest(request)
 	if rpcErr != nil {
 		if metrics != nil {
-			metrics.IncRequests(source, method, "error")
+			metrics.IncRequests(source, metricMethod, "error")
 		}
 		emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{
 			RequestID:   "",
@@ -34,12 +35,12 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 
 	if authErr := authorizeRPCRequest(ctx, request.Method, normalized.Action); authErr != nil {
 		if metrics != nil {
-			metrics.IncRequests(source, method, "error")
+			metrics.IncRequests(source, metricMethod, "error")
 			if gatewayCode := protocol.GatewayCodeFromJSONRPCError(authErr); gatewayCode == ErrorCodeUnauthorized.String() {
 				metrics.IncAuthFailures(source, gatewayCode)
 			}
 			if gatewayCode := protocol.GatewayCodeFromJSONRPCError(authErr); gatewayCode == ErrorCodeAccessDenied.String() {
-				metrics.IncACLDenied(source, method)
+				metrics.IncACLDenied(source, metricMethod)
 			}
 		}
 		emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{
@@ -67,7 +68,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 	frame = hydrateFrameSessionFromConnection(ctx, frame)
 	if requiresSession(frame.Action) && strings.TrimSpace(frame.SessionID) == "" {
 		if metrics != nil {
-			metrics.IncRequests(source, method, "error")
+			metrics.IncRequests(source, metricMethod, "error")
 		}
 		emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{
 			RequestID:   normalized.RequestID,
@@ -94,7 +95,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		rpcResponse, encodeErr := protocol.NewJSONRPCResultResponse(normalized.ID, responseFrame)
 		if encodeErr != nil {
 			if metrics != nil {
-				metrics.IncRequests(source, method, "error")
+				metrics.IncRequests(source, metricMethod, "error")
 			}
 			emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{
 				RequestID:   normalized.RequestID,
@@ -108,7 +109,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 			return protocol.NewJSONRPCErrorResponse(normalized.ID, encodeErr)
 		}
 		if metrics != nil {
-			metrics.IncRequests(source, method, "ok")
+			metrics.IncRequests(source, metricMethod, "ok")
 		}
 		emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{
 			RequestID: normalized.RequestID,
@@ -134,12 +135,12 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		),
 	)
 	if metrics != nil {
-		metrics.IncRequests(source, method, "error")
+		metrics.IncRequests(source, metricMethod, "error")
 		if frameErr.Code == ErrorCodeUnauthorized.String() {
 			metrics.IncAuthFailures(source, frameErr.Code)
 		}
 		if frameErr.Code == ErrorCodeAccessDenied.String() {
-			metrics.IncACLDenied(source, method)
+			metrics.IncACLDenied(source, metricMethod)
 		}
 	}
 	emitRequestLog(ctx, nilSafeLoggerFromContext(ctx), RequestLogEntry{

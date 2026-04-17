@@ -36,10 +36,12 @@ func LoadGatewayConfig(ctx context.Context, baseDir string) (GatewayConfig, erro
 	}
 
 	var file struct {
-		Gateway GatewayConfig `yaml:"gateway,omitempty"`
+		Gateway GatewayConfig  `yaml:"gateway,omitempty"`
+		Extra   map[string]any `yaml:",inline"`
 	}
 	file.Gateway = defaults.Clone()
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
 	if err := decoder.Decode(&file); err != nil {
 		return GatewayConfig{}, fmt.Errorf("config: parse gateway config file: %w", err)
 	}

@@ -37,6 +37,8 @@ const (
 	DefaultNetworkMaxRequestBytes int64 = MaxFrameSize
 	// DefaultNetworkMaxStreamConnections 定义 WS/SSE 长连接总上限。
 	DefaultNetworkMaxStreamConnections = 128
+	// DefaultWSUnauthenticatedTimeout 定义 WS 未认证连接的最大等待时间。
+	DefaultWSUnauthenticatedTimeout = 3 * time.Second
 )
 
 var (
@@ -55,12 +57,14 @@ type NetworkServerOptions struct {
 	HeartbeatInterval    time.Duration
 	MaxRequestBytes      int64
 	MaxStreamConnections int
-	Relay                *StreamRelay
-	Authenticator        TokenAuthenticator
-	ACL                  *ControlPlaneACL
-	Metrics              *GatewayMetrics
-	AllowedOrigins       []string
-	listenFn             func(network, address string) (net.Listener, error)
+	// UnauthenticatedWSGracePeriod 定义 WS 连接未认证时的容忍时长。
+	UnauthenticatedWSGracePeriod time.Duration
+	Relay                        *StreamRelay
+	Authenticator                TokenAuthenticator
+	ACL                          *ControlPlaneACL
+	Metrics                      *GatewayMetrics
+	AllowedOrigins               []string
+	listenFn                     func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -71,6 +75,7 @@ type NetworkServer struct {
 	writeTimeout         time.Duration
 	shutdownTimeout      time.Duration
 	heartbeatInterval    time.Duration
+	unauthenticatedWSTTL time.Duration
 	maxRequestBytes      int64
 	maxStreamConnections int
 	listenFn             func(network, address string) (net.Listener, error)
@@ -135,6 +140,10 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 	if maxStreamConnections <= 0 {
 		maxStreamConnections = DefaultNetworkMaxStreamConnections
 	}
+	unauthenticatedWSTTL := options.UnauthenticatedWSGracePeriod
+	if unauthenticatedWSTTL <= 0 {
+		unauthenticatedWSTTL = DefaultWSUnauthenticatedTimeout
+	}
 
 	relay := options.Relay
 	if relay == nil {
@@ -163,6 +172,7 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		writeTimeout:         writeTimeout,
 		shutdownTimeout:      shutdownTimeout,
 		heartbeatInterval:    heartbeatInterval,
+		unauthenticatedWSTTL: unauthenticatedWSTTL,
 		maxRequestBytes:      maxRequestBytes,
 		maxStreamConnections: maxStreamConnections,
 		listenFn:             listenFn,
@@ -379,10 +389,6 @@ func (s *NetworkServer) handleHealthzRequest(writer http.ResponseWriter, request
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isControlPlaneHTTPRequestAuthorized(request) {
-		http.Error(writer, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	connectionSnapshot := map[string]int{}
 	if s.relay != nil {
@@ -404,10 +410,6 @@ func (s *NetworkServer) handleHealthzRequest(writer http.ResponseWriter, request
 func (s *NetworkServer) handleVersionRequest(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.isControlPlaneHTTPRequestAuthorized(request) {
-		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	writeJSONResponse(writer, http.StatusOK, ResolvedBuildInfo())
@@ -509,8 +511,11 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 
 	connectionID := NewConnectionID()
 	requestToken := ""
-	if request := conn.Request(); request != nil && request.URL != nil {
-		requestToken = strings.TrimSpace(request.URL.Query().Get("token"))
+	if request := conn.Request(); request != nil {
+		requestToken = extractBearerToken(request.Header.Get("Authorization"))
+		if requestToken == "" && request.URL != nil {
+			requestToken = strings.TrimSpace(request.URL.Query().Get("token"))
+		}
 	}
 	connectionContext = s.decorateRequestContext(connectionContext, RequestSourceWS, requestToken)
 	connectionContext = WithConnectionID(connectionContext, connectionID)
@@ -557,6 +562,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		_ = conn.Close()
 		return
 	}
+	authState, _ := ConnectionAuthStateFromContext(connectionContext)
+	stopAuthenticationGuard := s.startWSUnauthenticatedConnectionGuard(conn, cancelConnection, authState)
+	defer stopAuthenticationGuard()
 
 	defer func() {
 		s.unregisterWSConnection(conn)
@@ -618,6 +626,45 @@ func (s *NetworkServer) runWSHeartbeatLoop(relay *StreamRelay, connectionID Conn
 			}) {
 				return
 			}
+		}
+	}
+}
+
+// startWSUnauthenticatedConnectionGuard 在连接建立后启动未认证超时守卫，防止连接池被长期占位。
+func (s *NetworkServer) startWSUnauthenticatedConnectionGuard(
+	conn *websocket.Conn,
+	cancel context.CancelFunc,
+	authState *ConnectionAuthState,
+) func() {
+	if conn == nil || cancel == nil || authState == nil || s.authenticator == nil {
+		return func() {}
+	}
+	if s.unauthenticatedWSTTL <= 0 || authState.IsAuthenticated() {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	timer := time.NewTimer(s.unauthenticatedWSTTL)
+	go func() {
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			if authState.IsAuthenticated() {
+				return
+			}
+			cancel()
+			_ = conn.SetDeadline(time.Now())
+			_ = conn.Close()
+		}
+	}()
+
+	return func() {
+		select {
+		case <-done:
+		default:
+			close(done)
 		}
 	}
 }

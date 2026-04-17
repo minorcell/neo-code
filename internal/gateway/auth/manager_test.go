@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -222,5 +223,174 @@ func TestDefaultAuthPathAndLoadOrCreateNilManager(t *testing.T) {
 	var nilManager *Manager
 	if err := nilManager.loadOrCreate(); err == nil {
 		t.Fatal("expected nil manager loadOrCreate error")
+	}
+}
+
+func TestNewManagerRecoversInvalidJSONCredential(t *testing.T) {
+	credentialPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(credentialPath, []byte("{invalid-json"), 0o600); err != nil {
+		t.Fatalf("write invalid auth file: %v", err)
+	}
+
+	manager, err := NewManager(credentialPath)
+	if err != nil {
+		t.Fatalf("new manager should recover invalid json: %v", err)
+	}
+	if strings.TrimSpace(manager.Token()) == "" {
+		t.Fatal("recovered token should not be empty")
+	}
+}
+
+func TestNewManagerRejectsSymbolicLinkCredentialPath(t *testing.T) {
+	baseDir := t.TempDir()
+	targetPath := filepath.Join(baseDir, "real-auth.json")
+	if err := os.WriteFile(targetPath, []byte(`{"version":1,"token":"token-a"}`), 0o600); err != nil {
+		t.Fatalf("write target auth file: %v", err)
+	}
+
+	linkPath := filepath.Join(baseDir, "auth-link.json")
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Skipf("symlink unsupported in current environment: %v", err)
+	}
+
+	_, err := NewManager(linkPath)
+	if err == nil {
+		t.Fatal("expected symbolic link credential path to be rejected")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symbolic link") {
+		t.Fatalf("error = %v, want symbolic link rejection", err)
+	}
+}
+
+func TestEnsureAuthDirRejectsSymbolicLinkDirectory(t *testing.T) {
+	baseDir := t.TempDir()
+	realDir := filepath.Join(baseDir, "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatalf("create real dir: %v", err)
+	}
+	linkDir := filepath.Join(baseDir, "auth-dir-link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unsupported in current environment: %v", err)
+	}
+
+	err := ensureAuthDir(linkDir)
+	if err == nil {
+		t.Fatal("expected symbolic link directory to be rejected")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symbolic link") {
+		t.Fatalf("error = %v, want symbolic link rejection", err)
+	}
+}
+
+func TestWriteCredentialsUsesAtomicReplaceWithoutTempLeak(t *testing.T) {
+	authDir := t.TempDir()
+	credentialPath := filepath.Join(authDir, "auth.json")
+
+	first, err := buildCredentials(time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("build first credentials: %v", err)
+	}
+	second, err := buildCredentials(time.Now().UTC())
+	if err != nil {
+		t.Fatalf("build second credentials: %v", err)
+	}
+
+	if err := writeCredentials(credentialPath, first); err != nil {
+		t.Fatalf("write first credentials: %v", err)
+	}
+	if err := writeCredentials(credentialPath, second); err != nil {
+		t.Fatalf("write second credentials: %v", err)
+	}
+
+	stored, err := readCredentials(credentialPath)
+	if err != nil {
+		t.Fatalf("read replaced credentials: %v", err)
+	}
+	if stored.Token != second.Token {
+		t.Fatalf("token = %q, want %q", stored.Token, second.Token)
+	}
+
+	entries, err := os.ReadDir(authDir)
+	if err != nil {
+		t.Fatalf("read auth dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".auth.json.tmp-") {
+			t.Fatalf("unexpected temp auth file leak: %s", entry.Name())
+		}
+	}
+}
+
+func TestReadCredentialsRejectsHardLinkOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hard-link nlink guard is unix-specific")
+	}
+
+	authDir := t.TempDir()
+	credentialPath := filepath.Join(authDir, "auth.json")
+	linkedPath := filepath.Join(authDir, "auth-linked.json")
+
+	credentials, err := buildCredentials(time.Now().UTC())
+	if err != nil {
+		t.Fatalf("build credentials: %v", err)
+	}
+	if err := writeCredentials(credentialPath, credentials); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+	if err := os.Link(credentialPath, linkedPath); err != nil {
+		t.Fatalf("create hard link: %v", err)
+	}
+
+	if _, err := readCredentials(credentialPath); err == nil {
+		t.Fatal("expected hard-linked credential file to be rejected")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "hard link") {
+		t.Fatalf("error = %v, want hard link rejection", err)
+	}
+}
+
+func TestIsRecoverableCredentialReadErrorBranches(t *testing.T) {
+	if isRecoverableCredentialReadError(nil) {
+		t.Fatal("nil error should not be recoverable")
+	}
+	if !isRecoverableCredentialReadError(os.ErrNotExist) {
+		t.Fatal("os.ErrNotExist should be recoverable")
+	}
+	invalidBodyErr := errors.Join(errInvalidCredentialBody, errors.New("decode failed"))
+	if !isRecoverableCredentialReadError(invalidBodyErr) {
+		t.Fatal("invalid credential body should be recoverable")
+	}
+	if isRecoverableCredentialReadError(errors.New("random failure")) {
+		t.Fatal("random failure should not be recoverable")
+	}
+}
+
+func TestEnsureSafeCredentialDirectoryMissingPathError(t *testing.T) {
+	err := ensureSafeCredentialDirectory(filepath.Join(t.TempDir(), "missing-dir"))
+	if err == nil {
+		t.Fatal("expected missing directory error")
+	}
+}
+
+func TestEnsureSafeCredentialFilePathAllowNotExistAndSymlinkBranches(t *testing.T) {
+	baseDir := t.TempDir()
+	missingPath := filepath.Join(baseDir, "missing-auth.json")
+	if err := ensureSafeCredentialFilePath(missingPath, true); err != nil {
+		t.Fatalf("allowNotExist should accept missing file: %v", err)
+	}
+	if err := ensureSafeCredentialFilePath(missingPath, false); err == nil {
+		t.Fatal("allowNotExist=false should reject missing file")
+	}
+
+	realPath := filepath.Join(baseDir, "real-auth.json")
+	if err := os.WriteFile(realPath, []byte(`{"version":1,"token":"token-b"}`), 0o600); err != nil {
+		t.Fatalf("write real auth file: %v", err)
+	}
+	linkPath := filepath.Join(baseDir, "auth-link-2.json")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skipf("symlink unsupported in current environment: %v", err)
+	}
+
+	if err := ensureSafeCredentialFilePath(linkPath, false); err == nil {
+		t.Fatal("expected symbolic link file to be rejected")
 	}
 }

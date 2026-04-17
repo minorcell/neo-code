@@ -5,7 +5,22 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"neo-code/internal/gateway/protocol"
 )
+
+const (
+	// unknownMethodMetricLabel 统一收敛未知 method 的指标标签值，防止高基数放大。
+	unknownMethodMetricLabel = "unknown_method"
+)
+
+var allowedRPCMethodMetricLabels = map[string]struct{}{
+	strings.ToLower(protocol.MethodGatewayAuthenticate): {},
+	strings.ToLower(protocol.MethodGatewayPing):         {},
+	strings.ToLower(protocol.MethodGatewayBindStream):   {},
+	strings.ToLower(protocol.MethodGatewayEvent):        {},
+	strings.ToLower(protocol.MethodWakeOpenURL):         {},
+}
 
 // GatewayMetrics 维护网关关键指标，并同时提供 Prometheus 与 JSON 视图。
 type GatewayMetrics struct {
@@ -118,7 +133,7 @@ func (m *GatewayMetrics) IncRequests(source, method, status string) {
 		return
 	}
 	source = normalizeMetricLabel(source)
-	method = normalizeMetricLabel(method)
+	method = normalizeMethodMetricLabel(method)
 	status = normalizeMetricLabel(status)
 	m.requestsTotal.WithLabelValues(source, method, status).Inc()
 	m.addSnapshotCounter("gateway_requests_total", source+"|"+method+"|"+status, 1)
@@ -141,7 +156,7 @@ func (m *GatewayMetrics) IncACLDenied(source, method string) {
 		return
 	}
 	source = normalizeMetricLabel(source)
-	method = normalizeMetricLabel(method)
+	method = normalizeMethodMetricLabel(method)
 	m.aclDeniedTotal.WithLabelValues(source, method).Inc()
 	m.addSnapshotCounter("gateway_acl_denied_total", source+"|"+method, 1)
 }
@@ -192,6 +207,18 @@ func normalizeMetricLabel(value string) string {
 	normalized := strings.TrimSpace(strings.ToLower(value))
 	if normalized == "" {
 		return "unknown"
+	}
+	return normalized
+}
+
+// normalizeMethodMetricLabel 将 method 标签收敛到有限集合，未知值统一折叠为 unknown_method。
+func normalizeMethodMetricLabel(method string) string {
+	normalized := normalizeMetricLabel(method)
+	if normalized == "unknown" {
+		return unknownMethodMetricLabel
+	}
+	if _, exists := allowedRPCMethodMetricLabels[normalized]; !exists {
+		return unknownMethodMetricLabel
 	}
 	return normalized
 }

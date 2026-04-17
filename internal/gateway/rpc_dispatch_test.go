@@ -352,3 +352,24 @@ func TestDispatchRPCRequestMetricsBranches(t *testing.T) {
 		t.Fatalf("expected ok request metric, snapshot=%#v", snapshot["gateway_requests_total"])
 	}
 }
+
+func TestDispatchRPCRequestMetricsUnknownMethodCollapsed(t *testing.T) {
+	metrics := NewGatewayMetrics()
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithGatewayMetrics(ctx, metrics)
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-unknown-method"`),
+		Method:  "random.method.user.input",
+		Params:  json.RawMessage(`{}`),
+	}, nil)
+	if response.Error == nil {
+		t.Fatal("expected method-not-found error for unknown method")
+	}
+
+	snapshot := metrics.Snapshot()
+	if snapshot["gateway_requests_total"]["ipc|unknown_method|error"] == 0 {
+		t.Fatalf("expected unknown_method metric label, snapshot=%#v", snapshot["gateway_requests_total"])
+	}
+}

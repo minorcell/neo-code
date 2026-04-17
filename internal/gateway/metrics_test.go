@@ -56,7 +56,7 @@ func TestGatewayMetricsNilReceiverAndLabelNormalization(t *testing.T) {
 	if snapshot["gateway_auth_failures_total"]["http|unknown"] != 1 {
 		t.Fatalf("normalized auth labels mismatch: %#v", snapshot["gateway_auth_failures_total"])
 	}
-	if snapshot["gateway_acl_denied_total"]["ws|unknown"] != 1 {
+	if snapshot["gateway_acl_denied_total"]["ws|unknown_method"] != 1 {
 		t.Fatalf("normalized acl labels mismatch: %#v", snapshot["gateway_acl_denied_total"])
 	}
 	if snapshot["gateway_connections_active"]["unknown"] != 3 {
@@ -79,5 +79,19 @@ func TestGatewayMetricsSnapshotMapRecreateBranches(t *testing.T) {
 	}
 	if snapshot["gateway_connections_active"]["ipc"] != 1 {
 		t.Fatalf("connections snapshot mismatch: %#v", snapshot["gateway_connections_active"])
+	}
+}
+
+func TestGatewayMetricsUnknownMethodCollapsed(t *testing.T) {
+	metrics := NewGatewayMetrics()
+	metrics.IncRequests("http", "random.method.from.user", "ok")
+	metrics.IncACLDenied("ws", "random.method.from.user")
+
+	snapshot := metrics.Snapshot()
+	if snapshot["gateway_requests_total"]["http|unknown_method|ok"] != 1 {
+		t.Fatalf("requests snapshot mismatch: %#v", snapshot["gateway_requests_total"])
+	}
+	if snapshot["gateway_acl_denied_total"]["ws|unknown_method"] != 1 {
+		t.Fatalf("acl denied snapshot mismatch: %#v", snapshot["gateway_acl_denied_total"])
 	}
 }
