@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
@@ -69,6 +70,7 @@ func TestMicroCompactWithSummarizerProducesSummary(t *testing.T) {
 	if renderDisplayParts(got[6].Parts) != "latest bash result" {
 		t.Fatalf("expected latest bash result retained, got %q", renderDisplayParts(got[6].Parts))
 	}
+	// 原始切片不被修改
 	if renderDisplayParts(messages[2].Parts) != "old bash result" {
 		t.Fatalf("expected original slice unchanged, got %q", renderDisplayParts(messages[2].Parts))
 	}
@@ -104,6 +106,7 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
+	// 只为 bash 注册 summarizer，read_file 没有
 	got := microCompactMessagesWithPolicies(
 		messages,
 		stubMicroCompactPolicySource{},
@@ -115,6 +118,7 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 		},
 	)
 
+	// read_file 没有 summarizer，应回退到清除
 	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
 		t.Fatalf("expected cleared placeholder for read_file without summarizer, got %q", renderDisplayParts(got[2].Parts))
 	}
@@ -164,9 +168,11 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 		},
 	)
 
+	// call-1 bash 在旧 span，有 summarizer，应生成摘要
 	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary]") {
 		t.Fatalf("expected bash summary in old span, got %q", renderDisplayParts(got[2].Parts))
 	}
+	// call-2 read_file 在旧 span，没有 summarizer，应清除
 	if renderDisplayParts(got[3].Parts) != microCompactClearedMessage {
 		t.Fatalf("expected read_file cleared in old span, got %q", renderDisplayParts(got[3].Parts))
 	}
@@ -208,7 +214,7 @@ func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
 		0,
 		stubMicroCompactSummarizerSource{
 			"bash": func(content string, metadata map[string]string, isError bool) string {
-				return ""
+				return "" // 返回空
 			},
 		},
 	)
@@ -224,6 +230,7 @@ func TestSummarizeOrClearWithNilSummarizers(t *testing.T) {
 
 	got := summarizeOrClear(
 		providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}},
+		"test",
 		nil,
 		nil,
 	)
@@ -240,6 +247,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 		toolNames := map[string]string{"call-2": "filesystem_read_file"}
 		got := summarizeOrClear(
 			providertypes.Message{ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
+			"content",
 			toolNames,
 			stubMicroCompactSummarizerSource{
 				"filesystem_read_file": func(content string, metadata map[string]string, isError bool) string {
@@ -256,6 +264,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 		toolNames := map[string]string{"call-1": "bash"}
 		got := summarizeOrClear(
 			providertypes.Message{ToolCallID: "unknown-id", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
+			"content",
 			toolNames,
 			stubMicroCompactSummarizerSource{},
 		)
@@ -263,4 +272,30 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 			t.Fatalf("expected cleared for unknown tool call id, got %q", got)
 		}
 	})
+}
+
+// TestIsToolCallSpanBoundaries 验证 span 边界异常时返回 false。
+func TestIsToolCallSpanBoundaries(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "c1", Name: "bash"}}},
+	}
+
+	if isToolCallSpan(messages, internalcompact.MessageSpan{Start: -1, End: 0}) {
+		t.Fatal("expected false for negative start")
+	}
+	if isToolCallSpan(messages, internalcompact.MessageSpan{Start: 2, End: 3}) {
+		t.Fatal("expected false for out-of-range start")
+	}
+}
+
+// TestCompactableToolCallIDsEmptyInput 验证空 tool call 输入时返回 nil。
+func TestCompactableToolCallIDsEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	ids, names := compactableToolCallIDs(nil, nil)
+	if ids != nil || names != nil {
+		t.Fatalf("expected nil maps for empty input, got ids=%v names=%v", ids, names)
+	}
 }

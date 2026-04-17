@@ -6,24 +6,35 @@ import (
 	"unicode/utf8"
 )
 
+type builtinSummarizerRegistration struct {
+	toolName   string
+	summarizer ContentSummarizer
+}
+
+var builtinSummarizers = []builtinSummarizerRegistration{
+	{toolName: ToolNameBash, summarizer: bashSummarizer},
+	{toolName: ToolNameFilesystemReadFile, summarizer: readFileSummarizer},
+	{toolName: ToolNameFilesystemWriteFile, summarizer: writeFileSummarizer},
+	{toolName: ToolNameFilesystemEdit, summarizer: editSummarizer},
+	{toolName: ToolNameFilesystemGrep, summarizer: grepSummarizer},
+	{toolName: ToolNameFilesystemGlob, summarizer: globSummarizer},
+	{toolName: ToolNameWebFetch, summarizer: webfetchSummarizer},
+}
+
 // RegisterBuiltinSummarizers 将所有内置工具的内容摘要器注册到 Registry。
 // 应在所有工具注册完成后调用一次。
 func RegisterBuiltinSummarizers(registry *Registry) {
 	if registry == nil {
 		return
 	}
-	registry.RegisterSummarizer(ToolNameBash, bashSummarizer)
-	registry.RegisterSummarizer(ToolNameFilesystemReadFile, readFileSummarizer)
-	registry.RegisterSummarizer(ToolNameFilesystemWriteFile, writeFileSummarizer)
-	registry.RegisterSummarizer(ToolNameFilesystemEdit, editSummarizer)
-	registry.RegisterSummarizer(ToolNameFilesystemGrep, grepSummarizer)
-	registry.RegisterSummarizer(ToolNameFilesystemGlob, globSummarizer)
-	registry.RegisterSummarizer(ToolNameWebFetch, webfetchSummarizer)
+	for _, item := range builtinSummarizers {
+		registry.RegisterSummarizer(item.toolName, item.summarizer)
+	}
 }
 
 const summaryMaxRunes = 200
 
-// bashSummarizer 保留退出状态 + 末尾若干行 + 工作目录。
+// bashSummarizer 仅保留结构化执行元信息，避免把原始输出内容重新注入上下文。
 func bashSummarizer(content string, metadata map[string]string, isError bool) string {
 	var parts []string
 
@@ -37,42 +48,27 @@ func bashSummarizer(content string, metadata map[string]string, isError bool) st
 		parts = append(parts, "workdir="+workdir)
 	}
 
-	const tailLines = 5
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	if len(lines) > tailLines {
-		body := "...(truncated)\n" + strings.Join(lines[len(lines)-tailLines:], "\n")
-		parts = append(parts, body)
-	} else if len(lines) > 0 && strings.TrimSpace(content) != "" {
-		parts = append(parts, content)
+	trimmed := strings.TrimSpace(content)
+	if trimmed != "" {
+		parts = appendTextStats(parts, trimmed)
 	}
 
 	return truncateRunes(strings.Join(parts, " "), summaryMaxRunes)
 }
 
-// readFileSummarizer 保留文件路径 + 行数 + 首尾行片段。
+// readFileSummarizer 仅保留稳定元信息，避免在摘要中再次暴露文件正文。
 func readFileSummarizer(content string, metadata map[string]string, isError bool) string {
 	path := metadata["path"]
 	if path == "" {
 		return ""
 	}
 
-	lines := strings.Split(content, "\n")
-	lineCount := len(lines)
+	lineCount := stableLineCount(content)
 
 	var parts []string
 	parts = append(parts, "[summary]", path, "lines="+strconv.Itoa(lineCount))
-
-	if len(lines) > 0 {
-		first := truncateRunes(strings.TrimSpace(lines[0]), 60)
-		if first != "" {
-			parts = append(parts, "first="+first)
-		}
-	}
-	if len(lines) > 1 {
-		last := truncateRunes(strings.TrimSpace(lines[len(lines)-1]), 60)
-		if last != "" && last != strings.TrimSpace(lines[0]) {
-			parts = append(parts, "last="+last)
-		}
+	if content != "" {
+		parts = append(parts, "chars="+strconv.Itoa(utf8.RuneCountInString(content)))
 	}
 
 	return truncateRunes(strings.Join(parts, " "), summaryMaxRunes)
@@ -85,7 +81,7 @@ func writeFileSummarizer(content string, metadata map[string]string, isError boo
 		return ""
 	}
 	bytes := metadata["bytes"]
-	return "[summary] wrote " + path + " (" + bytes + " bytes)"
+	return truncateRunes("[summary] wrote "+path+" ("+bytes+" bytes)", summaryMaxRunes)
 }
 
 // editSummarizer 保留编辑路径与替换范围。
@@ -99,7 +95,10 @@ func editSummarizer(content string, metadata map[string]string, isError bool) st
 	}
 	searchLen := metadata["search_length"]
 	replaceLen := metadata["replacement_length"]
-	return "[summary] edited " + path + " (search=" + searchLen + " chars, replace=" + replaceLen + " chars)"
+	return truncateRunes(
+		"[summary] edited "+path+" (search="+searchLen+" chars, replace="+replaceLen+" chars)",
+		summaryMaxRunes,
+	)
 }
 
 // grepSummarizer 保留搜索根目录、匹配计数与前若干文件名。
@@ -118,23 +117,8 @@ func grepSummarizer(content string, metadata map[string]string, isError bool) st
 		parts = append(parts, "lines="+matchedLines)
 	}
 
-	// 从 content 中提取前几个不重复文件名
-	contentLines := strings.Split(strings.TrimSpace(content), "\n")
-	fileSet := make(map[string]struct{})
-	var fileNames []string
-	for _, line := range contentLines {
-		if len(fileSet) >= 3 {
-			break
-		}
-		idx := strings.Index(line, ":")
-		if idx > 0 {
-			f := line[:idx]
-			if _, ok := fileSet[f]; !ok {
-				fileSet[f] = struct{}{}
-				fileNames = append(fileNames, f)
-			}
-		}
-	}
+	// 从 content 中提取前几个不重复文件名，避免对整段输出做全量切分。
+	fileNames := extractUniqueMatchFiles(content, 3)
 	if len(fileNames) > 0 {
 		parts = append(parts, "matches="+strings.Join(fileNames, ", "))
 	}
@@ -149,18 +133,7 @@ func globSummarizer(content string, metadata map[string]string, isError bool) st
 		count = "?"
 	}
 
-	contentLines := strings.Split(strings.TrimSpace(content), "\n")
-	const previewLimit = 3
-	var preview []string
-	for i, line := range contentLines {
-		if i >= previewLimit {
-			break
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			preview = append(preview, trimmed)
-		}
-	}
+	preview := collectPreviewLines(content, 3)
 
 	var parts []string
 	parts = append(parts, "[summary] glob", count+" files")
@@ -171,14 +144,11 @@ func globSummarizer(content string, metadata map[string]string, isError bool) st
 	return truncateRunes(strings.Join(parts, " "), summaryMaxRunes)
 }
 
-// webfetchSummarizer 保留 URL、截断标记等持久化元数据。
+// webfetchSummarizer 保留可稳定持久化的 webfetch 结果标记。
 func webfetchSummarizer(content string, metadata map[string]string, isError bool) string {
 	var parts []string
 	parts = append(parts, "[summary] webfetch")
 
-	if url := metadata["url"]; url != "" {
-		parts = append(parts, url)
-	}
 	if truncated := metadata["truncated"]; truncated == "true" {
 		parts = append(parts, "truncated=true")
 	}
@@ -196,4 +166,110 @@ func truncateRunes(text string, maxRunes int) string {
 	}
 	runes := []rune(text)
 	return string(runes[:maxRunes]) + "..."
+}
+
+// stableLineCount 统计文本行数；空文本返回 0，末尾换行不会产生额外空行计数。
+func stableLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	count := strings.Count(text, "\n") + 1
+	if strings.HasSuffix(text, "\n") {
+		count--
+	}
+	if count < 0 {
+		return 0
+	}
+	return count
+}
+
+// appendTextStats 为摘要补充文本统计字段，保持统一的结构化输出格式。
+func appendTextStats(parts []string, text string) []string {
+	return append(parts,
+		"lines="+strconv.Itoa(stableLineCount(text)),
+		"chars="+strconv.Itoa(utf8.RuneCountInString(text)),
+	)
+}
+
+// extractUniqueMatchFiles 按行扫描 grep 输出，提取前若干个去重后的文件名摘要。
+func extractUniqueMatchFiles(content string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, limit)
+	result := make([]string, 0, limit)
+	remaining := content
+	for len(remaining) > 0 && len(result) < limit {
+		line, rest := nextLine(remaining)
+		remaining = rest
+
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			continue
+		}
+
+		file := sanitizeSummaryToken(line[:colon], 80)
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		result = append(result, file)
+	}
+	return result
+}
+
+// collectPreviewLines 按行扫描输出并提取前若干个非空预览，避免全量 Split 带来的额外分配。
+func collectPreviewLines(content string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	result := make([]string, 0, limit)
+	remaining := content
+	for len(remaining) > 0 && len(result) < limit {
+		line, rest := nextLine(remaining)
+		remaining = rest
+
+		clean := sanitizeSummaryToken(line, 100)
+		if clean == "" {
+			continue
+		}
+		result = append(result, clean)
+	}
+	return result
+}
+
+// nextLine 返回 text 的首行及余下文本，兼容存在或不存在换行符的输入。
+func nextLine(text string) (line string, rest string) {
+	idx := strings.IndexByte(text, '\n')
+	if idx < 0 {
+		return text, ""
+	}
+	return text[:idx], text[idx+1:]
+}
+
+// sanitizeSummaryToken 清理不可见控制字符并裁剪长度，降低摘要注入风险。
+func sanitizeSummaryToken(text string, maxRunes int) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	for _, r := range trimmed {
+		if r < 32 || r == 127 {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	clean := strings.TrimSpace(b.String())
+	if clean == "" {
+		return ""
+	}
+	return truncateRunes(clean, maxRunes)
 }

@@ -15,7 +15,7 @@ const (
 	defaultMicroCompactRetainedToolSpans = 2
 )
 
-// microCompactMessages 对裁剪后的消息做只读投影式微压缩，仅清理旧工具结果内容。
+// microCompactMessages 对裁剪后的消息做只读投影式微压缩，优先摘要旧工具结果，失败时回退清理占位。
 func microCompactMessages(messages []providertypes.Message) []providertypes.Message {
 	return microCompactMessagesWithPolicies(messages, nil, 0, nil)
 }
@@ -48,7 +48,8 @@ func microCompactMessagesWithPolicies(messages []providertypes.Message, policies
 		if len(compactableIDs) == 0 {
 			continue
 		}
-		if !hasCompactableToolContent(cloned, span, compactableIDs) {
+		compactableContents := compactableToolMessageContents(cloned, span, compactableIDs)
+		if len(compactableContents) == 0 {
 			continue
 		}
 		if retainedCompactableSpans < retainedToolSpans {
@@ -57,12 +58,12 @@ func microCompactMessagesWithPolicies(messages []providertypes.Message, policies
 		}
 
 		for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
-			if shouldClearToolMessage(cloned[messageIndex], compactableIDs) {
-				summary := summarizeOrClear(
-					cloned[messageIndex], toolNames, summarizers,
-				)
-				cloned[messageIndex].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
+			content, ok := compactableContents[messageIndex]
+			if !ok {
+				continue
 			}
+			summary := summarizeOrClear(cloned[messageIndex], content, toolNames, summarizers)
+			cloned[messageIndex].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
 		}
 	}
 
@@ -133,35 +134,43 @@ func toolParticipatesInMicroCompact(toolName string, policies MicroCompactPolicy
 	return policies.MicroCompactPolicy(toolName) != tools.MicroCompactPolicyPreserveHistory
 }
 
-// hasCompactableToolContent 判断工具块中是否存在会影响保留预算的有效工具结果内容。
-func hasCompactableToolContent(messages []providertypes.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) bool {
+// compactableToolMessageContents 收集工具块中可压缩消息的渲染内容，避免重复渲染。
+func compactableToolMessageContents(messages []providertypes.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) map[int]string {
+	var contents map[int]string
 	for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
-		if shouldClearToolMessage(messages[messageIndex], compactableIDs) {
-			return true
+		content, ok := compactableToolMessageContent(messages[messageIndex], compactableIDs)
+		if !ok {
+			continue
 		}
+		if contents == nil {
+			contents = make(map[int]string)
+		}
+		contents[messageIndex] = content
 	}
-	return false
+	return contents
 }
 
-// shouldClearToolMessage 判断一条 tool 消息是否满足旧结果清理条件。
-func shouldClearToolMessage(message providertypes.Message, compactableIDs map[string]struct{}) bool {
+// compactableToolMessageContent 判断 tool 消息是否可压缩，并返回渲染后的内容文本。
+func compactableToolMessageContent(message providertypes.Message, compactableIDs map[string]struct{}) (string, bool) {
 	if message.Role != providertypes.RoleTool || message.IsError {
-		return false
+		return "", false
 	}
-	if compactableIDs == nil {
-		return false
-	}
-	if _, ok := compactableIDs[strings.TrimSpace(message.ToolCallID)]; !ok {
-		return false
+	callID := strings.TrimSpace(message.ToolCallID)
+	if _, ok := compactableIDs[callID]; !ok {
+		return "", false
 	}
 
 	content := strings.TrimSpace(renderDisplayParts(message.Parts))
-	return content != "" && content != microCompactClearedMessage
+	if content == "" || content == microCompactClearedMessage {
+		return "", false
+	}
+	return content, true
 }
 
 // summarizeOrClear 为单条可压缩工具消息生成摘要或回退到默认清除占位。
 func summarizeOrClear(
 	message providertypes.Message,
+	content string,
 	toolNames map[string]string,
 	summarizers MicroCompactSummarizerSource,
 ) string {
@@ -169,7 +178,8 @@ func summarizeOrClear(
 		return microCompactClearedMessage
 	}
 
-	toolName, ok := toolNames[strings.TrimSpace(message.ToolCallID)]
+	callID := strings.TrimSpace(message.ToolCallID)
+	toolName, ok := toolNames[callID]
 	if !ok {
 		return microCompactClearedMessage
 	}
@@ -179,7 +189,7 @@ func summarizeOrClear(
 		return microCompactClearedMessage
 	}
 
-	summary := summarizer(renderDisplayParts(message.Parts), message.ToolMetadata, message.IsError)
+	summary := summarizer(content, message.ToolMetadata, message.IsError)
 	if summary == "" {
 		return microCompactClearedMessage
 	}
