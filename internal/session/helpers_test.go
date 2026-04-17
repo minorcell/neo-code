@@ -86,4 +86,13 @@ func TestStorageHelpers(t *testing.T) {
 	if err := replaceFileWithTemp(filepath.Join(baseDir, "missing.tmp"), filepath.Join(baseDir, "missing.txt"), "missing"); err == nil {
 		t.Fatalf("expected replaceFileWithTemp() error for missing temp file")
 	}
+
+	outsideDir := t.TempDir()
+	linkPath := filepath.Join(baseDir, "link")
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Skipf("symlink not supported in current environment: %v", err)
+	}
+	if err := ensurePathWithinBase(baseDir, filepath.Join(linkPath, "escape.txt")); err == nil {
+		t.Fatalf("expected symlink path escape error")
+	}
 }

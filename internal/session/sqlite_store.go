@@ -47,9 +47,8 @@ type SQLiteStore struct {
 	assetsDir  string
 	dbPath     string
 
-	once    sync.Once
-	initErr error
-	db      *sql.DB
+	initMu sync.Mutex
+	db     *sql.DB
 }
 
 // Close 释放数据库连接，供测试和上层生命周期管理复用。
@@ -504,11 +503,13 @@ func (s *SQLiteStore) Stat(ctx context.Context, sessionID string, assetID string
 
 // ensureDB 懒加载数据库并执行 schema 初始化。
 func (s *SQLiteStore) ensureDB(ctx context.Context) (*sql.DB, error) {
-	s.once.Do(func() {
-		s.initErr = s.initialize(ctx)
-	})
-	if s.initErr != nil {
-		return nil, s.initErr
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	if s.db != nil {
+		return s.db, nil
+	}
+	if err := s.initialize(ctx); err != nil {
+		return nil, err
 	}
 	return s.db, nil
 }

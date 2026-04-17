@@ -288,6 +288,23 @@ func TestSQLiteStoreErrors(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreEnsureDBCanRetryAfterInitFailure(t *testing.T) {
+	store := newTestStore(t)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := store.ensureDB(canceledCtx); err == nil {
+		t.Fatalf("expected ensureDB() with canceled context to fail")
+	}
+	db, err := store.ensureDB(context.Background())
+	if err != nil {
+		t.Fatalf("ensureDB() retry with healthy context error = %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected ensureDB() retry to return non-nil db")
+	}
+}
+
 func TestSQLiteStoreLoadSessionRejectsCorruptHeaderAndMessageData(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

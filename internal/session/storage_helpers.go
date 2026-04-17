@@ -9,25 +9,46 @@ import (
 
 // ensurePathWithinBase 校验目标路径位于指定基目录内，避免路径越界。
 func ensurePathWithinBase(baseDir string, target string) error {
-	baseAbs, err := filepath.Abs(baseDir)
+	baseResolved, err := resolvePathForContainment(baseDir)
 	if err != nil {
 		return fmt.Errorf("resolve base dir %q: %w", baseDir, err)
 	}
-	targetAbs, err := filepath.Abs(target)
+	targetResolved, err := resolvePathForContainment(target)
 	if err != nil {
 		return fmt.Errorf("resolve target path %q: %w", target, err)
 	}
-	rel, err := filepath.Rel(baseAbs, targetAbs)
+	rel, err := filepath.Rel(baseResolved, targetResolved)
 	if err != nil {
-		return fmt.Errorf("compute relative path %q -> %q: %w", baseAbs, targetAbs, err)
+		return fmt.Errorf("compute relative path %q -> %q: %w", baseResolved, targetResolved, err)
 	}
 	if rel == "." {
 		return nil
 	}
 	if !filepath.IsLocal(rel) {
-		return fmt.Errorf("target path %q escapes base dir %q", targetAbs, baseAbs)
+		return fmt.Errorf("target path %q escapes base dir %q", targetResolved, baseResolved)
 	}
 	return nil
+}
+
+// resolvePathForContainment 将路径归一化为绝对路径并解析软链接，确保包含性校验基于真实路径。
+func resolvePathForContainment(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("eval symlinks: %w", err)
+	}
+	parent := filepath.Dir(absPath)
+	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+	if parentErr != nil {
+		return "", fmt.Errorf("eval parent symlinks: %w", parentErr)
+	}
+	return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
 }
 
 // createTempFile 在目标目录中创建唯一临时文件。
