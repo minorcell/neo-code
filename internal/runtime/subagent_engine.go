@@ -10,6 +10,7 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/partsrender"
+	"neo-code/internal/provider"
 	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/subagent"
@@ -20,6 +21,17 @@ const (
 	subAgentMaxStepTurnsDefault = 6
 	subAgentMaxStepTurnsLimit   = 12
 )
+
+var errSubAgentRuntimeUnavailable = errors.New("runtime: subagent runtime dependencies unavailable")
+
+var subAgentOutputRequiredKeys = []string{
+	"summary",
+	"findings",
+	"patches",
+	"risks",
+	"next_actions",
+	"artifacts",
+}
 
 type subAgentOutputJSON struct {
 	Summary     string   `json:"summary"`
@@ -56,10 +68,17 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 
 	runtimeConfig, model, toolTimeout, err := e.resolveSettings()
 	if err != nil {
-		return fallbackSubAgentStep(input), nil
+		if errors.Is(err, errSubAgentRuntimeUnavailable) {
+			return fallbackSubAgentStep(input), nil
+		}
+		return subagent.StepOutput{}, err
 	}
 	if input.Executor == nil {
 		return subagent.StepOutput{}, errors.New("runtime: subagent tool executor is nil")
+	}
+	modelProvider, err := e.buildProvider(ctx, runtimeConfig)
+	if err != nil {
+		return subagent.StepOutput{}, err
 	}
 
 	allowedTools := resolveAllowedTools(input)
@@ -81,14 +100,12 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 	maxTurns := resolveSubAgentMaxTurns(input.Budget.MaxSteps)
 
 	for turn := 1; turn <= maxTurns; turn++ {
-		outcome, err := e.generateStepMessage(ctx, runtimeConfig, model, systemPrompt, messages, toolSpecs)
+		outcome, err := e.generateStepMessage(ctx, modelProvider, model, systemPrompt, messages, toolSpecs)
 		if err != nil {
 			return subagent.StepOutput{}, err
 		}
 		assistant := outcome.message
-		if strings.TrimSpace(assistant.Role) == "" {
-			assistant.Role = providertypes.RoleAssistant
-		}
+		assistant = ensureAssistantRole(assistant)
 		if !assistant.IsEmpty() {
 			messages = append(messages, assistant)
 		}
@@ -130,13 +147,27 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 	return subagent.StepOutput{}, fmt.Errorf("runtime: subagent step exceeded max turns (%d)", maxTurns)
 }
 
+// ensureAssistantRole 确保模型输出消息具备 assistant 角色，避免后续流程依赖空角色值。
+func ensureAssistantRole(message providertypes.Message) providertypes.Message {
+	if strings.TrimSpace(message.Role) == "" {
+		message.Role = providertypes.RoleAssistant
+	}
+	return message
+}
+
 // resolveSettings 读取当前 runtime 配置，并解析子代理调用 provider 所需参数。
 func (e runtimeSubAgentEngine) resolveSettings() (config.ResolvedProviderConfig, string, time.Duration, error) {
 	if e.service == nil || e.service.configManager == nil {
-		return config.ResolvedProviderConfig{}, "", 0, errors.New("runtime: subagent service or config manager is nil")
+		return config.ResolvedProviderConfig{}, "", 0, fmt.Errorf(
+			"%w: service or config manager is nil",
+			errSubAgentRuntimeUnavailable,
+		)
 	}
 	if e.service.providerFactory == nil {
-		return config.ResolvedProviderConfig{}, "", 0, errors.New("runtime: subagent provider factory is nil")
+		return config.ResolvedProviderConfig{}, "", 0, fmt.Errorf(
+			"%w: provider factory is nil",
+			errSubAgentRuntimeUnavailable,
+		)
 	}
 	cfg := e.service.configManager.Get()
 	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
@@ -157,19 +188,27 @@ func (e runtimeSubAgentEngine) resolveSettings() (config.ResolvedProviderConfig,
 	return resolvedProvider, model, timeout, nil
 }
 
+// buildProvider 基于解析后的 provider 配置创建单步内复用的模型实例。
+func (e runtimeSubAgentEngine) buildProvider(
+	ctx context.Context,
+	resolvedProvider config.ResolvedProviderConfig,
+) (provider.Provider, error) {
+	modelProvider, err := e.service.providerFactory.Build(ctx, resolvedProvider.ToRuntimeConfig())
+	if err != nil {
+		return nil, fmt.Errorf("runtime: build subagent provider: %w", err)
+	}
+	return modelProvider, nil
+}
+
 // generateStepMessage 发起一次 provider 调用并返回本轮 assistant 输出。
 func (e runtimeSubAgentEngine) generateStepMessage(
 	ctx context.Context,
-	resolvedProvider config.ResolvedProviderConfig,
+	modelProvider provider.Provider,
 	model string,
 	systemPrompt string,
 	messages []providertypes.Message,
 	toolSpecs []providertypes.ToolSpec,
 ) (streamGenerateResult, error) {
-	modelProvider, err := e.service.providerFactory.Build(ctx, resolvedProvider.ToRuntimeConfig())
-	if err != nil {
-		return streamGenerateResult{}, fmt.Errorf("runtime: build subagent provider: %w", err)
-	}
 	outcome := generateStreamingMessage(ctx, modelProvider, providertypes.GenerateRequest{
 		Model:        model,
 		SystemPrompt: systemPrompt,
@@ -325,16 +364,15 @@ func parseSubAgentOutput(text string) (subagent.Output, error) {
 	}, nil
 }
 
-// extractSubAgentJSONObject 从文本中提取首个完整 JSON 对象，容忍前后噪声。
+// extractSubAgentJSONObject 从文本中提取最可能的输出 JSON，优先选择包含输出契约字段的对象。
 func extractSubAgentJSONObject(text string) (string, error) {
-	start := strings.Index(text, "{")
-	if start < 0 {
-		return "", errors.New("runtime: subagent output does not contain json object")
-	}
 	depth := 0
 	inString := false
 	escaped := false
-	for index := start; index < len(text); index++ {
+	start := -1
+	lastObject := ""
+	contractObject := ""
+	for index := 0; index < len(text); index++ {
 		ch := text[index]
 		if inString {
 			if escaped {
@@ -354,15 +392,49 @@ func extractSubAgentJSONObject(text string) (string, error) {
 		case '"':
 			inString = true
 		case '{':
+			if depth == 0 {
+				start = index
+			}
 			depth++
 		case '}':
-			depth--
 			if depth == 0 {
-				return strings.TrimSpace(text[start : index+1]), nil
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				candidate := strings.TrimSpace(text[start : index+1])
+				lastObject = candidate
+				if matchesSubAgentOutputContract(candidate) {
+					contractObject = candidate
+				}
+				start = -1
 			}
 		}
 	}
-	return "", errors.New("runtime: subagent output contains incomplete json object")
+	if contractObject != "" {
+		return contractObject, nil
+	}
+	if lastObject != "" {
+		return lastObject, nil
+	}
+	if strings.Contains(text, "{") {
+		return "", errors.New("runtime: subagent output contains incomplete json object")
+	}
+	return "", errors.New("runtime: subagent output does not contain json object")
+}
+
+// matchesSubAgentOutputContract 判断 JSON 文本是否包含子代理输出契约必需字段。
+func matchesSubAgentOutputContract(text string) bool {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return false
+	}
+	for _, key := range subAgentOutputRequiredKeys {
+		if _, ok := payload[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // renderAssistantText 将 assistant parts 渲染为统一文本，用于 JSON 输出解析。

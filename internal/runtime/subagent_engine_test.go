@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,8 @@ import (
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
+
+const subAgentDonePayload = `{"summary":"done","findings":["f1"],"patches":["p1"],"risks":["r1"],"next_actions":["n1"],"artifacts":["a1"]}`
 
 func TestRuntimeSubAgentEngineRunStepToolLoopSuccess(t *testing.T) {
 	t.Parallel()
@@ -29,7 +32,7 @@ func TestRuntimeSubAgentEngineRunStepToolLoopSuccess(t *testing.T) {
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
 					Parts: []providertypes.ContentPart{
-						providertypes.NewTextPart(`{"summary":"done","findings":["f1"],"patches":["p1"],"risks":["r1"],"next_actions":["n1"],"artifacts":["a1"]}`),
+						providertypes.NewTextPart(subAgentDonePayload),
 					},
 				},
 				FinishReason: "stop",
@@ -48,7 +51,8 @@ func TestRuntimeSubAgentEngineRunStepToolLoopSuccess(t *testing.T) {
 			}, nil
 		},
 	}
-	service := NewWithFactory(manager, toolManager, newMemoryStore(), &scriptedProviderFactory{provider: providerImpl}, nil)
+	providerFactory := &scriptedProviderFactory{provider: providerImpl}
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), providerFactory, nil)
 	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
 	if err != nil {
 		t.Fatalf("DefaultRolePolicy() error = %v", err)
@@ -57,20 +61,17 @@ func TestRuntimeSubAgentEngineRunStepToolLoopSuccess(t *testing.T) {
 	policy.MaxToolCallsPerStep = 2
 	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
 
-	output, err := engine.RunStep(context.Background(), subagent.StepInput{
-		Role:   subagent.RoleCoder,
-		Policy: policy,
-		Task:   subagent.Task{ID: "task-1", Goal: "read file and summarize"},
-		Budget: subagent.Budget{MaxSteps: 4},
-		Capability: subagent.Capability{
-			AllowedTools: []string{"filesystem_read_file"},
-		},
-		RunID:     "run-subagent-step-success",
-		SessionID: "session-subagent-step-success",
-		AgentID:   "subagent:task-1",
-		Workdir:   t.TempDir(),
-		Executor:  newSubAgentRuntimeToolExecutor(service),
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{
+		ID:   "task-1",
+		Goal: "read file and summarize",
 	})
+	stepInput.Budget = subagent.Budget{MaxSteps: 4}
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+	stepInput.RunID = "run-subagent-step-success"
+	stepInput.SessionID = "session-subagent-step-success"
+	stepInput.AgentID = "subagent:task-1"
+
+	output, err := engine.RunStep(context.Background(), stepInput)
 	if err != nil {
 		t.Fatalf("RunStep() error = %v", err)
 	}
@@ -85,6 +86,9 @@ func TestRuntimeSubAgentEngineRunStepToolLoopSuccess(t *testing.T) {
 	}
 	if providerImpl.callCount != 2 {
 		t.Fatalf("provider calls = %d, want 2", providerImpl.callCount)
+	}
+	if providerFactory.calls != 1 {
+		t.Fatalf("provider build calls = %d, want 1", providerFactory.calls)
 	}
 
 	events := collectRuntimeEvents(service.Events())
@@ -129,20 +133,17 @@ func TestRuntimeSubAgentEngineRunStepCapabilityDenied(t *testing.T) {
 	policy.MaxToolCallsPerStep = 2
 	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
 
-	stepOutput, err := engine.RunStep(context.Background(), subagent.StepInput{
-		Role:   subagent.RoleCoder,
-		Policy: policy,
-		Task:   subagent.Task{ID: "task-cap-deny", Goal: "execute bash"},
-		Budget: subagent.Budget{MaxSteps: 4},
-		Capability: subagent.Capability{
-			AllowedTools: []string{"filesystem_read_file"},
-		},
-		RunID:     "run-subagent-cap-deny",
-		SessionID: "session-subagent-cap-deny",
-		AgentID:   "subagent:task-cap-deny",
-		Workdir:   t.TempDir(),
-		Executor:  newSubAgentRuntimeToolExecutor(service),
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{
+		ID:   "task-cap-deny",
+		Goal: "execute bash",
 	})
+	stepInput.Budget = subagent.Budget{MaxSteps: 4}
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+	stepInput.RunID = "run-subagent-cap-deny"
+	stepInput.SessionID = "session-subagent-cap-deny"
+	stepInput.AgentID = "subagent:task-cap-deny"
+
+	stepOutput, err := engine.RunStep(context.Background(), stepInput)
 	if err != nil {
 		t.Fatalf("RunStep() error = %v", err)
 	}
@@ -168,7 +169,7 @@ func TestRuntimeSubAgentEngineRunStepRequiredModeWithoutToolFails(t *testing.T) 
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
 					Parts: []providertypes.ContentPart{
-						providertypes.NewTextPart(`{"summary":"done","findings":["f1"],"patches":["p1"],"risks":["r1"],"next_actions":["n1"],"artifacts":["a1"]}`),
+						providertypes.NewTextPart(subAgentDonePayload),
 					},
 				},
 				FinishReason: "stop",
@@ -187,18 +188,17 @@ func TestRuntimeSubAgentEngineRunStepRequiredModeWithoutToolFails(t *testing.T) 
 	policy.MaxToolCallsPerStep = 1
 	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
 
-	_, err = engine.RunStep(context.Background(), subagent.StepInput{
-		Role:       subagent.RoleCoder,
-		Policy:     policy,
-		Task:       subagent.Task{ID: "task-required", Goal: "must call tool"},
-		Budget:     subagent.Budget{MaxSteps: 2},
-		Capability: subagent.Capability{AllowedTools: []string{"filesystem_read_file"}},
-		RunID:      "run-subagent-required",
-		SessionID:  "session-subagent-required",
-		AgentID:    "subagent:task-required",
-		Workdir:    t.TempDir(),
-		Executor:   newSubAgentRuntimeToolExecutor(service),
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{
+		ID:   "task-required",
+		Goal: "must call tool",
 	})
+	stepInput.Budget = subagent.Budget{MaxSteps: 2}
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+	stepInput.RunID = "run-subagent-required"
+	stepInput.SessionID = "session-subagent-required"
+	stepInput.AgentID = "subagent:task-required"
+
+	_, err = engine.RunStep(context.Background(), stepInput)
 	if err == nil || !strings.Contains(err.Error(), "requires at least one tool call") {
 		t.Fatalf("expected required-mode error, got %v", err)
 	}
@@ -232,6 +232,32 @@ func TestRuntimeSubAgentEngineFallbackWhenRuntimeUnavailable(t *testing.T) {
 	}
 }
 
+func TestRuntimeSubAgentEngineRunStepProviderBuildFailureReturnsError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleReviewer)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	engine := runtimeSubAgentEngine{
+		service: NewWithFactory(manager, &stubToolManager{}, newMemoryStore(), &scriptedProviderFactory{
+			err: errors.New("provider init failed"),
+		}, nil),
+		role:   subagent.RoleReviewer,
+		policy: policy,
+	}
+	_, err = engine.RunStep(context.Background(), subagent.StepInput{
+		Role:     subagent.RoleReviewer,
+		Policy:   policy,
+		Task:     subagent.Task{ID: "task-provider-fail", Goal: "review"},
+		Executor: newSubAgentRuntimeToolExecutor(engine.service),
+	})
+	if err == nil || !strings.Contains(err.Error(), "build subagent provider") {
+		t.Fatalf("expected build provider error, got %v", err)
+	}
+}
+
 func TestParseSubAgentOutput(t *testing.T) {
 	t.Parallel()
 
@@ -252,6 +278,13 @@ func TestParseSubAgentOutput(t *testing.T) {
 			name:    "invalid json",
 			input:   `summary only`,
 			wantErr: true,
+		},
+		{
+			name: "pick object with output contract keys",
+			input: strings.Join([]string{
+				`{"example":true}`,
+				`{"summary":"s","findings":["f"],"patches":["p"],"risks":["r"],"next_actions":["n"],"artifacts":["a"]}`,
+			}, "\n"),
 		},
 	}
 
@@ -305,4 +338,20 @@ func assertSubAgentToolEventPayload(
 		return
 	}
 	t.Fatalf("event %q not found", eventType)
+}
+
+func newRuntimeSubAgentStepInput(
+	t *testing.T,
+	service *Service,
+	policy subagent.RolePolicy,
+	task subagent.Task,
+) subagent.StepInput {
+	t.Helper()
+	return subagent.StepInput{
+		Role:     policy.Role,
+		Policy:   policy,
+		Task:     task,
+		Workdir:  t.TempDir(),
+		Executor: newSubAgentRuntimeToolExecutor(service),
+	}
 }
