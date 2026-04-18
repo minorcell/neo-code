@@ -21,6 +21,7 @@ import (
 	approvalflow "neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
+	memotool "neo-code/internal/tools/memo"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
@@ -103,6 +104,8 @@ type stubRuntime struct {
 	prepareErr      error
 	preparedOutput  agentruntime.UserInput
 	runInputs       []agentruntime.UserInput
+	systemToolCalls []agentruntime.SystemToolInput
+	systemToolFn    func(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error)
 	resolveCalls    []agentruntime.PermissionResolutionInput
 	resolveErr      error
 	cancelInvoked   bool
@@ -162,6 +165,14 @@ func (s *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 
 func (s *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (s *stubRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	s.systemToolCalls = append(s.systemToolCalls, input)
+	if s.systemToolFn != nil {
+		return s.systemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
 }
 
 func (s *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
@@ -2014,6 +2025,11 @@ func TestSetCurrentWorkdir(t *testing.T) {
 // newTestAppWithMemo 创建一个注入了 memo 服务的测试 App。
 func newTestAppWithMemo(t *testing.T) (App, *stubRuntime) {
 	t.Helper()
+	return newTestAppWithMemoBaseDir(t, t.TempDir())
+}
+
+func newTestAppWithMemoBaseDir(t *testing.T, memoBaseDir string) (App, *stubRuntime) {
+	t.Helper()
 
 	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
@@ -2039,10 +2055,22 @@ func newTestAppWithMemo(t *testing.T) (App, *stubRuntime) {
 	}
 
 	// 创建真实的 memo 服务
-	memoStore := memo.NewFileStore(t.TempDir(), cfg.Workdir)
-	memoSvc := memo.NewService(memoStore, nil, cfg.Memo, nil)
+	memoStore := memo.NewFileStore(memoBaseDir, cfg.Workdir)
+	memoSvc := memo.NewService(memoStore, cfg.Memo, nil)
 
 	runtime := newStubRuntime()
+	runtime.systemToolFn = func(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+		switch input.ToolName {
+		case tools.ToolNameMemoList:
+			return memotool.NewListTool(memoSvc).Execute(ctx, tools.ToolCallInput{Arguments: input.Arguments})
+		case tools.ToolNameMemoRemember:
+			return memotool.NewRememberTool(memoSvc).Execute(ctx, tools.ToolCallInput{Arguments: input.Arguments})
+		case tools.ToolNameMemoRemove:
+			return memotool.NewRemoveTool(memoSvc).Execute(ctx, tools.ToolCallInput{Arguments: input.Arguments})
+		default:
+			return tools.ToolResult{}, errors.New("unsupported system tool")
+		}
+	}
 	app, err := newApp(tuibootstrap.Container{
 		Config:          *cfg,
 		ConfigManager:   manager,
@@ -2062,16 +2090,13 @@ func TestHandleMemoCommand(t *testing.T) {
 	t.Run("shows no memos message when empty", func(t *testing.T) {
 		app, _ := newTestAppWithMemo(t)
 		cmd := app.handleMemoCommand()
-		if cmd != nil {
-			t.Error("expected nil cmd")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
 		}
-		msgs := app.activeMessages
-		if len(msgs) == 0 {
-			t.Fatal("expected at least one inline message")
-		}
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "No memos stored yet") {
-			t.Errorf("expected 'no memos' message, got: %s", messageText(last))
+		model, _ := app.Update(cmd())
+		app = model.(App)
+		if !strings.Contains(app.state.StatusText, "No memos stored yet") {
+			t.Errorf("expected status to mention no memos, got: %s", app.state.StatusText)
 		}
 	})
 
@@ -2079,30 +2104,26 @@ func TestHandleMemoCommand(t *testing.T) {
 		app, _ := newTestAppWithMemo(t)
 		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "test entry", Content: "test", Source: memo.SourceUserManual})
 
-		app.handleMemoCommand()
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "1 memo(s)") {
-			t.Errorf("expected memo count, got: %s", messageText(last))
-		}
-		if !strings.Contains(messageText(last), "test entry") {
-			t.Errorf("expected entry title, got: %s", messageText(last))
+		cmd := app.handleMemoCommand()
+		model, _ := app.Update(cmd())
+		app = model.(App)
+		if !strings.Contains(app.state.StatusText, "test entry") {
+			t.Errorf("expected status to include entry title, got: %s", app.state.StatusText)
 		}
 	})
 
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
+	t.Run("routes through runtime system tool", func(t *testing.T) {
+		app, runtime := newTestApp(t)
 		cmd := app.handleMemoCommand()
-		if cmd != nil {
-			t.Error("expected nil cmd")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
 		}
-		msgs := app.activeMessages
-		if len(msgs) == 0 {
-			t.Fatal("expected at least one inline message")
+		_ = cmd()
+		if len(runtime.systemToolCalls) != 1 {
+			t.Fatalf("system tool calls = %d, want 1", len(runtime.systemToolCalls))
 		}
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
+		if runtime.systemToolCalls[0].ToolName != tools.ToolNameMemoList {
+			t.Fatalf("ToolName = %q, want %q", runtime.systemToolCalls[0].ToolName, tools.ToolNameMemoList)
 		}
 	})
 }
@@ -2113,21 +2134,44 @@ func TestHandleRememberCommand(t *testing.T) {
 	t.Run("saves memo and shows confirmation", func(t *testing.T) {
 		app, _ := newTestAppWithMemo(t)
 		cmd := app.handleRememberCommand("my preference")
-		if cmd != nil {
-			t.Error("expected nil cmd")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
 		}
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Memo saved") {
-			t.Errorf("expected saved confirmation, got: %s", messageText(last))
+		model, _ := app.Update(cmd())
+		app = model.(App)
+		if !strings.Contains(app.state.StatusText, "Memory saved") {
+			t.Errorf("expected saved confirmation, got: %s", app.state.StatusText)
 		}
 		// Verify the entry was actually saved
-		entries, _ := app.memoSvc.List(context.Background())
+		entries, _ := app.memoSvc.List(context.Background(), memo.ScopeUser)
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(entries))
 		}
 		if entries[0].Title != "my preference" {
 			t.Errorf("Title = %q, want %q", entries[0].Title, "my preference")
+		}
+	})
+
+	t.Run("user memo is visible from another workspace", func(t *testing.T) {
+		baseDir := t.TempDir()
+		app, _ := newTestAppWithMemoBaseDir(t, baseDir)
+		cmd := app.handleRememberCommand("global preference")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
+		}
+		model, _ := app.Update(cmd())
+		app = model.(App)
+
+		otherSvc := memo.NewService(memo.NewFileStore(baseDir, t.TempDir()), newDefaultAppConfig().Memo, nil)
+		entries, err := otherSvc.List(context.Background(), memo.ScopeUser)
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 shared user memo, got %d", len(entries))
+		}
+		if entries[0].Title != "global preference" {
+			t.Fatalf("shared entry title = %q, want %q", entries[0].Title, "global preference")
 		}
 	})
 
@@ -2151,13 +2195,18 @@ func TestHandleRememberCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
-		app.handleRememberCommand("something")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
+	t.Run("routes through runtime system tool", func(t *testing.T) {
+		app, runtime := newTestApp(t)
+		cmd := app.handleRememberCommand("something")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
+		}
+		_ = cmd()
+		if len(runtime.systemToolCalls) != 1 {
+			t.Fatalf("system tool calls = %d, want 1", len(runtime.systemToolCalls))
+		}
+		if runtime.systemToolCalls[0].ToolName != tools.ToolNameMemoRemember {
+			t.Fatalf("ToolName = %q, want %q", runtime.systemToolCalls[0].ToolName, tools.ToolNameMemoRemember)
 		}
 	})
 }
@@ -2170,14 +2219,14 @@ func TestHandleForgetCommand(t *testing.T) {
 		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "remove me", Content: "test", Source: memo.SourceUserManual})
 		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeFeedback, Title: "keep this", Content: "test2", Source: memo.SourceUserManual})
 
-		app.handleForgetCommand("remove")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Removed 1 memo") {
-			t.Errorf("expected removal confirmation, got: %s", messageText(last))
+		cmd := app.handleForgetCommand("remove")
+		model, _ := app.Update(cmd())
+		app = model.(App)
+		if !strings.Contains(app.state.StatusText, "Removed 1 memo") {
+			t.Errorf("expected removal confirmation, got: %s", app.state.StatusText)
 		}
 		// Verify only one was removed
-		entries, _ := app.memoSvc.List(context.Background())
+		entries, _ := app.memoSvc.List(context.Background(), memo.ScopeAll)
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 remaining entry, got %d", len(entries))
 		}
@@ -2188,11 +2237,11 @@ func TestHandleForgetCommand(t *testing.T) {
 
 	t.Run("no match shows message", func(t *testing.T) {
 		app, _ := newTestAppWithMemo(t)
-		app.handleForgetCommand("nonexistent")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "No memos matching") {
-			t.Errorf("expected no match message, got: %s", messageText(last))
+		cmd := app.handleForgetCommand("nonexistent")
+		model, _ := app.Update(cmd())
+		app = model.(App)
+		if !strings.Contains(app.state.StatusText, "No memos matching") {
+			t.Errorf("expected no match message, got: %s", app.state.StatusText)
 		}
 	})
 
@@ -2206,13 +2255,18 @@ func TestHandleForgetCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
-		app.handleForgetCommand("something")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
+	t.Run("routes through runtime system tool", func(t *testing.T) {
+		app, runtime := newTestApp(t)
+		cmd := app.handleForgetCommand("something")
+		if cmd == nil {
+			t.Fatal("expected async cmd")
+		}
+		_ = cmd()
+		if len(runtime.systemToolCalls) != 1 {
+			t.Fatalf("system tool calls = %d, want 1", len(runtime.systemToolCalls))
+		}
+		if runtime.systemToolCalls[0].ToolName != tools.ToolNameMemoRemove {
+			t.Fatalf("ToolName = %q, want %q", runtime.systemToolCalls[0].ToolName, tools.ToolNameMemoRemove)
 		}
 	})
 }

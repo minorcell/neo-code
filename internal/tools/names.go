@@ -12,4 +12,6 @@ const (
 	ToolNameTodoWrite           = "todo_write"
 	ToolNameMemoRemember        = "memo_remember"
 	ToolNameMemoRecall          = "memo_recall"
+	ToolNameMemoList            = "memo_list"
+	ToolNameMemoRemove          = "memo_remove"
 )
