@@ -208,16 +208,22 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 	if normalized.ModelSource == "" {
 		normalized.ModelSource = provider.ModelSourceDiscover
 	}
+	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
+	normalizedDiscoveryResponseProfile := normalized.DiscoveryResponseProfile
+	if provider.NormalizeModelSource(normalized.ModelSource) == provider.ModelSourceManual {
+		normalizedDiscoveryEndpointPath = ""
+		normalizedDiscoveryResponseProfile = ""
+	}
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		normalized.Driver,
 		"",
 		"",
 		"",
-		normalized.DiscoveryEndpointPath,
+		normalizedDiscoveryEndpointPath,
 		"",
 		"",
 		normalized.APIStyle,
-		normalized.DiscoveryResponseProfile,
+		normalizedDiscoveryResponseProfile,
 	)
 	if err != nil {
 		return createCustomProviderNormalizedInput{}, err

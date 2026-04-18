@@ -176,6 +176,34 @@ func TestNormalizeCreateCustomProviderInputDefaultsToDiscoverWhenModelSourceEmpt
 	}
 }
 
+func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t *testing.T) {
+	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:                     "manual-no-discovery-validation",
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  "https://llm.example.com/v1",
+		APIKeyEnv:                "MANUAL_NO_DISCOVERY_VALIDATION_API_KEY",
+		APIKey:                   "test-key",
+		ModelSource:              provider.ModelSourceManual,
+		DiscoveryResponseProfile: "invalid-profile",
+		ManualModelsJSON:         `[{"id":"manual-model","name":"Manual Model"}]`,
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreateCustomProviderInput() error = %v", err)
+	}
+	if normalized.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected manual mode to clear discovery endpoint path, got %q", normalized.DiscoveryEndpointPath)
+	}
+	if normalized.DiscoveryResponseProfile != "" {
+		t.Fatalf(
+			"expected manual mode to clear discovery response profile, got %q",
+			normalized.DiscoveryResponseProfile,
+		)
+	}
+	if len(normalized.ManualModels) != 1 {
+		t.Fatalf("expected one manual model, got %d", len(normalized.ManualModels))
+	}
+}
+
 func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
