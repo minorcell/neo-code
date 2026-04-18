@@ -15,6 +15,7 @@ import (
 type SubAgentTaskInput struct {
 	RunID      string
 	SessionID  string
+	AgentID    string
 	Role       subagent.Role
 	Task       subagent.Task
 	Budget     subagent.Budget
@@ -35,32 +36,30 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 	if err := input.Task.Validate(); err != nil {
 		return subagent.Result{}, err
 	}
+	task := input.Task
+	task.RunID = strings.TrimSpace(input.RunID)
+	task.SessionID = strings.TrimSpace(input.SessionID)
+	task.AgentID = resolveSubAgentExecutionAgentID(input)
+	if strings.TrimSpace(task.Workspace) == "" && s != nil && s.configManager != nil {
+		cfg := s.configManager.Get()
+		task.Workspace = strings.TrimSpace(cfg.Workdir)
+	}
 
 	factory := s.SubAgentFactory()
 	worker, err := factory.Create(input.Role)
 	if err != nil {
-		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-			Role:   input.Role,
-			TaskID: input.Task.ID,
-			State:  subagent.StateFailed,
-			Error:  err.Error(),
-		})
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
 		return subagent.Result{}, err
 	}
 
-	if err := worker.Start(input.Task, input.Budget, input.Capability); err != nil {
-		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-			Role:   input.Role,
-			TaskID: input.Task.ID,
-			State:  subagent.StateFailed,
-			Error:  err.Error(),
-		})
+	if err := worker.Start(task, input.Budget, input.Capability); err != nil {
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
 		return subagent.Result{}, err
 	}
 
 	_ = s.emit(ctx, EventSubAgentStarted, input.RunID, input.SessionID, SubAgentEventPayload{
 		Role:   input.Role,
-		TaskID: input.Task.ID,
+		TaskID: task.ID,
 		State:  worker.State(),
 	})
 
@@ -69,20 +68,14 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		if stepResult.State == "" {
 			stepResult.State = worker.State()
 		}
-		emitSubAgentProgress(s, input, stepResult, stepErr)
+		emitSubAgentProgress(s, input.RunID, input.SessionID, input.Role, task.ID, stepResult, stepErr)
 
 		if stepErr != nil {
 			if errors.Is(stepErr, context.DeadlineExceeded) {
 				_ = worker.Stop(subagent.StopReasonTimeout)
 				result, resultErr := worker.Result()
 				if resultErr != nil {
-					result = subagent.Result{
-						Role:       input.Role,
-						TaskID:     input.Task.ID,
-						State:      subagent.StateFailed,
-						StopReason: subagent.StopReasonTimeout,
-						Error:      errorText(stepErr),
-					}
+					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonTimeout, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
 				return result, stepErr
@@ -91,13 +84,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				_ = worker.Stop(subagent.StopReasonCanceled)
 				result, resultErr := worker.Result()
 				if resultErr != nil {
-					result = subagent.Result{
-						Role:       input.Role,
-						TaskID:     input.Task.ID,
-						State:      subagent.StateCanceled,
-						StopReason: subagent.StopReasonCanceled,
-						Error:      errorText(stepErr),
-					}
+					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateCanceled, subagent.StopReasonCanceled, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
 				return result, stepErr
@@ -105,12 +92,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 			result, resultErr := worker.Result()
 			if resultErr != nil {
-				_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-					Role:   input.Role,
-					TaskID: input.Task.ID,
-					State:  subagent.StateFailed,
-					Error:  stepErr.Error(),
-				})
+				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, stepErr)
 				return subagent.Result{}, stepErr
 			}
 			emitSubAgentTerminal(s, ctx, input, result)
@@ -123,12 +105,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 		result, err := worker.Result()
 		if err != nil {
-			_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-				Role:   input.Role,
-				TaskID: input.Task.ID,
-				State:  subagent.StateFailed,
-				Error:  err.Error(),
-			})
+			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, err)
 			return subagent.Result{}, err
 		}
 		emitSubAgentTerminal(s, ctx, input, result)
@@ -139,11 +116,40 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 	}
 }
 
+// emitSubAgentFailed 统一发射子代理失败事件，避免重复构造相同载荷。
+func emitSubAgentFailed(
+	s *Service,
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	role subagent.Role,
+	taskID string,
+	err error,
+) {
+	if s == nil {
+		return
+	}
+	_ = s.emit(ctx, EventSubAgentFailed, runID, sessionID, SubAgentEventPayload{
+		Role:   role,
+		TaskID: taskID,
+		State:  subagent.StateFailed,
+		Error:  errorText(err),
+	})
+}
+
 // emitSubAgentProgress 非阻塞发射进度事件，避免慢消费者反压执行路径。
-func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subagent.StepResult, stepErr error) {
+func emitSubAgentProgress(
+	s *Service,
+	runID string,
+	sessionID string,
+	role subagent.Role,
+	taskID string,
+	stepResult subagent.StepResult,
+	stepErr error,
+) {
 	payload := SubAgentEventPayload{
-		Role:   input.Role,
-		TaskID: input.Task.ID,
+		Role:   role,
+		TaskID: strings.TrimSpace(taskID),
 		State:  stepResult.State,
 		Step:   stepResult.Step,
 		Delta:  stepResult.Delta,
@@ -151,8 +157,8 @@ func emitSubAgentProgress(s *Service, input SubAgentTaskInput, stepResult subage
 	}
 	event := RuntimeEvent{
 		Type:           EventSubAgentProgress,
-		RunID:          input.RunID,
-		SessionID:      input.SessionID,
+		RunID:          strings.TrimSpace(runID),
+		SessionID:      strings.TrimSpace(sessionID),
 		Turn:           turnUnspecified,
 		Timestamp:      time.Now(),
 		PayloadVersion: controlplane.PayloadVersion,
@@ -185,6 +191,17 @@ func emitSubAgentTerminal(s *Service, ctx context.Context, input SubAgentTaskInp
 	}
 }
 
+// fallbackSubAgentResult 在 worker 结果不可用时构造保底终态，确保调用方拿到稳定字段。
+func fallbackSubAgentResult(role subagent.Role, taskID string, state subagent.State, reason subagent.StopReason, err error) subagent.Result {
+	return subagent.Result{
+		Role:       role,
+		TaskID:     taskID,
+		State:      state,
+		StopReason: reason,
+		Error:      errorText(err),
+	}
+}
+
 // errorText 将 error 安全转换为事件可用文本。
 func errorText(err error) string {
 	if err == nil {
@@ -199,4 +216,17 @@ func subAgentResultError(result subagent.Result) error {
 		return errors.New(text)
 	}
 	return fmt.Errorf("subagent ended with state=%s stop_reason=%s", result.State, result.StopReason)
+}
+
+// resolveSubAgentExecutionAgentID 生成子代理执行身份，供权限链路透传审计。
+func resolveSubAgentExecutionAgentID(input SubAgentTaskInput) string {
+	role := strings.TrimSpace(string(input.Role))
+	taskID := strings.TrimSpace(input.Task.ID)
+	if role == "" {
+		role = "subagent"
+	}
+	if taskID == "" {
+		return role
+	}
+	return role + ":" + taskID
 }
