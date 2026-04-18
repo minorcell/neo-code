@@ -17,6 +17,8 @@ const (
 	defaultBackgroundTimeout = 30 * time.Second
 )
 
+var errCatalogPersist = errors.New("provider catalog: persist discovered models")
+
 type Service struct {
 	registry          *provider.Registry
 	store             Store
@@ -115,7 +117,7 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 	if !catalogOK && options.allowSyncRefresh {
 		discovered, err := s.discoverAndPersist(ctx, input)
 		if err != nil {
-			if len(defaultModels) == 0 || provider.IsDiscoveryConfigError(err) {
+			if len(defaultModels) == 0 || provider.IsDiscoveryConfigError(err) || errors.Is(err, errCatalogPersist) {
 				return nil, err
 			}
 		} else {
@@ -186,7 +188,7 @@ func (s *Service) discoverAndPersist(ctx context.Context, input provider.Catalog
 		ExpiresAt:     now.Add(s.catalogTTL),
 		Models:        discovered,
 	}); err != nil {
-		return nil, fmt.Errorf("provider catalog: persist discovered models: %w", err)
+		return nil, fmt.Errorf("%w: %v", errCatalogPersist, err)
 	}
 	return discovered, nil
 }

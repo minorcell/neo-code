@@ -501,6 +501,29 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 			t.Fatalf("expected empty discovery not to be cached, got %v", loadErr)
 		}
 	})
+
+	t.Run("persist failure returns error even when default models exist", func(t *testing.T) {
+		t.Setenv(testAPIKeyEnv, "test-key")
+		registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}, nil
+		})
+		store := &failSaveStore{
+			memoryStore: newMemoryStore(),
+			saveErr:     errors.New("disk full"),
+		}
+		service := NewService("", registry, store)
+
+		models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
+		if err == nil {
+			t.Fatal("expected persist failure to be returned")
+		}
+		if models != nil {
+			t.Fatalf("expected nil models on persist failure, got %+v", models)
+		}
+		if !errors.Is(err, errCatalogPersist) {
+			t.Fatalf("expected persist sentinel error, got %v", err)
+		}
+	})
 }
 
 func TestQueueRefreshDeduplicatesInFlightRequests(t *testing.T) {
@@ -719,3 +742,15 @@ func (s *memoryStore) Save(ctx context.Context, modelCatalog ModelCatalog) error
 }
 
 const testAPIKeyEnv = "OPENAI_API_KEY"
+
+type failSaveStore struct {
+	*memoryStore
+	saveErr error
+}
+
+func (s *failSaveStore) Save(ctx context.Context, modelCatalog ModelCatalog) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	return s.memoryStore.Save(ctx, modelCatalog)
+}

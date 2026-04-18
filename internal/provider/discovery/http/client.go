@@ -9,12 +9,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/discovery"
 )
 
 const maxDiscoveryResponseBodyBytes int64 = 2 * 1024 * 1024
+const maxHTTPErrorSummaryBytes int64 = 4 * 1024
 
 // RequestConfig 描述通用 HTTP discovery 请求的必要输入。
 type RequestConfig struct {
@@ -120,8 +122,10 @@ func resolveResponseProfile(discoveryProtocol string, profile string) (string, e
 
 // parseHTTPError 将 discovery HTTP 错误映射为可分类 ProviderError。
 func parseHTTPError(resp *http.Response) error {
-	_, _ = io.Copy(io.Discard, resp.Body)
 	message := httpErrorMessage(resp.StatusCode)
+	if summary := readHTTPErrorSummary(resp.Body, maxHTTPErrorSummaryBytes); summary != "" {
+		message += "; upstream body: " + summary
+	}
 	return provider.NewProviderErrorFromStatus(resp.StatusCode, message)
 }
 
@@ -151,6 +155,52 @@ func wrapTransportError(err error) error {
 		return provider.NewTimeoutProviderError("provider discovery: send models request timeout: " + message)
 	}
 	return provider.NewNetworkProviderError("provider discovery: send models request: " + message)
+}
+
+// readHTTPErrorSummary 读取并清洗受限长度的响应体摘要，用于保留上游可观测上下文。
+func readHTTPErrorSummary(body io.Reader, limit int64) string {
+	if body == nil || limit <= 0 {
+		return ""
+	}
+	payload, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return ""
+	}
+	truncated := int64(len(payload)) > limit
+	if truncated {
+		payload = payload[:limit]
+	}
+	summary := sanitizePrintableText(payload)
+	if summary == "" {
+		return ""
+	}
+	if truncated {
+		return summary + " ...(truncated)"
+	}
+	return summary
+}
+
+// sanitizePrintableText 清洗不可打印字符并折叠空白，避免错误消息污染终端输出。
+func sanitizePrintableText(payload []byte) string {
+	var b strings.Builder
+	lastWasSpace := false
+
+	for _, r := range string(payload) {
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			if lastWasSpace {
+				continue
+			}
+			b.WriteByte(' ')
+			lastWasSpace = true
+			continue
+		}
+		if !unicode.IsPrint(r) {
+			continue
+		}
+		b.WriteRune(r)
+		lastWasSpace = false
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // isTimeoutTransportError 判断网络错误是否由超时触发。

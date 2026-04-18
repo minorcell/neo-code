@@ -227,6 +227,22 @@ func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 }
 
+func TestProviderConfigValidateRejectsBaseURLWithUserinfo(t *testing.T) {
+	t.Parallel()
+
+	cfg := ProviderConfig{
+		Name:      "test-openai",
+		Driver:    providerpkg.DriverOpenAICompat,
+		BaseURL:   "https://token@api.openai.com/v1",
+		Model:     "gpt-4.1",
+		APIKeyEnv: "TEST_KEY",
+		Source:    ProviderSourceBuiltin,
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must not include userinfo") {
+		t.Fatalf("expected base_url userinfo validation error, got %v", err)
+	}
+}
+
 func TestCloneProviderConfigModelDescriptorsIndependence(t *testing.T) {
 	t.Parallel()
 
@@ -517,5 +533,27 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("ToRuntimeConfig() = %+v, want %+v", got, want)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigStripsBaseURLUserinfo(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:    "company-gateway",
+			Driver:  "openaicompat",
+			BaseURL: "https://token@llm.example.com/v1",
+			Model:   "server-default",
+		},
+		APIKey: "secret-key",
+	}
+
+	got := resolved.ToRuntimeConfig()
+	if strings.Contains(got.BaseURL, "token@") {
+		t.Fatalf("expected runtime base URL to strip userinfo, got %q", got.BaseURL)
+	}
+	if got.BaseURL != "https://llm.example.com/v1" {
+		t.Fatalf("expected sanitized runtime base URL, got %q", got.BaseURL)
 	}
 }

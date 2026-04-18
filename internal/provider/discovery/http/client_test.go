@@ -183,6 +183,57 @@ func TestDiscoverRawModelsReturnsHTTPClassifiedErrors(t *testing.T) {
 	}
 }
 
+func TestDiscoverRawModelsIncludesSanitizedHTTPErrorBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "invalid\napi\tkey\x00")
+	}))
+	defer server.Close()
+
+	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
+		BaseURL: server.URL,
+	})
+	if err == nil {
+		t.Fatal("expected provider error")
+	}
+	var pErr *provider.ProviderError
+	if !errors.As(err, &pErr) {
+		t.Fatalf("expected provider error, got %T: %v", err, err)
+	}
+	if pErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", pErr.StatusCode)
+	}
+	if !strings.Contains(pErr.Message, "upstream body: invalid api key") {
+		t.Fatalf("expected sanitized upstream body summary, got %q", pErr.Message)
+	}
+}
+
+func TestDiscoverRawModelsTruncatesHTTPErrorBodySummary(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, strings.Repeat("x", int(maxHTTPErrorSummaryBytes)+64))
+	}))
+	defer server.Close()
+
+	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
+		BaseURL: server.URL,
+	})
+	if err == nil {
+		t.Fatal("expected provider error")
+	}
+	var pErr *provider.ProviderError
+	if !errors.As(err, &pErr) {
+		t.Fatalf("expected provider error, got %T: %v", err, err)
+	}
+	if !strings.Contains(pErr.Message, "...(truncated)") {
+		t.Fatalf("expected truncated marker in message, got %q", pErr.Message)
+	}
+}
+
 func TestDiscoverRawModelsReturnsTransportErrors(t *testing.T) {
 	t.Parallel()
 

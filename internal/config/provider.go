@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -235,11 +236,12 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() provider.RuntimeConfig {
 		p.APIStyle,
 		p.DiscoveryResponseProfile,
 	)
+	baseURL := sanitizeRuntimeBaseURL(p.BaseURL)
 
 	return provider.RuntimeConfig{
 		Name:                     p.Name,
 		Driver:                   p.Driver,
-		BaseURL:                  p.BaseURL,
+		BaseURL:                  baseURL,
 		DefaultModel:             p.Model,
 		APIKey:                   p.APIKey,
 		ChatProtocol:             normalizedProtocols.ChatProtocol,
@@ -254,6 +256,23 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() provider.RuntimeConfig {
 		DiscoveryResponseProfile: normalizedProtocols.ResponseProfile,
 		ModelFieldAliases:        p.ModelFieldAliases,
 	}
+}
+
+// sanitizeRuntimeBaseURL 对运行时 base_url 做最小安全规整，确保不会透传 userinfo 等敏感片段。
+func sanitizeRuntimeBaseURL(raw string) string {
+	normalized, err := provider.NormalizeProviderBaseURL(raw)
+	if err == nil {
+		return normalized
+	}
+
+	parsed, parseErr := url.Parse(strings.TrimSpace(raw))
+	if parseErr != nil {
+		return strings.TrimSpace(raw)
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimSpace(parsed.String())
 }
 
 const (

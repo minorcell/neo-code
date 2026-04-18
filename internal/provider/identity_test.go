@@ -113,6 +113,9 @@ func TestNewProviderIdentityValidatesInputs(t *testing.T) {
 	if _, err := NewProviderIdentity("openaicompat", "not-a-url"); err == nil {
 		t.Fatalf("expected invalid base URL to fail")
 	}
+	if _, err := NewProviderIdentity("openaicompat", "https://token@api.example.com/v1"); err == nil {
+		t.Fatalf("expected base URL with userinfo to fail")
+	}
 }
 
 func TestNormalizeProviderIdentityAnthropicAndUnknownDriver(t *testing.T) {

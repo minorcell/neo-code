@@ -190,6 +190,9 @@ func NormalizeProviderBaseURL(raw string) (string, error) {
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("provider base_url %q must include scheme and host", raw)
 	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("provider base_url %q must not include userinfo", raw)
+	}
 
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	parsed.Host = strings.ToLower(parsed.Host)
