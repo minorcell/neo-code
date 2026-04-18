@@ -43,12 +43,12 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 	)
 	if sessionID != "" {
 		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
-		defer releaseLockRef()
 		sessionMu.Lock()
-		defer sessionMu.Unlock()
 
 		session, err := s.sessionStore.LoadSession(ctx, sessionID)
 		if err != nil {
+			sessionMu.Unlock()
+			releaseLockRef()
 			return tools.ToolResult{}, err
 		}
 		loaded = session
@@ -57,6 +57,8 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		}
 		runStateValue := newRunState(runID, session)
 		state = &runStateValue
+		sessionMu.Unlock()
+		releaseLockRef()
 	}
 
 	call := providertypes.ToolCall{
@@ -114,10 +116,15 @@ func normalizeToolName(name string) string {
 
 // newSystemToolRunID 为系统工具调用生成稳定前缀的运行标识，便于事件与日志定位。
 func newSystemToolRunID(toolName string) string {
-	return fmt.Sprintf("system-tool-%s-%d", normalizeToolName(toolName), time.Now().UnixNano())
+	return formatSystemToolID("system-tool", toolName)
 }
 
 // newSystemToolCallID 为系统工具调用生成单次执行唯一的 tool call id。
 func newSystemToolCallID(toolName string) string {
-	return fmt.Sprintf("call-%s-%d", normalizeToolName(toolName), time.Now().UnixNano())
+	return formatSystemToolID("call", toolName)
+}
+
+// formatSystemToolID 统一构造系统工具相关 ID，避免不同类型 ID 生成逻辑分散重复。
+func formatSystemToolID(prefix, toolName string) string {
+	return fmt.Sprintf("%s-%s-%d", prefix, normalizeToolName(toolName), time.Now().UnixNano())
 }
