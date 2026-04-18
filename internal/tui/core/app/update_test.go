@@ -102,6 +102,9 @@ type stubRuntime struct {
 	prepareErr      error
 	preparedOutput  agentruntime.UserInput
 	runInputs       []agentruntime.UserInput
+	systemToolCalls []agentruntime.SystemToolInput
+	systemToolRes   tools.ToolResult
+	systemToolErr   error
 	resolveCalls    []agentruntime.PermissionResolutionInput
 	resolveErr      error
 	cancelInvoked   bool
@@ -161,6 +164,14 @@ func (s *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 
 func (s *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (s *stubRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	s.systemToolCalls = append(s.systemToolCalls, input)
+	if s.systemToolErr != nil {
+		return tools.ToolResult{}, s.systemToolErr
+	}
+	return s.systemToolRes, nil
 }
 
 func (s *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {

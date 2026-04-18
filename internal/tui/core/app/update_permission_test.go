@@ -15,6 +15,7 @@ import (
 	agentruntime "neo-code/internal/runtime"
 	approvalflow "neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/tools"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -43,6 +44,10 @@ func (r *permissionTestRuntime) Run(ctx context.Context, input agentruntime.User
 
 func (r *permissionTestRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (r *permissionTestRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
 }
 
 func (r *permissionTestRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {

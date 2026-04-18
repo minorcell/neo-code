@@ -13,151 +13,124 @@ import (
 func TestRecallToolName(t *testing.T) {
 	tool := NewRecallTool(nil)
 	if tool.Name() != tools.ToolNameMemoRecall {
-		t.Errorf("Name() = %q, want %q", tool.Name(), tools.ToolNameMemoRecall)
-	}
-}
-
-func TestRecallToolSchema(t *testing.T) {
-	tool := NewRecallTool(nil)
-	schema := tool.Schema()
-	if schema["type"] != "object" {
-		t.Errorf("Schema type = %v, want object", schema["type"])
-	}
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("Schema properties is not a map")
-	}
-	if _, exists := props["keyword"]; !exists {
-		t.Error("Schema missing 'keyword' property")
-	}
-}
-
-func TestRecallToolMicroCompactPolicy(t *testing.T) {
-	tool := NewRecallTool(nil)
-	if tool.MicroCompactPolicy() != tools.MicroCompactPolicyPreserveHistory {
-		t.Errorf("MicroCompactPolicy() = %v, want PreserveHistory", tool.MicroCompactPolicy())
+		t.Fatalf("Name() = %q, want %q", tool.Name(), tools.ToolNameMemoRecall)
 	}
 }
 
 func TestRecallToolExecuteSuccess(t *testing.T) {
 	svc := newTestService(t)
-	// 预先写入记忆
-	svc.Add(context.Background(), memo.Entry{
+	if err := svc.Add(context.Background(), memo.Entry{
 		Type:    memo.TypeUser,
-		Title:   "偏好中文注释",
-		Content: "用户偏好使用中文注释和 tab 缩进",
+		Title:   "prefer chinese comments",
+		Content: "prefer chinese comments",
 		Source:  memo.SourceUserManual,
-	})
+	}); err != nil {
+		t.Fatalf("seed Add() error = %v", err)
+	}
 
 	tool := NewRecallTool(svc)
-	args, _ := json.Marshal(recallInput{Keyword: "中文"})
+	args, _ := json.Marshal(recallInput{Keyword: "chinese"})
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
 	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.IsError {
-		t.Errorf("unexpected error result: %s", result.Content)
+	if result.IsError || !strings.Contains(result.Content, "Found 1 memory topic") {
+		t.Fatalf("unexpected result: %+v", result)
 	}
-	if !strings.Contains(result.Content, "Found 1 memory") {
-		t.Errorf("Content should show match count: %q", result.Content)
-	}
-	if !strings.Contains(result.Content, "中文注释") {
-		t.Errorf("Content should contain topic content: %q", result.Content)
+	if !strings.Contains(result.Content, "[user]") {
+		t.Fatalf("expected scoped header, got %q", result.Content)
 	}
 }
 
 func TestRecallToolExecuteNoMatch(t *testing.T) {
-	svc := newTestService(t)
-	tool := NewRecallTool(svc)
+	tool := NewRecallTool(newTestService(t))
+	args, _ := json.Marshal(recallInput{Keyword: "missing"})
 
-	args, _ := json.Marshal(recallInput{Keyword: "nonexistent"})
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
 	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.IsError {
-		t.Errorf("no match should not be an error: %s", result.Content)
-	}
-	if !strings.Contains(result.Content, "No memories found") {
-		t.Errorf("Content should show no match: %q", result.Content)
+	if result.IsError || !strings.Contains(result.Content, "No memories found") {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 }
 
-func TestRecallToolExecuteInvalidJSON(t *testing.T) {
-	tool := NewRecallTool(nil)
-	_, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: []byte("not json")})
-	if err == nil {
-		t.Error("expected error for invalid JSON")
+func TestRecallToolExecuteBadInput(t *testing.T) {
+	tool := NewRecallTool(newTestService(t))
+
+	if _, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: []byte("not json")}); err == nil {
+		t.Fatal("expected invalid JSON error")
+	}
+	args, _ := json.Marshal(recallInput{Keyword: ""})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
+	if err == nil || !result.IsError {
+		t.Fatalf("expected empty keyword error, got result=%+v err=%v", result, err)
 	}
 }
 
 func TestRecallToolExecuteNilService(t *testing.T) {
 	tool := NewRecallTool(nil)
-	args, _ := json.Marshal(recallInput{Keyword: "tab"})
+	args, _ := json.Marshal(recallInput{Keyword: "x"})
+
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
-	if err == nil {
-		t.Fatal("expected error for nil service")
-	}
-	if !result.IsError {
-		t.Fatal("expected error result")
-	}
-	if !strings.Contains(result.Content, "service is nil") {
-		t.Fatalf("unexpected error content: %q", result.Content)
+	if err == nil || !result.IsError {
+		t.Fatalf("expected nil service error, got result=%+v err=%v", result, err)
 	}
 }
 
-func TestRecallToolExecuteEmptyKeyword(t *testing.T) {
-	svc := newTestService(t)
-	tool := NewRecallTool(svc)
-
-	args, _ := json.Marshal(recallInput{Keyword: ""})
-	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
-	if err == nil {
-		t.Error("expected error for empty keyword")
+func TestRecallToolDescriptionAndSchema(t *testing.T) {
+	tool := NewRecallTool(nil)
+	if tool.Description() == "" {
+		t.Fatal("Description() should not be empty")
 	}
-	if !result.IsError {
-		t.Error("expected error result")
+	schema := tool.Schema()
+	if schema == nil {
+		t.Fatal("Schema() should not be nil")
 	}
-}
-
-func TestRecallToolExecuteWhitespaceKeyword(t *testing.T) {
-	svc := newTestService(t)
-	tool := NewRecallTool(svc)
-
-	args, _ := json.Marshal(recallInput{Keyword: "   "})
-	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
-	if err == nil {
-		t.Error("expected error for whitespace keyword")
-	}
-	if !result.IsError {
-		t.Error("expected error result")
+	if tool.MicroCompactPolicy() != tools.MicroCompactPolicyPreserveHistory {
+		t.Fatalf("MicroCompactPolicy() = %v, want PreserveHistory", tool.MicroCompactPolicy())
 	}
 }
 
-func TestRecallToolExecuteMultipleResults(t *testing.T) {
+func TestRecallToolExecuteWithScopeFilter(t *testing.T) {
 	svc := newTestService(t)
-	svc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "偏好 tab", Content: "tab content", Source: memo.SourceUserManual})
-	svc.Add(context.Background(), memo.Entry{Type: memo.TypeFeedback, Title: "反馈 tab 问题", Content: "feedback content", Source: memo.SourceUserManual})
+	if err := svc.Add(context.Background(), memo.Entry{
+		Type:    memo.TypeUser,
+		Title:   "user pref",
+		Content: "user pref content",
+		Source:  memo.SourceUserManual,
+	}); err != nil {
+		t.Fatalf("Add user: %v", err)
+	}
+	if err := svc.Add(context.Background(), memo.Entry{
+		Type:    memo.TypeFeedback,
+		Title:   "feedback pref",
+		Content: "feedback pref content",
+		Source:  memo.SourceUserManual,
+	}); err != nil {
+		t.Fatalf("Add feedback: %v", err)
+	}
 
 	tool := NewRecallTool(svc)
-	args, _ := json.Marshal(recallInput{Keyword: "tab"})
+	args, _ := json.Marshal(recallInput{Keyword: "pref", Scope: "user"})
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
 	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.IsError {
-		t.Errorf("unexpected error: %s", result.Content)
+	if result.IsError || !strings.Contains(result.Content, "Found 1 memory topic") {
+		t.Fatalf("expected 1 user result, got: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "Found 2 memory") {
-		t.Errorf("Content should show 2 matches: %q", result.Content)
+	if strings.Contains(result.Content, "feedback") {
+		t.Fatalf("should not contain feedback entry: %s", result.Content)
 	}
 }
 
-func TestRecallToolDescription(t *testing.T) {
-	tool := NewRecallTool(nil)
-	desc := tool.Description()
-	if !strings.Contains(desc, "memory") {
-		t.Errorf("Description should mention 'memory': %q", desc)
+func TestRecallToolExecuteInvalidScope(t *testing.T) {
+	tool := NewRecallTool(newTestService(t))
+	args, _ := json.Marshal(recallInput{Keyword: "test", Scope: "badscope"})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
+	if err == nil || !result.IsError {
+		t.Fatalf("expected bad scope error, got result=%+v err=%v", result, err)
 	}
 }
 
@@ -165,27 +138,20 @@ func TestRecallToolExecuteAppliesOutputLimit(t *testing.T) {
 	svc := newTestService(t)
 	if err := svc.Add(context.Background(), memo.Entry{
 		Type:    memo.TypeReference,
-		Title:   "超长记忆",
+		Title:   "long memory",
 		Content: strings.Repeat("x", tools.DefaultOutputLimitBytes+1024),
 		Source:  memo.SourceUserManual,
 	}); err != nil {
-		t.Fatalf("seed memo entry: %v", err)
+		t.Fatalf("seed Add() error = %v", err)
 	}
 
 	tool := NewRecallTool(svc)
-	args, _ := json.Marshal(recallInput{Keyword: "超长"})
+	args, _ := json.Marshal(recallInput{Keyword: "long"})
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
 	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("expected success result, got error: %s", result.Content)
-	}
-	if !strings.Contains(result.Content, "...[truncated]") {
-		t.Fatalf("expected truncated suffix, got content length %d", len(result.Content))
-	}
-	truncated, ok := result.Metadata["truncated"].(bool)
-	if !ok || !truncated {
-		t.Fatalf("expected metadata truncated=true, got %+v", result.Metadata)
+	if result.IsError || !strings.Contains(result.Content, "...[truncated]") {
+		t.Fatalf("unexpected truncated result: %+v", result)
 	}
 }

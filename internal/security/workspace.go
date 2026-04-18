@@ -380,10 +380,14 @@ func normalizeVolumeName(path string) string {
 
 func nearestExistingPath(root string, target string) (string, error) {
 	current := cleanedPathKey(target)
+	originalTarget := current
 	root = cleanedPathKey(root)
 	for {
 		info, err := os.Lstat(current)
 		if err == nil {
+			if !samePathKey(current, originalTarget) && info.Mode()&os.ModeSymlink == 0 && !info.IsDir() {
+				return "", fmt.Errorf("security: inspect path %q: parent is not a directory", current)
+			}
 			if info.Mode()&os.ModeSymlink != 0 || current != root {
 				return current, nil
 			}

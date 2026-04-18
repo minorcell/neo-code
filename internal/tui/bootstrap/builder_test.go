@@ -11,6 +11,7 @@ import (
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
+	"neo-code/internal/tools"
 )
 
 type testRuntime struct{}
@@ -41,6 +42,10 @@ func (r *testRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 
 func (r *testRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (r *testRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
 }
 
 func (r *testRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
@@ -259,6 +264,10 @@ func (r noopRuntime) Run(ctx context.Context, input agentruntime.UserInput) erro
 
 func (r noopRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (r noopRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
 }
 
 func (r noopRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
