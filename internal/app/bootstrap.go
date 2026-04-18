@@ -79,7 +79,7 @@ func newMemoExtractorAdapter(
 			})
 		})
 
-		scheduler.ScheduleWithExtractor(sessionID, messages, memo.NewLLMExtractor(generator))
+		scheduler.ScheduleWithExtractor(sessionID, messages, memo.NewLLMExtractor(generator, cfg.Memo.ExtractRecentMessages))
 	})
 }
 
@@ -159,9 +159,11 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 			sourceInvl = invalidator.InvalidateCache
 		}
 		contextBuilder = agentcontext.NewBuilderWithMemoAndSummarizers(toolRegistry, toolRegistry, memoSource)
-		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, sourceInvl)
+		memoSvc = memo.NewService(memoStore, cfg.Memo, sourceInvl)
 		toolRegistry.Register(memotool.NewRememberTool(memoSvc))
 		toolRegistry.Register(memotool.NewRecallTool(memoSvc))
+		toolRegistry.Register(memotool.NewListTool(memoSvc))
+		toolRegistry.Register(memotool.NewRemoveTool(memoSvc))
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(
@@ -189,7 +191,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		runtimeSvc.SetMemoExtractor(newMemoExtractorAdapter(
 			providerRegistry,
 			manager,
-			memo.NewAutoExtractor(nil, memoSvc),
+			memo.NewAutoExtractor(nil, memoSvc, time.Duration(cfg.Memo.ExtractTimeoutSec)*time.Second),
 		))
 	}
 	needCleanup = false

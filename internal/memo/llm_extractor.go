@@ -12,12 +12,11 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-const llmExtractorRecentMessageLimit = 10
-
 // LLMExtractor 基于 LLM 分析最近对话，并返回结构化记忆条目。
 type LLMExtractor struct {
-	generator TextGenerator
-	now       func() time.Time
+	generator          TextGenerator
+	now                func() time.Time
+	recentMessageLimit int
 }
 
 type extractedEntry struct {
@@ -28,10 +27,14 @@ type extractedEntry struct {
 }
 
 // NewLLMExtractor 创建基于 TextGenerator 的记忆提取器。
-func NewLLMExtractor(generator TextGenerator) *LLMExtractor {
+func NewLLMExtractor(generator TextGenerator, recentMessageLimit int) *LLMExtractor {
+	if recentMessageLimit <= 0 {
+		recentMessageLimit = 10
+	}
 	return &LLMExtractor{
-		generator: generator,
-		now:       time.Now,
+		generator:          generator,
+		now:                time.Now,
+		recentMessageLimit: recentMessageLimit,
 	}
 }
 
@@ -44,7 +47,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, errors.New("memo: text generator is nil")
 	}
 
-	recent := agentcontext.BuildRecentMessagesForModel(messages, llmExtractorRecentMessageLimit)
+	recent := agentcontext.BuildRecentMessagesForModel(messages, e.recentMessageLimit)
 	if len(recent) == 0 || !containsUserMessage(recent) {
 		return nil, nil
 	}

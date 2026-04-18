@@ -1259,7 +1259,10 @@ shell: powershell
 memo:
   enabled: false
   auto_extract: false
-  max_index_lines: 123
+  max_entries: 123
+  max_index_bytes: 4096
+  extract_timeout_sec: 9
+  extract_recent_messages: 4
 `
 	writeLoaderConfig(t, loader, raw)
 
@@ -1273,8 +1276,17 @@ memo:
 	if cfg.Memo.AutoExtract {
 		t.Fatalf("expected memo.auto_extract to stay false")
 	}
-	if cfg.Memo.MaxIndexLines != 123 {
-		t.Fatalf("expected memo.max_index_lines=123, got %d", cfg.Memo.MaxIndexLines)
+	if cfg.Memo.MaxEntries != 123 {
+		t.Fatalf("expected memo.max_entries=123, got %d", cfg.Memo.MaxEntries)
+	}
+	if cfg.Memo.MaxIndexBytes != 4096 {
+		t.Fatalf("expected memo.max_index_bytes=4096, got %d", cfg.Memo.MaxIndexBytes)
+	}
+	if cfg.Memo.ExtractTimeoutSec != 9 {
+		t.Fatalf("expected memo.extract_timeout_sec=9, got %d", cfg.Memo.ExtractTimeoutSec)
+	}
+	if cfg.Memo.ExtractRecentMessages != 4 {
+		t.Fatalf("expected memo.extract_recent_messages=4, got %d", cfg.Memo.ExtractRecentMessages)
 	}
 
 	data, err := os.ReadFile(loader.ConfigPath())
@@ -1312,8 +1324,36 @@ shell: powershell
 	if !cfg.Memo.AutoExtract {
 		t.Fatalf("expected memo.auto_extract default true when memo section missing")
 	}
-	if cfg.Memo.MaxIndexLines <= 0 {
-		t.Fatalf("expected memo.max_index_lines to be defaulted, got %d", cfg.Memo.MaxIndexLines)
+	if cfg.Memo.MaxEntries <= 0 {
+		t.Fatalf("expected memo.max_entries to be defaulted, got %d", cfg.Memo.MaxEntries)
+	}
+	if cfg.Memo.MaxIndexBytes <= 0 {
+		t.Fatalf("expected memo.max_index_bytes to be defaulted, got %d", cfg.Memo.MaxIndexBytes)
+	}
+	if cfg.Memo.ExtractTimeoutSec <= 0 {
+		t.Fatalf("expected memo.extract_timeout_sec to be defaulted, got %d", cfg.Memo.ExtractTimeoutSec)
+	}
+	if cfg.Memo.ExtractRecentMessages <= 0 {
+		t.Fatalf("expected memo.extract_recent_messages to be defaulted, got %d", cfg.Memo.ExtractRecentMessages)
+	}
+}
+
+func TestLoaderRejectsLegacyMemoField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  max_index_lines: 123
+`
+	writeLoaderConfig(t, loader, raw)
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "field max_index_lines not found") {
+		t.Fatalf("expected unknown legacy field error, got %v", err)
 	}
 }
 

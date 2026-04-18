@@ -56,9 +56,12 @@ type persistedAutoCompactConfig struct {
 }
 
 type persistedMemoConfig struct {
-	Enabled       *bool `yaml:"enabled,omitempty"`
-	AutoExtract   *bool `yaml:"auto_extract,omitempty"`
-	MaxIndexLines int   `yaml:"max_index_lines,omitempty"`
+	Enabled               *bool `yaml:"enabled,omitempty"`
+	AutoExtract           *bool `yaml:"auto_extract,omitempty"`
+	MaxEntries            int   `yaml:"max_entries,omitempty"`
+	MaxIndexBytes         int   `yaml:"max_index_bytes,omitempty"`
+	ExtractTimeoutSec     int   `yaml:"extract_timeout_sec,omitempty"`
+	ExtractRecentMessages int   `yaml:"extract_recent_messages,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -334,9 +337,12 @@ func newPersistedMemoConfig(cfg MemoConfig) persistedMemoConfig {
 	enabled := cfg.Enabled
 	autoExtract := cfg.AutoExtract
 	return persistedMemoConfig{
-		Enabled:       &enabled,
-		AutoExtract:   &autoExtract,
-		MaxIndexLines: cfg.MaxIndexLines,
+		Enabled:               &enabled,
+		AutoExtract:           &autoExtract,
+		MaxEntries:            cfg.MaxEntries,
+		MaxIndexBytes:         cfg.MaxIndexBytes,
+		ExtractTimeoutSec:     cfg.ExtractTimeoutSec,
+		ExtractRecentMessages: cfg.ExtractRecentMessages,
 	}
 }
 
@@ -349,8 +355,17 @@ func fromPersistedMemoConfig(file persistedMemoConfig, defaults MemoConfig) Memo
 	if file.AutoExtract != nil {
 		out.AutoExtract = *file.AutoExtract
 	}
-	if file.MaxIndexLines > 0 {
-		out.MaxIndexLines = file.MaxIndexLines
+	if file.MaxEntries > 0 {
+		out.MaxEntries = file.MaxEntries
+	}
+	if file.MaxIndexBytes > 0 {
+		out.MaxIndexBytes = file.MaxIndexBytes
+	}
+	if file.ExtractTimeoutSec > 0 {
+		out.ExtractTimeoutSec = file.ExtractTimeoutSec
+	}
+	if file.ExtractRecentMessages > 0 {
+		out.ExtractRecentMessages = file.ExtractRecentMessages
 	}
 	return out
 }

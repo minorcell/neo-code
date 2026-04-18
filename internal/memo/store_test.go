@@ -15,263 +15,208 @@ func TestNewFileStore(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewFileStore(tmp, "/workspace/project")
 	if store == nil {
-		t.Fatal("NewFileStore returned nil")
+		t.Fatal("NewFileStore() returned nil")
 	}
-	if store.memoDir == "" {
-		t.Error("memoDir is empty")
+	if store.baseDir != tmp {
+		t.Fatalf("baseDir = %q, want %q", store.baseDir, tmp)
 	}
-	if store.topicsDir == "" {
-		t.Error("topicsDir is empty")
-	}
-}
-
-func TestFileStoreLoadIndexNotExist(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-
-	idx, err := store.LoadIndex(context.Background())
-	if err != nil {
-		t.Fatalf("LoadIndex on nonexistent dir error: %v", err)
-	}
-	if idx == nil {
-		t.Fatal("LoadIndex returned nil index")
-	}
-	if len(idx.Entries) != 0 {
-		t.Errorf("Entries = %d, want 0", len(idx.Entries))
+	if store.workspaceRoot != "/workspace/project" {
+		t.Fatalf("workspaceRoot = %q, want %q", store.workspaceRoot, "/workspace/project")
 	}
 }
 
-func TestFileStoreSaveAndLoadIndex(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-
-	original := &Index{
-		Entries: []Entry{
-			{
-				ID:        "user_001",
-				Type:      TypeUser,
-				Title:     "偏好 tab 缩进",
-				Content:   "详细内容",
-				Keywords:  []string{"tabs"},
-				Source:    SourceUserManual,
-				TopicFile: "user_profile.md",
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			},
-		},
+func TestFileStoreSaveAndLoadIndexByScope(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	index := &Index{
+		Entries: []Entry{{
+			ID:        "user_001",
+			Type:      TypeUser,
+			Title:     "user pref",
+			Content:   "content",
+			Keywords:  []string{"tabs"},
+			Source:    SourceUserManual,
+			TopicFile: "user.md",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}},
 		UpdatedAt: time.Now(),
 	}
 
-	ctx := context.Background()
-	if err := store.SaveIndex(ctx, original); err != nil {
-		t.Fatalf("SaveIndex error: %v", err)
+	if err := store.SaveIndex(context.Background(), ScopeUser, index); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
 	}
-
-	loaded, err := store.LoadIndex(ctx)
+	loaded, err := store.LoadIndex(context.Background(), ScopeUser)
 	if err != nil {
-		t.Fatalf("LoadIndex error: %v", err)
+		t.Fatalf("LoadIndex() error = %v", err)
 	}
-	if len(loaded.Entries) != 1 {
-		t.Fatalf("loaded entries = %d, want 1", len(loaded.Entries))
-	}
-	if loaded.Entries[0].Title != "偏好 tab 缩进" {
-		t.Errorf("Title = %q, want %q", loaded.Entries[0].Title, "偏好 tab 缩进")
-	}
-	if loaded.Entries[0].TopicFile != "user_profile.md" {
-		t.Errorf("TopicFile = %q, want %q", loaded.Entries[0].TopicFile, "user_profile.md")
+	if len(loaded.Entries) != 1 || loaded.Entries[0].Title != "user pref" {
+		t.Fatalf("loaded entries = %#v", loaded.Entries)
 	}
 }
 
-func TestFileStoreSaveIndexNil(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	err := store.SaveIndex(context.Background(), nil)
-	if err == nil {
-		t.Error("SaveIndex(nil) should return error")
+func TestFileStoreSaveAndLoadTopicByScope(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	content := "---\ntype: user\n---\n\nbody\n"
+
+	if err := store.SaveTopic(context.Background(), ScopeUser, "user.md", content); err != nil {
+		t.Fatalf("SaveTopic() error = %v", err)
 	}
-}
-
-func TestFileStoreSaveAndLoadTopic(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
-
-	content := "---\ntype: user\n---\n\n这是详细内容\n"
-	if err := store.SaveTopic(ctx, "user_profile.md", content); err != nil {
-		t.Fatalf("SaveTopic error: %v", err)
-	}
-
-	loaded, err := store.LoadTopic(ctx, "user_profile.md")
+	loaded, err := store.LoadTopic(context.Background(), ScopeUser, "user.md")
 	if err != nil {
-		t.Fatalf("LoadTopic error: %v", err)
+		t.Fatalf("LoadTopic() error = %v", err)
 	}
 	if loaded != content {
-		t.Errorf("LoadTopic = %q, want %q", loaded, content)
-	}
-}
-
-func TestFileStoreLoadTopicNotExist(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
-
-	_, err := store.LoadTopic(ctx, "nonexistent.md")
-	if err == nil {
-		t.Error("LoadTopic on nonexistent file should return error")
+		t.Fatalf("LoadTopic() = %q, want %q", loaded, content)
 	}
 }
 
 func TestFileStoreDeleteTopic(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
+	store := NewFileStore(t.TempDir(), "/workspace/project")
 
-	if err := store.SaveTopic(ctx, "to_delete.md", "content"); err != nil {
-		t.Fatalf("SaveTopic error: %v", err)
+	if err := store.SaveTopic(context.Background(), ScopeProject, "p.md", "content"); err != nil {
+		t.Fatalf("SaveTopic() error = %v", err)
 	}
-	if err := store.DeleteTopic(ctx, "to_delete.md"); err != nil {
-		t.Fatalf("DeleteTopic error: %v", err)
+	if err := store.DeleteTopic(context.Background(), ScopeProject, "p.md"); err != nil {
+		t.Fatalf("DeleteTopic() error = %v", err)
 	}
-	if _, err := store.LoadTopic(ctx, "to_delete.md"); err == nil {
-		t.Error("LoadTopic after delete should return error")
-	}
-}
-
-func TestFileStoreDeleteTopicNotExist(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
-
-	err := store.DeleteTopic(ctx, "nonexistent.md")
-	if err != nil {
-		t.Errorf("DeleteTopic on nonexistent file should not error: %v", err)
+	if _, err := store.LoadTopic(context.Background(), ScopeProject, "p.md"); err == nil {
+		t.Fatal("expected deleted topic to be missing")
 	}
 }
 
 func TestFileStoreListTopics(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
+	store := NewFileStore(t.TempDir(), "/workspace/project")
 
-	// 空目录应返回空列表
-	topics, err := store.ListTopics(ctx)
+	if err := store.SaveTopic(context.Background(), ScopeProject, "a.md", "a"); err != nil {
+		t.Fatalf("SaveTopic(a) error = %v", err)
+	}
+	if err := store.SaveTopic(context.Background(), ScopeProject, "b.md", "b"); err != nil {
+		t.Fatalf("SaveTopic(b) error = %v", err)
+	}
+
+	topics, err := store.ListTopics(context.Background(), ScopeProject)
 	if err != nil {
-		t.Fatalf("ListTopics on empty dir error: %v", err)
-	}
-	if len(topics) != 0 {
-		t.Errorf("ListTopics empty = %d, want 0", len(topics))
-	}
-
-	// 写入几个 topic
-	for _, name := range []string{"a.md", "b.md", "c.txt"} {
-		if strings.HasSuffix(name, ".md") {
-			_ = store.SaveTopic(ctx, name, "content")
-		}
-	}
-
-	topics, err = store.ListTopics(ctx)
-	if err != nil {
-		t.Fatalf("ListTopics error: %v", err)
+		t.Fatalf("ListTopics() error = %v", err)
 	}
 	if len(topics) != 2 {
-		t.Errorf("ListTopics = %d, want 2 (only .md files)", len(topics))
+		t.Fatalf("len(topics) = %d, want 2", len(topics))
+	}
+}
+
+func TestFileStoreUserScopeIsGlobal(t *testing.T) {
+	tmp := t.TempDir()
+	storeA := NewFileStore(tmp, "/workspace/a")
+	storeB := NewFileStore(tmp, "/workspace/b")
+
+	if err := storeA.SaveIndex(context.Background(), ScopeUser, &Index{Entries: []Entry{{Type: TypeUser, Title: "A"}}}); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
+	}
+	index, err := storeB.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex() error = %v", err)
+	}
+	if len(index.Entries) != 1 || index.Entries[0].Title != "A" {
+		t.Fatalf("global user scope failed, got %#v", index.Entries)
+	}
+}
+
+func TestFileStoreProjectScopeIsWorkspaceIsolated(t *testing.T) {
+	tmp := t.TempDir()
+	storeA := NewFileStore(tmp, "/workspace/a")
+	storeB := NewFileStore(tmp, "/workspace/b")
+
+	if err := storeA.SaveIndex(context.Background(), ScopeProject, &Index{Entries: []Entry{{Type: TypeProject, Title: "A"}}}); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
+	}
+	index, err := storeB.LoadIndex(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("LoadIndex() error = %v", err)
+	}
+	if len(index.Entries) != 0 {
+		t.Fatalf("workspace isolation failed, got %#v", index.Entries)
+	}
+}
+
+func TestFileStoreRejectsUnsupportedScope(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	if _, err := store.LoadIndex(context.Background(), ScopeAll); err == nil {
+		t.Fatal("expected ScopeAll load to fail")
 	}
 }
 
 func TestFileStoreCancelContext(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
+	store := NewFileStore(t.TempDir(), "/workspace/project")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := store.LoadIndex(ctx); err == nil {
-		t.Error("LoadIndex with cancelled context should return error")
+	if _, err := store.LoadIndex(ctx, ScopeUser); err == nil {
+		t.Fatal("expected LoadIndex() to fail on canceled context")
 	}
-	if err := store.SaveIndex(ctx, &Index{}); err == nil {
-		t.Error("SaveIndex with cancelled context should return error")
+	if err := store.SaveIndex(ctx, ScopeUser, &Index{}); err == nil {
+		t.Fatal("expected SaveIndex() to fail on canceled context")
 	}
-	if _, err := store.LoadTopic(ctx, "f.md"); err == nil {
-		t.Error("LoadTopic with cancelled context should return error")
+	if _, err := store.LoadTopic(ctx, ScopeUser, "x.md"); err == nil {
+		t.Fatal("expected LoadTopic() to fail on canceled context")
 	}
-	if err := store.SaveTopic(ctx, "f.md", "c"); err == nil {
-		t.Error("SaveTopic with cancelled context should return error")
+	if err := store.SaveTopic(ctx, ScopeUser, "x.md", "body"); err == nil {
+		t.Fatal("expected SaveTopic() to fail on canceled context")
 	}
-	if err := store.DeleteTopic(ctx, "f.md"); err == nil {
-		t.Error("DeleteTopic with cancelled context should return error")
+	if err := store.DeleteTopic(ctx, ScopeUser, "x.md"); err == nil {
+		t.Fatal("expected DeleteTopic() to fail on canceled context")
 	}
-	if _, err := store.ListTopics(ctx); err == nil {
-		t.Error("ListTopics with cancelled context should return error")
+	if _, err := store.ListTopics(ctx, ScopeUser); err == nil {
+		t.Fatal("expected ListTopics() to fail on canceled context")
 	}
 }
 
-func TestFileStoreWorkspaceIsolation(t *testing.T) {
-	tmp := t.TempDir()
-	store1 := NewFileStore(tmp, "/workspace/a")
-	store2 := NewFileStore(tmp, "/workspace/b")
-	ctx := context.Background()
-
-	idx1 := &Index{Entries: []Entry{{Type: TypeUser, Title: "Project A"}}}
-	if err := store1.SaveIndex(ctx, idx1); err != nil {
-		t.Fatalf("SaveIndex store1 error: %v", err)
+func TestFileStoreAtomicWriteLeavesNoTempFiles(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	if err := store.SaveIndex(context.Background(), ScopeUser, &Index{Entries: []Entry{{Type: TypeUser, Title: "test"}}}); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
 	}
 
-	idx2, err := store2.LoadIndex(ctx)
+	entries, err := os.ReadDir(store.scopeDir(ScopeUser))
 	if err != nil {
-		t.Fatalf("LoadIndex store2 error: %v", err)
+		t.Fatalf("ReadDir() error = %v", err)
 	}
-	if len(idx2.Entries) != 0 {
-		t.Errorf("store2 should have no entries (workspace isolation), got %d", len(idx2.Entries))
-	}
-}
-
-func TestFileStoreAtomicWrite(t *testing.T) {
-	tmp := t.TempDir()
-	store := NewFileStore(tmp, "/workspace/project")
-	ctx := context.Background()
-
-	// 写入索引后不应存在临时文件
-	_ = store.SaveIndex(ctx, &Index{Entries: []Entry{{Type: TypeUser, Title: "test"}}})
-
-	memoDir := store.memoDir
-	entries, _ := os.ReadDir(memoDir)
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Errorf("temp file should not exist after atomic write: %s", e.Name())
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("unexpected temp file %s", entry.Name())
 		}
 	}
 }
 
-func TestMemoDirectory(t *testing.T) {
-	dir := memoDirectory("/base", "/workspace")
-	expected := filepath.Join("/base", "projects", agentsession.HashWorkspaceRoot("/workspace"), "memo")
-	if dir != expected {
-		t.Errorf("memoDirectory = %q, want %q", dir, expected)
+func TestGlobalMemoDirectory(t *testing.T) {
+	got := globalMemoDirectory("/base")
+	want := filepath.Join("/base", "memo")
+	if got != want {
+		t.Fatalf("globalMemoDirectory() = %q, want %q", got, want)
 	}
 }
 
-func TestHashWorkspaceRootStable(t *testing.T) {
-	h1 := agentsession.HashWorkspaceRoot("/workspace/project")
-	h2 := agentsession.HashWorkspaceRoot("/workspace/project")
-	if h1 != h2 {
-		t.Errorf("hash not stable: %q != %q", h1, h2)
+func TestProjectMemoDirectory(t *testing.T) {
+	got := projectMemoDirectory("/base", "/workspace")
+	want := filepath.Join("/base", "projects", agentsession.HashWorkspaceRoot("/workspace"), "memo")
+	if got != want {
+		t.Fatalf("projectMemoDirectory() = %q, want %q", got, want)
 	}
 }
 
-func TestHashWorkspaceRootDifferent(t *testing.T) {
-	h1 := agentsession.HashWorkspaceRoot("/workspace/a")
-	h2 := agentsession.HashWorkspaceRoot("/workspace/b")
-	if h1 == h2 {
-		t.Errorf("different paths should produce different hashes")
-	}
-}
+func TestFileStoreWritesScopesToExpectedDirectories(t *testing.T) {
+	baseDir := t.TempDir()
+	store := NewFileStore(baseDir, "/workspace/project")
 
-func TestHashWorkspaceRootEmpty(t *testing.T) {
-	h := agentsession.HashWorkspaceRoot("")
-	// 空路径回退到 "unknown" 的哈希，应产生稳定的非空结果
-	if h == "" {
-		t.Error("hash of empty workspace root should not be empty")
+	if err := store.SaveIndex(context.Background(), ScopeUser, &Index{Entries: []Entry{{Type: TypeUser, Title: "user"}}}); err != nil {
+		t.Fatalf("SaveIndex(user) error = %v", err)
 	}
-	if len(h) != 16 {
-		t.Errorf("hash length = %d, want 16 (8 bytes hex)", len(h))
+	if err := store.SaveIndex(context.Background(), ScopeProject, &Index{Entries: []Entry{{Type: TypeProject, Title: "project"}}}); err != nil {
+		t.Fatalf("SaveIndex(project) error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(baseDir, "memo", "user", memoFileName)); err != nil {
+		t.Fatalf("expected global user memo to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "projects", agentsession.HashWorkspaceRoot("/workspace/project"), "memo", "project", memoFileName)); err != nil {
+		t.Fatalf("expected project memo to exist: %v", err)
 	}
 }

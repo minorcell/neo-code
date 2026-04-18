@@ -1492,16 +1492,19 @@ func TestMemoConfigClone(t *testing.T) {
 	t.Parallel()
 
 	original := MemoConfig{
-		Enabled:       true,
-		AutoExtract:   false,
-		MaxIndexLines: 100,
+		Enabled:               true,
+		AutoExtract:           false,
+		MaxEntries:            100,
+		MaxIndexBytes:         2048,
+		ExtractTimeoutSec:     9,
+		ExtractRecentMessages: 3,
 	}
 	cloned := original.Clone()
 	if cloned != original {
 		t.Fatalf("Clone() = %+v, want %+v", cloned, original)
 	}
-	cloned.MaxIndexLines = 200
-	if original.MaxIndexLines != 100 {
+	cloned.MaxEntries = 200
+	if original.MaxEntries != 100 {
 		t.Error("modifying clone should not affect original (value type check)")
 	}
 }
@@ -1509,25 +1512,44 @@ func TestMemoConfigClone(t *testing.T) {
 func TestMemoConfigApplyDefaults(t *testing.T) {
 	t.Parallel()
 
-	t.Run("fills zero MaxIndexLines", func(t *testing.T) {
-		cfg := MemoConfig{Enabled: true, MaxIndexLines: 0}
-		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: DefaultMemoMaxIndexLines})
-		if cfg.MaxIndexLines != DefaultMemoMaxIndexLines {
-			t.Errorf("MaxIndexLines = %d, want %d", cfg.MaxIndexLines, DefaultMemoMaxIndexLines)
+	t.Run("fills zero fields", func(t *testing.T) {
+		cfg := MemoConfig{}
+		cfg.ApplyDefaults(MemoConfig{
+			MaxEntries:            DefaultMemoMaxEntries,
+			MaxIndexBytes:         DefaultMemoMaxIndexBytes,
+			ExtractTimeoutSec:     DefaultMemoExtractTimeoutSec,
+			ExtractRecentMessages: DefaultMemoExtractRecentMessage,
+		})
+		if cfg.MaxEntries != DefaultMemoMaxEntries {
+			t.Errorf("MaxEntries = %d, want %d", cfg.MaxEntries, DefaultMemoMaxEntries)
+		}
+		if cfg.MaxIndexBytes != DefaultMemoMaxIndexBytes {
+			t.Errorf("MaxIndexBytes = %d, want %d", cfg.MaxIndexBytes, DefaultMemoMaxIndexBytes)
+		}
+		if cfg.ExtractTimeoutSec != DefaultMemoExtractTimeoutSec {
+			t.Errorf("ExtractTimeoutSec = %d, want %d", cfg.ExtractTimeoutSec, DefaultMemoExtractTimeoutSec)
+		}
+		if cfg.ExtractRecentMessages != DefaultMemoExtractRecentMessage {
+			t.Errorf("ExtractRecentMessages = %d, want %d", cfg.ExtractRecentMessages, DefaultMemoExtractRecentMessage)
 		}
 	})
 
-	t.Run("preserves explicit MaxIndexLines", func(t *testing.T) {
-		cfg := MemoConfig{MaxIndexLines: 50}
-		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: DefaultMemoMaxIndexLines})
-		if cfg.MaxIndexLines != 50 {
-			t.Errorf("MaxIndexLines = %d, want 50", cfg.MaxIndexLines)
+	t.Run("preserves explicit fields", func(t *testing.T) {
+		cfg := MemoConfig{
+			MaxEntries:            50,
+			MaxIndexBytes:         1024,
+			ExtractTimeoutSec:     30,
+			ExtractRecentMessages: 5,
+		}
+		cfg.ApplyDefaults(defaultMemoConfig())
+		if cfg.MaxEntries != 50 || cfg.MaxIndexBytes != 1024 || cfg.ExtractTimeoutSec != 30 || cfg.ExtractRecentMessages != 5 {
+			t.Fatalf("ApplyDefaults() unexpectedly overwrote explicit values: %+v", cfg)
 		}
 	})
 
 	t.Run("nil receiver is no-op", func(t *testing.T) {
 		var cfg *MemoConfig
-		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: 200})
+		cfg.ApplyDefaults(defaultMemoConfig())
 	})
 }
 
@@ -1535,23 +1557,41 @@ func TestMemoConfigValidate(t *testing.T) {
 	t.Parallel()
 
 	t.Run("valid config", func(t *testing.T) {
-		cfg := MemoConfig{MaxIndexLines: 100}
+		cfg := defaultMemoConfig()
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("valid config should not error: %v", err)
 		}
 	})
 
-	t.Run("negative MaxIndexLines", func(t *testing.T) {
-		cfg := MemoConfig{MaxIndexLines: -1}
+	t.Run("non-positive MaxEntries", func(t *testing.T) {
+		cfg := defaultMemoConfig()
+		cfg.MaxEntries = 0
 		if err := cfg.Validate(); err == nil {
-			t.Fatal("negative MaxIndexLines should fail validation")
+			t.Fatal("non-positive MaxEntries should fail validation")
 		}
 	})
 
-	t.Run("zero MaxIndexLines is valid", func(t *testing.T) {
-		cfg := MemoConfig{MaxIndexLines: 0}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("zero MaxIndexLines should be valid: %v", err)
+	t.Run("non-positive MaxIndexBytes", func(t *testing.T) {
+		cfg := defaultMemoConfig()
+		cfg.MaxIndexBytes = -1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("non-positive MaxIndexBytes should fail validation")
+		}
+	})
+
+	t.Run("non-positive ExtractTimeoutSec", func(t *testing.T) {
+		cfg := defaultMemoConfig()
+		cfg.ExtractTimeoutSec = 0
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("non-positive ExtractTimeoutSec should fail validation")
+		}
+	})
+
+	t.Run("non-positive ExtractRecentMessages", func(t *testing.T) {
+		cfg := defaultMemoConfig()
+		cfg.ExtractRecentMessages = 0
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("non-positive ExtractRecentMessages should fail validation")
 		}
 	})
 }

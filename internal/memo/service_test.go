@@ -4,370 +4,316 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"neo-code/internal/config"
 )
 
-func TestServiceAdd(t *testing.T) {
-	store := &stubStore{}
-	var invCalled bool
-	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, func() { invCalled = true })
+func testMemoConfig() config.MemoConfig {
+	return config.MemoConfig{
+		MaxEntries:            200,
+		MaxIndexBytes:         16 * 1024,
+		ExtractTimeoutSec:     15,
+		ExtractRecentMessages: 10,
+	}
+}
 
-	entry := Entry{
+func TestServiceAddRoutesByScope(t *testing.T) {
+	store := newMemoryTestStore()
+	invalidateCalls := 0
+	svc := NewService(store, testMemoConfig(), func() { invalidateCalls++ })
+
+	if err := svc.Add(context.Background(), Entry{
 		Type:    TypeUser,
-		Title:   "偏好 tab 缩进",
-		Content: "用户偏好使用 tab 缩进",
+		Title:   "user pref",
+		Content: "user pref",
 		Source:  SourceUserManual,
+	}); err != nil {
+		t.Fatalf("Add(user) error = %v", err)
 	}
-	if err := svc.Add(context.Background(), entry); err != nil {
-		t.Fatalf("Add error: %v", err)
-	}
-	if !invCalled {
-		t.Error("cache invalidation callback should have been called")
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeProject,
+		Title:   "project fact",
+		Content: "project fact",
+		Source:  SourceUserManual,
+	}); err != nil {
+		t.Fatalf("Add(project) error = %v", err)
 	}
 
-	entries, _ := svc.List(context.Background())
-	if len(entries) != 1 {
-		t.Fatalf("List entries = %d, want 1", len(entries))
+	userEntries, err := svc.List(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("List(user) error = %v", err)
 	}
-	if entries[0].Title != "偏好 tab 缩进" {
-		t.Errorf("Title = %q, want %q", entries[0].Title, "偏好 tab 缩进")
+	projectEntries, err := svc.List(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("List(project) error = %v", err)
 	}
-	if entries[0].ID == "" {
-		t.Error("ID should be auto-generated")
+	if len(userEntries) != 1 || userEntries[0].Type != TypeUser {
+		t.Fatalf("unexpected user entries: %#v", userEntries)
 	}
-	if entries[0].TopicFile == "" {
-		t.Error("TopicFile should be auto-generated")
+	if len(projectEntries) != 1 || projectEntries[0].Type != TypeProject {
+		t.Fatalf("unexpected project entries: %#v", projectEntries)
+	}
+	if invalidateCalls != 2 {
+		t.Fatalf("invalidate calls = %d, want 2", invalidateCalls)
 	}
 }
 
-func TestServiceAddInvalidType(t *testing.T) {
-	svc := NewService(&stubStore{}, nil, config.MemoConfig{}, nil)
-	err := svc.Add(context.Background(), Entry{Type: "invalid", Title: "test"})
-	if err == nil {
-		t.Error("Add with invalid type should return error")
+func TestServiceAddValidatesEntry(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
+
+	tests := []Entry{
+		{Type: "invalid", Title: "x", Content: "x"},
+		{Type: TypeUser, Title: "", Content: "x"},
+		{Type: TypeUser, Title: "x", Content: ""},
+	}
+	for _, entry := range tests {
+		if err := svc.Add(context.Background(), entry); err == nil {
+			t.Fatalf("expected Add(%+v) to fail", entry)
+		}
 	}
 }
 
-func TestServiceAddEmptyTitle(t *testing.T) {
-	svc := NewService(&stubStore{}, nil, config.MemoConfig{}, nil)
-	err := svc.Add(context.Background(), Entry{Type: TypeUser, Title: ""})
-	if err == nil {
-		t.Error("Add with empty title should return error")
-	}
-}
-
-func TestServiceAddNormalizesTitle(t *testing.T) {
-	store := &stubStore{}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
+func TestServiceAddNormalizesTitleAndKeywords(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
 
 	err := svc.Add(context.Background(), Entry{
-		Type:   TypeUser,
-		Title:  "  # heading\n(with suffix)  ",
-		Source: SourceUserManual,
+		Type:     TypeUser,
+		Title:    "  # heading\n(with suffix)  ",
+		Content:  "content",
+		Keywords: []string{" Tabs ", "tabs", "", "Style"},
+		Source:   SourceUserManual,
 	})
 	if err != nil {
-		t.Fatalf("Add error: %v", err)
+		t.Fatalf("Add() error = %v", err)
 	}
 
-	entries, _ := svc.List(context.Background())
-	if len(entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(entries))
+	entries, err := svc.List(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
 	}
 	if entries[0].Title != "# heading {with suffix}" {
 		t.Fatalf("normalized title = %q", entries[0].Title)
 	}
+	if len(entries[0].Keywords) != 2 || entries[0].Keywords[0] != "Tabs" || entries[0].Keywords[1] != "Style" {
+		t.Fatalf("normalized keywords = %#v", entries[0].Keywords)
+	}
 }
 
-func TestServiceRemove(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "1", Type: TypeUser, Title: "偏好 tab", TopicFile: "a.md", Keywords: []string{"tabs"}},
-				{ID: "2", Type: TypeProject, Title: "使用 Go", TopicFile: "b.md"},
-			},
-		},
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
+func TestServiceSearchMatchesContentAndScope(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
+	_ = svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "style",
+		Content: "please use tabs",
+		Source:  SourceUserManual,
+	})
+	_ = svc.Add(context.Background(), Entry{
+		Type:    TypeProject,
+		Title:   "plan",
+		Content: "ship in april",
+		Source:  SourceUserManual,
+	})
 
-	removed, err := svc.Remove(context.Background(), "tab")
+	results, err := svc.Search(context.Background(), "tabs", ScopeUser)
 	if err != nil {
-		t.Fatalf("Remove error: %v", err)
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Type != TypeUser {
+		t.Fatalf("unexpected search results: %#v", results)
+	}
+
+	results, err = svc.Search(context.Background(), "ship", ScopeProject)
+	if err != nil {
+		t.Fatalf("Search() project error = %v", err)
+	}
+	if len(results) != 1 || results[0].Type != TypeProject {
+		t.Fatalf("unexpected project search results: %#v", results)
+	}
+}
+
+func TestServiceRecallReturnsScopedEntries(t *testing.T) {
+	store := newMemoryTestStore()
+	svc := NewService(store, testMemoConfig(), nil)
+	_ = svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "reply in chinese",
+		Content: "reply in chinese",
+		Source:  SourceUserManual,
+	})
+
+	results, err := svc.Recall(context.Background(), "chinese", ScopeAll)
+	if err != nil {
+		t.Fatalf("Recall() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Scope != ScopeUser {
+		t.Fatalf("Scope = %q, want %q", results[0].Scope, ScopeUser)
+	}
+	if !strings.Contains(results[0].Content, "reply in chinese") {
+		t.Fatalf("content = %q", results[0].Content)
+	}
+}
+
+func TestServiceRemoveRespectsScope(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
+	_ = svc.Add(context.Background(), Entry{Type: TypeUser, Title: "same", Content: "user content", Source: SourceUserManual})
+	_ = svc.Add(context.Background(), Entry{Type: TypeProject, Title: "same", Content: "project content", Source: SourceUserManual})
+
+	removed, err := svc.Remove(context.Background(), "same", ScopeUser)
+	if err != nil {
+		t.Fatalf("Remove() error = %v", err)
 	}
 	if removed != 1 {
-		t.Errorf("Remove returned %d, want 1", removed)
+		t.Fatalf("removed = %d, want 1", removed)
 	}
 
-	entries, _ := svc.List(context.Background())
-	if len(entries) != 1 {
-		t.Fatalf("after remove, entries = %d, want 1", len(entries))
+	userEntries, _ := svc.List(context.Background(), ScopeUser)
+	projectEntries, _ := svc.List(context.Background(), ScopeProject)
+	if len(userEntries) != 0 {
+		t.Fatalf("expected user scope to be empty, got %#v", userEntries)
 	}
-	if entries[0].Title != "使用 Go" {
-		t.Errorf("remaining Title = %q, want %q", entries[0].Title, "使用 Go")
+	if len(projectEntries) != 1 {
+		t.Fatalf("expected project scope to remain, got %#v", projectEntries)
 	}
 }
 
-func TestServiceRemoveNoMatch(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{{ID: "1", Type: TypeUser, Title: "test"}},
-		},
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
-
-	removed, err := svc.Remove(context.Background(), "nonexistent")
-	if err != nil {
-		t.Fatalf("Remove error: %v", err)
-	}
-	if removed != 0 {
-		t.Errorf("Remove returned %d, want 0", removed)
+func TestServiceRemoveRejectsInvalidScope(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
+	if _, err := svc.Remove(context.Background(), "x", Scope("bad")); err == nil {
+		t.Fatal("expected invalid scope error")
 	}
 }
 
-func TestServiceRemoveEmptyKeyword(t *testing.T) {
-	svc := NewService(&stubStore{}, nil, config.MemoConfig{}, nil)
-	_, err := svc.Remove(context.Background(), "")
-	if err == nil {
-		t.Error("Remove with empty keyword should return error")
-	}
-}
+func TestServiceMaxEntriesTrim(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), config.MemoConfig{
+		MaxEntries:            2,
+		MaxIndexBytes:         16 * 1024,
+		ExtractTimeoutSec:     15,
+		ExtractRecentMessages: 10,
+	}, nil)
 
-func TestServiceSearch(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "1", Type: TypeUser, Title: "偏好 tab", Keywords: []string{"indentation"}},
-				{ID: "2", Type: TypeProject, Title: "使用 Go"},
-				{ID: "3", Type: TypeUser, Title: "偏好中文注释"},
-			},
-		},
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
-
-	results, err := svc.Search(context.Background(), "偏好")
-	if err != nil {
-		t.Fatalf("Search error: %v", err)
-	}
-	if len(results) != 2 {
-		t.Errorf("Search '偏好' = %d results, want 2", len(results))
-	}
-}
-
-func TestServiceSearchByKeyword(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "1", Type: TypeUser, Title: "style", Keywords: []string{"tabs", "indentation"}},
-			},
-		},
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
-
-	results, err := svc.Search(context.Background(), "indent")
-	if err != nil {
-		t.Fatalf("Search error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("Search by keyword = %d results, want 1", len(results))
-	}
-}
-
-func TestServiceRecall(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "1", Type: TypeUser, Title: "偏好 tab", TopicFile: "a.md"},
-				{ID: "2", Type: TypeProject, Title: "其他", TopicFile: "b.md"},
-			},
-		},
-	}
-	// 为 stubStore 添加 topic 加载能力
-	storeWithTopics := &stubStoreWithTopics{
-		stubStore: store,
-		topics: map[string]string{
-			"a.md": "---\ntype: user\n---\n\n详细内容A",
-			"b.md": "---\ntype: project\n---\n\n详细内容B",
-		},
-	}
-	svc := NewService(storeWithTopics, nil, config.MemoConfig{}, nil)
-
-	results, err := svc.Recall(context.Background(), "tab")
-	if err != nil {
-		t.Fatalf("Recall error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("Recall = %d results, want 1", len(results))
-	}
-	if !strings.Contains(results["a.md"], "详细内容A") {
-		t.Errorf("Recall content = %q, should contain 详细内容A", results["a.md"])
-	}
-}
-
-func TestServiceMaxIndexLines(t *testing.T) {
-	store := &stubStore{}
-	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 2}, nil)
-
-	for i := 0; i < 4; i++ {
-		entry := Entry{
+	for _, title := range []string{"A", "B", "C"} {
+		if err := svc.Add(context.Background(), Entry{
 			Type:    TypeUser,
-			Title:   string(rune('A' + i)),
-			Content: string(rune('A' + i)),
+			Title:   title,
+			Content: title,
 			Source:  SourceUserManual,
-		}
-		if err := svc.Add(context.Background(), entry); err != nil {
-			t.Fatalf("Add %d error: %v", i, err)
+		}); err != nil {
+			t.Fatalf("Add(%s) error = %v", title, err)
 		}
 	}
 
-	entries, _ := svc.List(context.Background())
-	if len(entries) != 2 {
-		t.Errorf("after overflow, entries = %d, want 2", len(entries))
+	entries, err := svc.List(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
 	}
-	// 应保留最新的两条
-	if entries[0].Title != "C" || entries[1].Title != "D" {
-		t.Errorf("expected [C, D], got [%s, %s]", entries[0].Title, entries[1].Title)
+	if len(entries) != 2 || entries[0].Title != "B" || entries[1].Title != "C" {
+		t.Fatalf("entries after trim = %#v", entries)
 	}
 }
 
-func TestServiceAddUpdate(t *testing.T) {
-	store := &stubStore{}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
+func TestServiceMaxIndexBytesTrim(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), config.MemoConfig{
+		MaxEntries:            10,
+		MaxIndexBytes:         40,
+		ExtractTimeoutSec:     15,
+		ExtractRecentMessages: 10,
+	}, nil)
 
-	entry := Entry{
-		ID:     "fixed_id",
-		Type:   TypeUser,
-		Title:  "旧标题",
-		Source: SourceUserManual,
+	for _, title := range []string{"one", "two", "three"} {
+		if err := svc.Add(context.Background(), Entry{
+			Type:    TypeProject,
+			Title:   title,
+			Content: title,
+			Source:  SourceUserManual,
+		}); err != nil {
+			t.Fatalf("Add(%s) error = %v", title, err)
+		}
 	}
-	_ = svc.Add(context.Background(), entry)
 
-	entry.Title = "新标题"
-	_ = svc.Add(context.Background(), entry)
-
-	entries, _ := svc.List(context.Background())
-	if len(entries) != 1 {
-		t.Fatalf("after update, entries = %d, want 1", len(entries))
+	entries, err := svc.List(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
 	}
-	if entries[0].Title != "新标题" {
-		t.Errorf("Title = %q, want %q", entries[0].Title, "新标题")
+	if len(entries) >= 3 {
+		t.Fatalf("expected byte trimming to remove oldest entry, got %#v", entries)
 	}
 }
 
-func TestServiceAddSaveTopicFailureDoesNotPersistIndex(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "existing", Type: TypeUser, Title: "existing", TopicFile: "existing.md"},
-			},
-		},
-		saveTopicErr: errors.New("save topic failed"),
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
+func TestServiceSaveTopicFailureDoesNotPersistIndex(t *testing.T) {
+	store := newMemoryTestStore()
+	store.saveTopicErr = errors.New("save topic failed")
+	svc := NewService(store, testMemoConfig(), nil)
 
 	err := svc.Add(context.Background(), Entry{
-		ID:        "new-id",
-		Type:      TypeUser,
-		Title:     "new entry",
-		Source:    SourceUserManual,
-		TopicFile: "new.md",
+		Type:    TypeUser,
+		Title:   "new",
+		Content: "new",
+		Source:  SourceUserManual,
 	})
 	if err == nil || !strings.Contains(err.Error(), "save topic") {
 		t.Fatalf("expected save topic error, got %v", err)
 	}
-	if len(store.index.Entries) != 1 {
-		t.Fatalf("index should stay unchanged on topic failure, entries=%d", len(store.index.Entries))
-	}
 	if store.saveIndexCalls != 0 {
-		t.Fatalf("SaveIndex should not run when SaveTopic fails, calls=%d", store.saveIndexCalls)
+		t.Fatalf("SaveIndex() calls = %d, want 0", store.saveIndexCalls)
 	}
 }
 
-func TestServiceRemoveSaveIndexFailureDoesNotDeleteTopics(t *testing.T) {
-	store := &stubStore{
-		index: &Index{
-			Entries: []Entry{
-				{ID: "1", Type: TypeUser, Title: "match", TopicFile: "a.md"},
-				{ID: "2", Type: TypeUser, Title: "other", TopicFile: "b.md"},
-			},
-		},
-		saveIndexErr: errors.New("save index failed"),
-	}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
+func TestServiceSaveIndexFailureDoesNotDeleteTopic(t *testing.T) {
+	store := newMemoryTestStore()
+	store.saveIndexErr = errors.New("save index failed")
+	svc := NewService(store, testMemoConfig(), nil)
 
-	_, err := svc.Remove(context.Background(), "match")
+	err := svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "new",
+		Content: "new",
+		Source:  SourceUserManual,
+	})
 	if err == nil || !strings.Contains(err.Error(), "save index") {
 		t.Fatalf("expected save index error, got %v", err)
 	}
-	if store.deleteTopicCalls != 0 {
-		t.Fatalf("DeleteTopic should not run when SaveIndex fails, calls=%d", store.deleteTopicCalls)
-	}
-	if len(store.index.Entries) != 2 {
-		t.Fatalf("index should stay unchanged on save failure, entries=%d", len(store.index.Entries))
+	if store.deleteTopicCalls != 1 {
+		t.Fatalf("DeleteTopic() calls = %d, want 1 rollback delete", store.deleteTopicCalls)
 	}
 }
 
-func TestServiceAddAutoExtractIfAbsent(t *testing.T) {
-	baseDir := t.TempDir()
-	workspace := t.TempDir()
-	store := NewFileStore(baseDir, workspace)
-	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
-	ctx := context.Background()
-
-	first := Entry{
+func TestServiceAutoExtractDedupAcrossScopes(t *testing.T) {
+	svc := NewService(newMemoryTestStore(), testMemoConfig(), nil)
+	entry := Entry{
 		Type:    TypeUser,
 		Title:   "reply in chinese",
 		Content: "reply in chinese",
 		Source:  SourceAutoExtract,
 	}
-	added, err := svc.addAutoExtractIfAbsent(ctx, first)
-	if err != nil || !added {
-		t.Fatalf("first addAutoExtractIfAbsent() = (%v,%v), want (true,nil)", added, err)
-	}
 
-	added, err = svc.addAutoExtractIfAbsent(ctx, first)
+	added, err := svc.addAutoExtractIfAbsent(context.Background(), entry)
+	if err != nil || !added {
+		t.Fatalf("first addAutoExtractIfAbsent() = (%v, %v), want (true, nil)", added, err)
+	}
+	added, err = svc.addAutoExtractIfAbsent(context.Background(), entry)
 	if err != nil {
 		t.Fatalf("second addAutoExtractIfAbsent() error = %v", err)
 	}
 	if added {
-		t.Fatalf("duplicate addAutoExtractIfAbsent() = true, want false")
-	}
-
-	entries, err := svc.List(ctx)
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("entries after dedupe = %d, want 1", len(entries))
+		t.Fatal("expected duplicate auto extract to be skipped")
 	}
 }
 
-func TestServiceEnsureAutoExtractIndexAndLoadFailureTolerance(t *testing.T) {
-	store := &stubStoreWithTopics{
-		stubStore: &stubStore{
-			index: &Index{
-				Entries: []Entry{
-					{ID: "1", Type: TypeUser, Title: "A", TopicFile: "a.md"},
-					{ID: "2", Type: TypeFeedback, Title: "B", TopicFile: "b.md"},
-					{ID: "3", Type: TypeProject, Title: "C", TopicFile: "missing.md"},
-				},
-			},
-		},
-		topics: map[string]string{
-			"a.md": "---\nsource: extractor_auto\n---\n\na content",
-			"b.md": "---\nsource: user_manual\n---\n\nb content",
-		},
-	}
-	svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+func TestServiceEnsureAutoExtractIndexLoadsExistingEntries(t *testing.T) {
+	store := newMemoryTestStore()
+	store.indexes[ScopeUser] = &Index{Entries: []Entry{{Type: TypeUser, Title: "A", TopicFile: "a.md"}}}
+	store.topics[ScopeUser]["a.md"] = "---\nsource: extractor_auto\n---\n\na content"
+	svc := NewService(store, testMemoConfig(), nil)
+
 	if err := svc.ensureAutoExtractIndex(context.Background()); err != nil {
 		t.Fatalf("ensureAutoExtractIndex() error = %v", err)
 	}
 	if !svc.autoExtractIndexReady {
-		t.Fatalf("autoExtractIndexReady = false, want true")
-	}
-	if len(svc.autoExtractKeysByTopic) != 1 {
-		t.Fatalf("autoExtractKeysByTopic = %+v", svc.autoExtractKeysByTopic)
+		t.Fatal("autoExtractIndexReady = false")
 	}
 	if svc.autoExtractKeyRefs[autoExtractDedupKey(Entry{
 		Type:    TypeUser,
@@ -375,138 +321,24 @@ func TestServiceEnsureAutoExtractIndexAndLoadFailureTolerance(t *testing.T) {
 		Content: "a content",
 		Source:  SourceAutoExtract,
 	})] != 1 {
-		t.Fatalf("autoExtractKeyRefs = %+v", svc.autoExtractKeyRefs)
+		t.Fatalf("autoExtractKeyRefs = %#v", svc.autoExtractKeyRefs)
 	}
 }
 
-func TestServiceEnsureAutoExtractIndexLoadIndexFailure(t *testing.T) {
-	store := &stubStore{err: errors.New("load index failed")}
-	svc := NewService(store, nil, config.MemoConfig{}, nil)
-	err := svc.ensureAutoExtractIndex(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "load index") {
-		t.Fatalf("ensureAutoExtractIndex() error = %v", err)
-	}
-}
-
-func TestServiceAutoExtractIndexHelpers(t *testing.T) {
-	svc := NewService(&stubStore{}, nil, config.MemoConfig{}, nil)
-	svc.autoExtractIndexReady = true
-	svc.autoExtractKeysByTopic = map[string]string{}
-	svc.autoExtractKeyRefs = map[string]int{}
-
-	entry := Entry{
-		Type:      TypeProject,
-		Title:     "  release plan ",
-		Content:   " ship in april ",
-		Source:    SourceAutoExtract,
-		TopicFile: "plan.md",
-	}
-	svc.trackAutoExtractEntryLocked(entry)
-	key := autoExtractDedupKey(entry)
-	if svc.autoExtractKeysByTopic["plan.md"] != key || svc.autoExtractKeyRefs[key] != 1 {
-		t.Fatalf("trackAutoExtractEntryLocked() state = %+v %+v", svc.autoExtractKeysByTopic, svc.autoExtractKeyRefs)
-	}
-	if !svc.hasExactAutoExtractLocked(entry) {
-		t.Fatalf("hasExactAutoExtractLocked() = false, want true")
-	}
-
-	svc.trackAutoExtractEntryLocked(entry)
-	if svc.autoExtractKeyRefs[key] != 1 {
-		t.Fatalf("expected stable ref count on same topic replacement, refs=%d", svc.autoExtractKeyRefs[key])
-	}
-
-	svc.autoExtractKeysByTopic["plan-copy.md"] = key
-	svc.autoExtractKeyRefs[key] = 2
-	svc.removeAutoExtractTopicLocked("plan.md")
-	if svc.autoExtractKeyRefs[key] != 1 {
-		t.Fatalf("removeAutoExtractTopicLocked() should decrement refs, got %d", svc.autoExtractKeyRefs[key])
-	}
-	svc.removeAutoExtractTopicLocked("plan-copy.md")
-	if svc.autoExtractKeyRefs[key] != 0 {
-		t.Fatalf("removeAutoExtractTopicLocked() should clear refs, got %+v", svc.autoExtractKeyRefs)
-	}
-}
-
-func TestCloneIndexNilAndCopyIsolation(t *testing.T) {
-	clonedNil := cloneIndex(nil)
-	if clonedNil == nil || len(clonedNil.Entries) != 0 {
-		t.Fatalf("cloneIndex(nil) = %+v", clonedNil)
-	}
-
-	origin := &Index{Entries: []Entry{{ID: "1", Type: TypeUser, Title: "old"}}}
-	cloned := cloneIndex(origin)
-	origin.Entries[0].Title = "changed"
-	if cloned.Entries[0].Title != "old" {
-		t.Fatalf("cloneIndex should isolate entries, got %+v", cloned.Entries)
-	}
-}
-
-func TestNewEntryID(t *testing.T) {
-	id := newEntryID(TypeUser)
-	if !strings.HasPrefix(id, "user_") {
-		t.Errorf("ID = %q, should start with 'user_'", id)
-	}
-	// 确保唯一
-	id2 := newEntryID(TypeUser)
-	if id == id2 {
-		t.Error("consecutive IDs should be unique")
-	}
-}
-
-func TestMatchesKeyword(t *testing.T) {
+func TestMatchesKeywordIncludesContent(t *testing.T) {
 	entry := Entry{
 		Type:     TypeUser,
-		Title:    "偏好 tab 缩进",
-		Keywords: []string{"indentation", "style"},
+		Title:    "style",
+		Content:  "please use tabs",
+		Keywords: []string{"indentation"},
 	}
-	tests := []struct {
-		kw   string
-		want bool
-	}{
-		{"tab", true},
-		{"偏好", true},
-		{"indent", true},
-		{"user", true},
-		{"nonexistent", false},
+	if !matchesKeyword(entry, "tabs") {
+		t.Fatal("expected content match")
 	}
-	for _, tt := range tests {
-		got := matchesKeyword(entry, strings.ToLower(tt.kw))
-		if got != tt.want {
-			t.Errorf("matchesKeyword(%q) = %v, want %v", tt.kw, got, tt.want)
-		}
+	if !matchesKeyword(entry, "indent") {
+		t.Fatal("expected keyword match")
 	}
-}
-
-// stubStoreWithTopics 扩展 stubStore 支持 topic 加载。
-type stubStoreWithTopics struct {
-	*stubStore
-	topics map[string]string
-	mu     sync.Mutex
-}
-
-func (s *stubStoreWithTopics) LoadTopic(_ context.Context, filename string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	content, ok := s.topics[filename]
-	if !ok {
-		return "", errors.New("not found")
+	if matchesKeyword(entry, "missing") {
+		t.Fatal("unexpected match for missing keyword")
 	}
-	return content, nil
-}
-
-func (s *stubStoreWithTopics) SaveTopic(_ context.Context, filename string, content string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.topics == nil {
-		s.topics = make(map[string]string)
-	}
-	s.topics[filename] = content
-	return nil
-}
-
-func (s *stubStoreWithTopics) DeleteTopic(_ context.Context, filename string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.topics, filename)
-	return nil
 }

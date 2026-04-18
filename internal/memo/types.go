@@ -2,6 +2,7 @@ package memo
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
@@ -43,20 +44,39 @@ type Entry struct {
 	UpdatedAt time.Time
 }
 
+// Scope 表示 memo 的逻辑分层范围。
+type Scope string
+
+const (
+	// ScopeAll 表示同时覆盖 user 与 project 两层。
+	ScopeAll Scope = "all"
+	// ScopeUser 表示仅 user 记忆层。
+	ScopeUser Scope = "user"
+	// ScopeProject 表示 project 记忆层，承载 feedback/project/reference。
+	ScopeProject Scope = "project"
+)
+
 // Index 表示 MEMO.md 索引文件的内存模型。
 type Index struct {
 	Entries   []Entry
 	UpdatedAt time.Time
 }
 
+// RecalledEntry 表示一次 recall 命中的结构化结果。
+type RecalledEntry struct {
+	Scope   Scope
+	Entry   Entry
+	Content string
+}
+
 // Store 定义记忆持久化的最小抽象。
 type Store interface {
-	LoadIndex(ctx context.Context) (*Index, error)
-	SaveIndex(ctx context.Context, index *Index) error
-	LoadTopic(ctx context.Context, filename string) (string, error)
-	SaveTopic(ctx context.Context, filename string, content string) error
-	DeleteTopic(ctx context.Context, filename string) error
-	ListTopics(ctx context.Context) ([]string, error)
+	LoadIndex(ctx context.Context, scope Scope) (*Index, error)
+	SaveIndex(ctx context.Context, scope Scope, index *Index) error
+	LoadTopic(ctx context.Context, scope Scope, filename string) (string, error)
+	SaveTopic(ctx context.Context, scope Scope, filename string, content string) error
+	DeleteTopic(ctx context.Context, scope Scope, filename string) error
+	ListTopics(ctx context.Context, scope Scope) ([]string, error)
 }
 
 // Extractor 定义从对话消息中提取记忆的最小能力。
@@ -89,4 +109,33 @@ func IsValidType(t Type) bool {
 func ParseType(s string) (Type, bool) {
 	t := Type(s)
 	return t, IsValidType(t)
+}
+
+// NormalizeScope 将外部输入收敛为受支持的 memo 作用范围。
+func NormalizeScope(scope Scope) Scope {
+	switch Scope(strings.ToLower(string(scope))) {
+	case ScopeUser:
+		return ScopeUser
+	case ScopeProject:
+		return ScopeProject
+	default:
+		return ScopeAll
+	}
+}
+
+// ScopeForType 返回给定类型固定落到的记忆分层。
+func ScopeForType(t Type) Scope {
+	switch t {
+	case TypeUser:
+		return ScopeUser
+	case TypeFeedback, TypeProject, TypeReference:
+		return ScopeProject
+	default:
+		return ScopeProject
+	}
+}
+
+// supportedStorageScopes 返回当前实现实际落盘的所有 memo 分层。
+func supportedStorageScopes() []Scope {
+	return []Scope{ScopeUser, ScopeProject}
 }

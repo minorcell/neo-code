@@ -17,11 +17,12 @@ const (
 
 // AutoExtractor 负责按会话在后台调度自动提取，并处理防抖、互斥和尾随执行。
 type AutoExtractor struct {
-	extractor Extractor
-	svc       *Service
-	debounce  time.Duration
-	idleTTL   time.Duration
-	logf      func(format string, args ...any)
+	extractor      Extractor
+	svc            *Service
+	debounce       time.Duration
+	idleTTL        time.Duration
+	extractTimeout time.Duration
+	logf           func(format string, args ...any)
 
 	mu     sync.Mutex
 	states map[string]*autoExtractState
@@ -44,14 +45,18 @@ type autoExtractRequest struct {
 }
 
 // NewAutoExtractor 创建后台自动提取调度器。
-func NewAutoExtractor(extractor Extractor, svc *Service) *AutoExtractor {
+func NewAutoExtractor(extractor Extractor, svc *Service, extractTimeout time.Duration) *AutoExtractor {
+	if extractTimeout <= 0 {
+		extractTimeout = 15 * time.Second
+	}
 	return &AutoExtractor{
-		extractor: extractor,
-		svc:       svc,
-		debounce:  autoExtractDebounce,
-		idleTTL:   autoExtractIdleTTL,
-		logf:      log.Printf,
-		states:    make(map[string]*autoExtractState),
+		extractor:      extractor,
+		svc:            svc,
+		debounce:       autoExtractDebounce,
+		idleTTL:        autoExtractIdleTTL,
+		extractTimeout: extractTimeout,
+		logf:           log.Printf,
+		states:         make(map[string]*autoExtractState),
 	}
 }
 
@@ -205,7 +210,9 @@ func isIdleStateLocked(state *autoExtractState, seq uint64) bool {
 
 // extractAndStore 执行提取，并在写入前做本地批次去重和持久化级别的原子去重。
 func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), a.extractTimeout)
+	defer cancel()
+
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
 		a.logError("memo: auto extract failed: %v", err)

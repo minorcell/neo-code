@@ -32,6 +32,7 @@ type Runtime interface {
 	PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error)
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
@@ -66,6 +67,15 @@ type PrepareInput struct {
 	Workdir   string
 	Text      string
 	Images    []UserImageInput
+}
+
+// SystemToolInput 描述一次由系统入口触发的确定性工具执行请求。
+type SystemToolInput struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	ToolName  string
+	Arguments []byte
 }
 
 // PreparedInputResult 描述输入归一化完成后的结果快照（标准 UserInput + 本轮保存附件元数据）。

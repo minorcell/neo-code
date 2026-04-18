@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -18,7 +19,6 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
-	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -2083,88 +2083,70 @@ func (a App) isBusy() bool {
 
 // handleMemoCommand 处理 /memo 命令，显示记忆索引内容。
 func (a *App) handleMemoCommand() tea.Cmd {
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
-	entries, err := a.memoSvc.List(context.Background())
-	if err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to load memo: %s", err))
-		a.rebuildTranscript()
-		return nil
-	}
-	if len(entries) == 0 {
-		a.appendInlineMessage(roleSystem, "[System] No memos stored yet. Use /remember <text> to add one.")
-		a.rebuildTranscript()
-		return nil
-	}
-	var lines []string
-	lines = append(lines, fmt.Sprintf("[System] %d memo(s):", len(entries)))
-	for _, entry := range entries {
-		lines = append(lines, fmt.Sprintf("  [%s] %s", entry.Type, entry.Title))
-	}
-	a.appendInlineMessage(roleSystem, strings.Join(lines, "\n"))
-	a.rebuildTranscript()
-	return nil
+	return a.runMemoSystemTool(tools.ToolNameMemoList, map[string]any{})
 }
 
 // handleRememberCommand 处理 /remember <text> 命令，创建新的记忆条目。
 func (a *App) handleRememberCommand(text string) tea.Cmd {
 	text = strings.TrimSpace(text)
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
 	if text == "" {
 		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageRemember))
 		a.rebuildTranscript()
 		return nil
 	}
-	title := memo.NormalizeTitle(text)
-	entry := memo.Entry{
-		Type:    memo.TypeUser,
-		Title:   title,
-		Content: text,
-		Source:  memo.SourceUserManual,
-	}
-	if err := a.memoSvc.Add(context.Background(), entry); err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to save memo: %s", err))
-		a.rebuildTranscript()
-		return nil
-	}
-	a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Memo saved: %s", title))
-	a.rebuildTranscript()
-	return nil
+	return a.runMemoSystemTool(tools.ToolNameMemoRemember, map[string]any{
+		"type":    "user",
+		"title":   text,
+		"content": text,
+	})
 }
 
 // handleForgetCommand 处理 /forget <keyword> 命令，删除匹配的记忆条目。
 func (a *App) handleForgetCommand(keyword string) tea.Cmd {
 	keyword = strings.TrimSpace(keyword)
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
 	if keyword == "" {
 		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageForget))
 		a.rebuildTranscript()
 		return nil
 	}
-	removed, err := a.memoSvc.Remove(context.Background(), keyword)
+	return a.runMemoSystemTool(tools.ToolNameMemoRemove, map[string]any{
+		"keyword": keyword,
+		"scope":   "all",
+	})
+}
+
+// runMemoSystemTool 通过 runtime 的系统工具入口执行 memo 相关 slash 命令。
+func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.Cmd {
+	payload, err := json.Marshal(arguments)
 	if err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to remove memo: %s", err))
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to encode memo command: %s", err))
 		a.rebuildTranscript()
 		return nil
 	}
-	if removed == 0 {
-		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] No memos matching %q.", keyword))
-	} else {
-		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Removed %d memo(s) matching %q.", removed, keyword))
-	}
-	a.rebuildTranscript()
-	return nil
+
+	return tuiservices.RunSystemToolCmd(
+		a.runtime,
+		agentruntime.SystemToolInput{
+			SessionID: a.state.ActiveSessionID,
+			Workdir:   a.state.CurrentWorkdir,
+			ToolName:  toolName,
+			Arguments: payload,
+		},
+		func(result tools.ToolResult, err error) tea.Msg {
+			if err != nil {
+				message := strings.TrimSpace(result.Content)
+				if message == "" {
+					message = err.Error()
+				}
+				return localCommandResultMsg{Err: errors.New(message)}
+			}
+			notice := strings.TrimSpace(result.Content)
+			if notice == "" {
+				notice = "Memo command completed."
+			}
+			return localCommandResultMsg{Notice: notice}
+		},
+	)
 }
 
 // setCurrentWorkdir 统一设置当前工作目录，仅接受非空白且为绝对路径的值。
