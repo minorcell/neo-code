@@ -6,7 +6,6 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -207,12 +206,12 @@ func TestExtractAndStore(t *testing.T) {
 
 	t.Run("no signal does not add entries", func(t *testing.T) {
 		store := NewFileStore(t.TempDir(), t.TempDir())
-		svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+		svc := NewService(store, testMemoConfig(), nil)
 		messages := []providertypes.Message{
 			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("写个函数")}},
 		}
 		ExtractAndStore(context.Background(), NewRuleExtractor(), svc, messages)
-		entries, _ := svc.List(context.Background())
+		entries, _ := svc.List(context.Background(), ScopeAll)
 		if len(entries) != 0 {
 			t.Errorf("expected 0 entries, got %d", len(entries))
 		}
@@ -220,12 +219,12 @@ func TestExtractAndStore(t *testing.T) {
 
 	t.Run("with signal adds entry", func(t *testing.T) {
 		store := NewFileStore(t.TempDir(), t.TempDir())
-		svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
+		svc := NewService(store, testMemoConfig(), nil)
 		messages := []providertypes.Message{
 			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住以后都用中文注释")}},
 		}
 		ExtractAndStore(context.Background(), NewRuleExtractor(), svc, messages)
-		entries, _ := svc.List(context.Background())
+		entries, _ := svc.List(context.Background(), ScopeAll)
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(entries))
 		}

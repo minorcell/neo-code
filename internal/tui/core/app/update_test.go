@@ -20,6 +20,7 @@ import (
 	approvalflow "neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
+	memotool "neo-code/internal/tools/memo"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
@@ -102,6 +103,8 @@ type stubRuntime struct {
 	prepareErr      error
 	preparedOutput  agentruntime.UserInput
 	runInputs       []agentruntime.UserInput
+	systemToolCalls []agentruntime.SystemToolInput
+	systemToolFn    func(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error)
 	resolveCalls    []agentruntime.PermissionResolutionInput
 	resolveErr      error
 	cancelInvoked   bool
@@ -161,6 +164,14 @@ func (s *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 
 func (s *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
+}
+
+func (s *stubRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	s.systemToolCalls = append(s.systemToolCalls, input)
+	if s.systemToolFn != nil {
+		return s.systemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
 }
 
 func (s *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {

@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/tools"
 )
 
 const permissionResolveTimeout = 10 * time.Second
@@ -25,6 +26,11 @@ type Submitter interface {
 // Compactor 定义执行 runtime compact 所需最小能力。
 type Compactor interface {
 	Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error)
+}
+
+// SystemToolRunner 定义执行 runtime 系统工具入口所需最小能力。
+type SystemToolRunner interface {
+	ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error)
 }
 
 // PermissionResolver 定义权限审批提交所需最小能力。
@@ -77,6 +83,18 @@ func RunCompactCmd(
 	return func() tea.Msg {
 		_, err := runtime.Compact(context.Background(), input)
 		return doneMsg(err)
+	}
+}
+
+// RunSystemToolCmd 执行 runtime 系统工具入口，并将结果映射为 UI 消息。
+func RunSystemToolCmd(
+	runtime SystemToolRunner,
+	input agentruntime.SystemToolInput,
+	doneMsg func(tools.ToolResult, error) tea.Msg,
+) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runtime.ExecuteSystemTool(context.Background(), input)
+		return doneMsg(result, err)
 	}
 }
 

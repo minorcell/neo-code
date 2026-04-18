@@ -1355,7 +1355,10 @@ shell: powershell
 memo:
   enabled: false
   auto_extract: false
-  max_index_lines: 123
+  max_entries: 123
+  max_index_bytes: 4096
+  extract_timeout_sec: 9
+  extract_recent_messages: 4
 `
 	writeLoaderConfig(t, loader, raw)
 
@@ -1369,8 +1372,17 @@ memo:
 	if cfg.Memo.AutoExtract {
 		t.Fatalf("expected memo.auto_extract to stay false")
 	}
-	if cfg.Memo.MaxIndexLines != 123 {
-		t.Fatalf("expected memo.max_index_lines=123, got %d", cfg.Memo.MaxIndexLines)
+	if cfg.Memo.MaxEntries != 123 {
+		t.Fatalf("expected memo.max_entries=123, got %d", cfg.Memo.MaxEntries)
+	}
+	if cfg.Memo.MaxIndexBytes != 4096 {
+		t.Fatalf("expected memo.max_index_bytes=4096, got %d", cfg.Memo.MaxIndexBytes)
+	}
+	if cfg.Memo.ExtractTimeoutSec != 9 {
+		t.Fatalf("expected memo.extract_timeout_sec=9, got %d", cfg.Memo.ExtractTimeoutSec)
+	}
+	if cfg.Memo.ExtractRecentMessages != 4 {
+		t.Fatalf("expected memo.extract_recent_messages=4, got %d", cfg.Memo.ExtractRecentMessages)
 	}
 
 	data, err := os.ReadFile(loader.ConfigPath())
@@ -1408,8 +1420,92 @@ shell: powershell
 	if !cfg.Memo.AutoExtract {
 		t.Fatalf("expected memo.auto_extract default true when memo section missing")
 	}
-	if cfg.Memo.MaxIndexLines <= 0 {
-		t.Fatalf("expected memo.max_index_lines to be defaulted, got %d", cfg.Memo.MaxIndexLines)
+	if cfg.Memo.MaxEntries <= 0 {
+		t.Fatalf("expected memo.max_entries to be defaulted, got %d", cfg.Memo.MaxEntries)
+	}
+	if cfg.Memo.MaxIndexBytes <= 0 {
+		t.Fatalf("expected memo.max_index_bytes to be defaulted, got %d", cfg.Memo.MaxIndexBytes)
+	}
+	if cfg.Memo.ExtractTimeoutSec <= 0 {
+		t.Fatalf("expected memo.extract_timeout_sec to be defaulted, got %d", cfg.Memo.ExtractTimeoutSec)
+	}
+	if cfg.Memo.ExtractRecentMessages <= 0 {
+		t.Fatalf("expected memo.extract_recent_messages to be defaulted, got %d", cfg.Memo.ExtractRecentMessages)
+	}
+}
+
+func TestLoaderSupportsLegacyMemoMaxIndexLinesField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  max_index_lines: 123
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("expected legacy memo field to be accepted, got %v", err)
+	}
+	if cfg.Memo.MaxEntries != 123 {
+		t.Fatalf("expected legacy max_index_lines mapped to memo.max_entries=123, got %d", cfg.Memo.MaxEntries)
+	}
+}
+
+func TestLoaderRejectsExplicitInvalidMemoNumbers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fieldYAML  string
+		errContain string
+	}{
+		{
+			name:       "negative max_entries",
+			fieldYAML:  "max_entries: -1",
+			errContain: "config: memo: max_entries must be greater than 0",
+		},
+		{
+			name:       "negative max_index_bytes",
+			fieldYAML:  "max_index_bytes: -1",
+			errContain: "config: memo: max_index_bytes must be greater than 0",
+		},
+		{
+			name:       "negative extract_timeout_sec",
+			fieldYAML:  "extract_timeout_sec: -1",
+			errContain: "config: memo: extract_timeout_sec must be greater than 0",
+		},
+		{
+			name:       "negative extract_recent_messages",
+			fieldYAML:  "extract_recent_messages: -1",
+			errContain: "config: memo: extract_recent_messages must be greater than 0",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			loader := NewLoader(t.TempDir(), testDefaultConfig())
+			raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  ` + tt.fieldYAML + `
+`
+			writeLoaderConfig(t, loader, raw)
+
+			_, err := loader.Load(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tt.errContain) {
+				t.Fatalf("expected %q, got %v", tt.errContain, err)
+			}
+		})
 	}
 }
 

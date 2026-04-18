@@ -37,7 +37,7 @@ func TestLLMExtractorExtractValidJSON(t *testing.T) {
 	generator := &stubTextGenerator{
 		response: `[{"type":"user","title":" 偏好 Go 代码风格 ","content":"用户偏好使用 Go 惯用写法。","keywords":["go","  style ","go"]}]`,
 	}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 	extractor.now = func() time.Time {
 		return time.Date(2026, 4, 13, 10, 0, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -83,7 +83,7 @@ func TestLLMExtractorExtractValidJSON(t *testing.T) {
 
 // TestLLMExtractorExtractEmptyResult 验证空数组响应会返回零条记忆。
 func TestLLMExtractorExtractEmptyResult(t *testing.T) {
-	extractor := NewLLMExtractor(&stubTextGenerator{response: `[]`})
+	extractor := NewLLMExtractor(&stubTextGenerator{response: `[]`}, 10)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("这轮没有需要记住的内容。")}},
@@ -99,7 +99,7 @@ func TestLLMExtractorExtractEmptyResult(t *testing.T) {
 // TestLLMExtractorExtractNoUserMessage 验证没有用户消息时不会调用模型。
 func TestLLMExtractorExtractNoUserMessage(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("只有助手消息。")}},
@@ -117,7 +117,7 @@ func TestLLMExtractorExtractNoUserMessage(t *testing.T) {
 
 // TestLLMExtractorExtractNoMessages 验证空消息输入直接返回空结果。
 func TestLLMExtractorExtractNoMessages(t *testing.T) {
-	extractor := NewLLMExtractor(&stubTextGenerator{response: `[]`})
+	extractor := NewLLMExtractor(&stubTextGenerator{response: `[]`}, 10)
 
 	entries, err := extractor.Extract(context.Background(), nil)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestLLMExtractorExtractNoMessages(t *testing.T) {
 
 // TestLLMExtractorExtractInvalidJSON 验证无效 JSON 会返回错误。
 func TestLLMExtractorExtractInvalidJSON(t *testing.T) {
-	extractor := NewLLMExtractor(&stubTextGenerator{response: `[{invalid json}]`})
+	extractor := NewLLMExtractor(&stubTextGenerator{response: `[{invalid json}]`}, 10)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
@@ -144,7 +144,7 @@ func TestLLMExtractorExtractInvalidJSON(t *testing.T) {
 func TestLLMExtractorExtractToleratesWrappedJSON(t *testing.T) {
 	extractor := NewLLMExtractor(&stubTextGenerator{
 		response: "分析如下：\n[{\"type\":\"feedback\",\"title\":\"以后先跑测试\",\"content\":\"用户要求修改后先跑测试。\"}]\n以上完毕。",
-	})
+	}, 10)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后改完先跑测试。")}},
@@ -165,7 +165,7 @@ func TestLLMExtractorExtractFiltersInvalidEntries(t *testing.T) {
 			{"type":"project","title":" ","content":"missing title"},
 			{"type":"reference","title":"文档入口","content":"查看 docs/runtime-provider-event-flow.md"}
 		]`,
-	})
+	}, 10)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("参考文档在 docs/runtime-provider-event-flow.md。")}},
@@ -181,7 +181,7 @@ func TestLLMExtractorExtractFiltersInvalidEntries(t *testing.T) {
 // TestLLMExtractorExtractCancelledContext 验证已取消上下文会中止提取。
 func TestLLMExtractorExtractCancelledContext(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -199,7 +199,7 @@ func TestLLMExtractorExtractCancelledContext(t *testing.T) {
 // TestLLMExtractorExtractUsesRecentNonToolMessages 验证只取最近 10 条非 tool 消息。
 func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	messages := make([]providertypes.Message, 0, 16)
 	for index := 0; index < 12; index++ {
@@ -237,7 +237,7 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 
 func TestLLMExtractorExtractDropsIncompleteToolCallSpan(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
@@ -264,7 +264,7 @@ func TestLLMExtractorExtractDropsIncompleteToolCallSpan(t *testing.T) {
 
 func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
@@ -305,7 +305,7 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 
 func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
@@ -347,7 +347,7 @@ func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 
 func TestLLMExtractorExtractSkipsOrphanAndClearedToolMessages(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("alpha")}},
@@ -383,7 +383,7 @@ func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 		t.Fatalf("Extract() error = %v", err)
 	}
 
-	extractor = NewLLMExtractor(nil)
+	extractor = NewLLMExtractor(nil, 10)
 	_, err = extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
@@ -393,7 +393,7 @@ func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 }
 
 func TestLLMExtractorExtractGeneratorFailure(t *testing.T) {
-	extractor := NewLLMExtractor(&stubTextGenerator{err: errors.New("upstream failed")})
+	extractor := NewLLMExtractor(&stubTextGenerator{err: errors.New("upstream failed")}, 10)
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
@@ -413,7 +413,7 @@ func TestExtractJSONArrayErrors(t *testing.T) {
 
 func TestLLMExtractorExtractImageOnlyUserMessageSkipsGenerator(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
-	extractor := NewLLMExtractor(generator)
+	extractor := NewLLMExtractor(generator, 10)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/pic.png")}},

@@ -18,6 +18,7 @@ const (
 // recallInput 定义 memo_recall 工具的 JSON 入参。
 type recallInput struct {
 	Keyword string `json:"keyword"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 // RecallTool 让 Agent 按关键词搜索并加载记忆详情。
@@ -47,8 +48,9 @@ func (t *RecallTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"keyword": map[string]any{
 				"type":        "string",
-				"description": "Search keyword to find matching memory entries (searches title, type, and keywords).",
+				"description": "Search keyword to find matching memory entries (searches title, type, content, and keywords).",
 			},
+			"scope": memoScopePropertySchema(),
 		},
 		"required": []string{"keyword"},
 	}
@@ -63,8 +65,7 @@ func (t *RecallTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var args recallInput
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		err = fmt.Errorf("%s: %w", recallToolName, err)
-		return tools.NewErrorResult(recallToolName, "invalid arguments", err.Error(), nil), err
+		return invalidArgumentsError(recallToolName, err)
 	}
 
 	args.Keyword = strings.TrimSpace(args.Keyword)
@@ -76,7 +77,12 @@ func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 		return nilServiceError(recallToolName)
 	}
 
-	results, err := t.svc.Recall(ctx, args.Keyword)
+	scope, err := parseMemoScope(args.Scope, true)
+	if err != nil {
+		return tools.NewErrorResult(recallToolName, tools.NormalizeErrorReason(recallToolName, err), "", nil), err
+	}
+
+	results, err := t.svc.Recall(ctx, args.Keyword, scope)
 	if err != nil {
 		return tools.NewErrorResult(recallToolName, tools.NormalizeErrorReason(recallToolName, err), "", nil), err
 	}
@@ -88,17 +94,16 @@ func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 		}, tools.DefaultOutputLimitBytes), nil
 	}
 
-	// 按 key 排序保证输出稳定性
-	keys := make([]string, 0, len(results))
-	for k := range results {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Found %d memory topic(s) matching %q:\n\n", len(results), args.Keyword)
-	for _, k := range keys {
-		fmt.Fprintf(&builder, "--- %s ---\n%s\n\n", k, results[k])
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Scope != results[j].Scope {
+			return results[i].Scope < results[j].Scope
+		}
+		return results[i].Entry.TopicFile < results[j].Entry.TopicFile
+	})
+	for _, item := range results {
+		fmt.Fprintf(&builder, "--- [%s] %s ---\n%s\n\n", item.Scope, item.Entry.TopicFile, item.Content)
 	}
 
 	return tools.ApplyOutputLimit(tools.ToolResult{
