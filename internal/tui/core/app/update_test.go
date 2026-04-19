@@ -359,7 +359,6 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 	app.providerAddForm.BaseURL = "https://team-gateway.example.com/v1"
 	app.providerAddForm.APIKeyEnv = "TEAM_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "sk-test-123"
-	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
 
 	cmd := app.submitProviderAddForm()
 	if cmd == nil {
@@ -452,8 +451,8 @@ func TestSubmitProviderAddFormTransitionsToManualStageWhenModelSourceManual(t *t
 	if app.providerAddForm.Stage != providerAddFormStageManualModels {
 		t.Fatalf("expected form stage manual models, got %v", app.providerAddForm.Stage)
 	}
-	if strings.TrimSpace(app.providerAddForm.ManualModelsJSON) != strings.TrimSpace(providerAddManualModelsJSONTemplate) {
-		t.Fatalf("expected manual model template to be prefilled, got %q", app.providerAddForm.ManualModelsJSON)
+	if strings.TrimSpace(app.providerAddForm.ManualModelsJSON) != "" {
+		t.Fatalf("expected manual model json buffer to stay empty, got %q", app.providerAddForm.ManualModelsJSON)
 	}
 	if app.state.StatusText != "Fill manual model JSON" {
 		t.Fatalf("expected manual stage status text, got %q", app.state.StatusText)
@@ -2299,7 +2298,7 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
-	app.providerAddForm.Step = 7 // api key env
+	app.providerAddForm.Step = 6 // api key env
 	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for env key rune input")
@@ -2452,7 +2451,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("openai compat discover mode requires explicit discovery endpoint path", func(t *testing.T) {
+	t.Run("openai compat discover mode uses default discovery endpoint path", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
@@ -2460,8 +2459,11 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			APIKey:      "k",
 			APIKeyEnv:   "OPENAI_COMPAT_API_KEY",
 		})
-		if !strings.Contains(err, "Discovery Endpoint is required") {
-			t.Fatalf("expected missing discovery endpoint error, got %q and req=%+v", err, req)
+		if err != "" {
+			t.Fatalf("expected default discovery endpoint, got %q and req=%+v", err, req)
+		}
+		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
+			t.Fatalf("expected default discovery endpoint /models, got %+v", req)
 		}
 	})
 
@@ -2470,6 +2472,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			Name:                  "openai-compat-discover",
 			Driver:                provider.DriverOpenAICompat,
 			ModelSource:           provider.ModelSourceDiscover,
+			ChatEndpointPath:      "/chat/completions",
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2483,8 +2486,8 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
 			t.Fatalf("expected default discovery endpoint, got %q", req.DiscoveryEndpointPath)
 		}
-		if req.DiscoveryResponseProfile != provider.DiscoveryResponseProfileOpenAI {
-			t.Fatalf("expected default discovery response profile, got %q", req.DiscoveryResponseProfile)
+		if req.ChatEndpointPath != "/chat/completions" {
+			t.Fatalf("expected default chat endpoint, got %q", req.ChatEndpointPath)
 		}
 	})
 
@@ -2516,21 +2519,18 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("gemini applies defaults and clears unrelated fields", func(t *testing.T) {
+	t.Run("gemini applies default base url", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:           "gemini",
-			Driver:         provider.DriverGemini,
-			ModelSource:    provider.ModelSourceManual,
-			APIKey:         "k",
-			APIKeyEnv:      "GEMINI_GATEWAY_API_KEY",
-			APIStyle:       "x",
-			APIVersion:     "v",
-			DeploymentMode: "d",
+			Name:        "gemini",
+			Driver:      provider.DriverGemini,
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "GEMINI_GATEWAY_API_KEY",
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
 		}
-		if req.BaseURL != config.GeminiDefaultBaseURL || req.APIStyle != "" || req.APIVersion != "" {
+		if req.BaseURL != config.GeminiDefaultBaseURL {
 			t.Fatalf("expected gemini normalization, got %+v", req)
 		}
 	})
@@ -2548,17 +2548,16 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects invalid discovery response profile", func(t *testing.T) {
+	t.Run("rejects invalid chat endpoint path", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:                     "openai-compat",
-			Driver:                   provider.DriverOpenAICompat,
-			ModelSource:              provider.ModelSourceDiscover,
-			APIKey:                   "k",
-			APIKeyEnv:                "OPENAI_COMPAT_API_KEY",
-			DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
-			DiscoveryResponseProfile: "unsupported-profile",
-		}); !strings.Contains(err, "unsupported") {
-			t.Fatalf("expected invalid discovery response profile error, got %q", err)
+			Name:             "openai-compat",
+			Driver:           provider.DriverOpenAICompat,
+			ModelSource:      provider.ModelSourceDiscover,
+			APIKey:           "k",
+			APIKeyEnv:        "OPENAI_COMPAT_API_KEY",
+			ChatEndpointPath: "https://api.example.com/chat/completions",
+		}); !strings.Contains(err, "relative path") {
+			t.Fatalf("expected invalid chat endpoint path error, got %q", err)
 		}
 	})
 
@@ -2587,18 +2586,17 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("manual source clears discovery settings", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:                     "manual",
-			Driver:                   provider.DriverOpenAICompat,
-			ModelSource:              provider.ModelSourceManual,
-			APIKey:                   "k",
-			APIKeyEnv:                "MANUAL_GATEWAY_API_KEY",
-			DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
-			DiscoveryResponseProfile: provider.DiscoveryResponseProfileGeneric,
+			Name:                  "manual",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceManual,
+			APIKey:                "k",
+			APIKeyEnv:             "MANUAL_GATEWAY_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
 		}
-		if req.DiscoveryEndpointPath != "" || req.DiscoveryResponseProfile != "" {
+		if req.DiscoveryEndpointPath != "" {
 			t.Fatalf("expected manual mode to clear discovery settings, got %+v", req)
 		}
 	})
@@ -3075,11 +3073,11 @@ func TestUpdateInputPanelTypingPathAndProviderAddFormExtraBranches(t *testing.T)
 
 	app.startProviderAddForm()
 	app.providerAddForm.Driver = provider.DriverAnthropic
-	app.providerAddForm.Step = 4 // api version
+	app.providerAddForm.Step = 4 // chat endpoint
 	modelPtr, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2024-10-01")})
 	app = *modelPtr.(*App)
-	if app.providerAddForm.APIVersion == "" {
-		t.Fatalf("expected api version to accept rune input")
+	if app.providerAddForm.ChatEndpointPath == "" {
+		t.Fatalf("expected chat endpoint to accept rune input")
 	}
 }
 
@@ -3326,13 +3324,13 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected provider add visible fields to start from name field")
 	}
 	if !slices.Contains(fields, providerAddFieldDiscoveryEndpointPath) ||
-		!slices.Contains(fields, providerAddFieldDiscoveryResponseProfile) {
+		!slices.Contains(fields, providerAddFieldChatEndpointPath) {
 		t.Fatalf("expected discover source to include discovery fields")
 	}
 
 	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceManual)
 	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
-		slices.Contains(manualFields, providerAddFieldDiscoveryResponseProfile) {
+		slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
 		t.Fatalf("expected manual source to exclude discovery fields")
 	}
 	clampProviderAddStep(nil)
@@ -3369,7 +3367,7 @@ func TestRunProviderAddFlowDeadlineExceededBranch(t *testing.T) {
 		Name:                  "demo",
 		Driver:                provider.DriverOpenAICompat,
 		BaseURL:               "https://example.com",
-		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
+		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		APIKeyEnv:             "DEMO_API_KEY",
 		APIKey:                "secret",

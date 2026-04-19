@@ -66,14 +66,12 @@ func TestProviderConfigIdentity(t *testing.T) {
 	t.Parallel()
 
 	cfg := ProviderConfig{
-		Name:                     "test-openai",
-		Driver:                   "openaicompat",
-		BaseURL:                  "https://api.openai.com/v1",
-		Model:                    "gpt-4o",
-		APIKeyEnv:                "TEST_KEY",
-		APIStyle:                 "chat_completions",
-		DiscoveryEndpointPath:    "models",
-		DiscoveryResponseProfile: "openai",
+		Name:                  "test-openai",
+		Driver:                "openaicompat",
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-4o",
+		APIKeyEnv:             "TEST_KEY",
+		DiscoveryEndpointPath: "models",
 	}
 
 	identity, err := cfg.Identity()
@@ -161,9 +159,6 @@ func TestQiniuProviderConfig(t *testing.T) {
 	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
 	}
-	if provider.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf("expected discovery profile openai, got %q", provider.DiscoveryResponseProfile)
-	}
 }
 
 func TestNormalizeConfigKey(t *testing.T) {
@@ -221,9 +216,10 @@ func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	cfg.DiscoveryEndpointPath = "/models"
-	cfg.DiscoveryResponseProfile = "not-supported"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "discovery response profile") {
-		t.Fatalf("expected invalid discovery response profile error, got %v", err)
+	cfg.ChatEndpointPath = "https://api.openai.com/chat/completions"
+	cfg.Model = "gpt-4.1"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("expected invalid chat endpoint path error, got %v", err)
 	}
 }
 
@@ -512,34 +508,23 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 
 	resolved := ResolvedProviderConfig{
 		ProviderConfig: ProviderConfig{
-			Name:           "company-gateway",
-			Driver:         "openaicompat",
-			BaseURL:        "https://llm.example.com/v1",
-			Model:          "server-default",
-			APIStyle:       "responses",
-			DeploymentMode: "ignored",
-			APIVersion:     "ignored",
+			Name:    "company-gateway",
+			Driver:  "openaicompat",
+			BaseURL: "https://llm.example.com/v1",
+			Model:   "server-default",
 		},
 		APIKey: "secret-key",
 	}
 
 	got := resolved.ToRuntimeConfig()
 	want := providerpkg.RuntimeConfig{
-		Name:                     "company-gateway",
-		Driver:                   "openaicompat",
-		BaseURL:                  "https://llm.example.com/v1",
-		DefaultModel:             "server-default",
-		APIKey:                   "secret-key",
-		ChatProtocol:             providerpkg.ChatProtocolOpenAIResponses,
-		ChatEndpointPath:         "/responses",
-		DiscoveryProtocol:        providerpkg.DiscoveryProtocolOpenAIModels,
-		AuthStrategy:             providerpkg.AuthStrategyBearer,
-		ResponseProfile:          providerpkg.DiscoveryResponseProfileOpenAI,
-		APIStyle:                 "responses",
-		DeploymentMode:           "ignored",
-		APIVersion:               "ignored",
-		DiscoveryEndpointPath:    providerpkg.DiscoveryEndpointPathModels,
-		DiscoveryResponseProfile: providerpkg.DiscoveryResponseProfileOpenAI,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		DefaultModel:          "server-default",
+		APIKey:                "secret-key",
+		ChatEndpointPath:      "",
+		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
 
 	if got != want {

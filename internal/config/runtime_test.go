@@ -13,12 +13,29 @@ func TestRuntimeConfigClone(t *testing.T) {
 	if cloned.MaxRepeatCycleStreak != 4 {
 		t.Fatalf("expected cloned MaxRepeatCycleStreak=4, got %d", cloned.MaxRepeatCycleStreak)
 	}
+	if cloned.Assets.MaxSessionAssetBytes != cfg.Assets.MaxSessionAssetBytes {
+		t.Fatalf("expected cloned MaxSessionAssetBytes=%d, got %d", cfg.Assets.MaxSessionAssetBytes, cloned.Assets.MaxSessionAssetBytes)
+	}
+	if cloned.Assets.MaxSessionAssetsTotalBytes != cfg.Assets.MaxSessionAssetsTotalBytes {
+		t.Fatalf(
+			"expected cloned MaxSessionAssetsTotalBytes=%d, got %d",
+			cfg.Assets.MaxSessionAssetsTotalBytes,
+			cloned.Assets.MaxSessionAssetsTotalBytes,
+		)
+	}
 }
 
 func TestRuntimeConfigApplyDefaults(t *testing.T) {
 	t.Parallel()
 
-	defaults := RuntimeConfig{MaxNoProgressStreak: 3, MaxRepeatCycleStreak: 5}
+	defaults := RuntimeConfig{
+		MaxNoProgressStreak:  3,
+		MaxRepeatCycleStreak: 5,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       11,
+			MaxSessionAssetsTotalBytes: 22,
+		},
+	}
 
 	cfg := RuntimeConfig{MaxNoProgressStreak: 0, MaxRepeatCycleStreak: 0}
 	cfg.ApplyDefaults(defaults)
@@ -27,6 +44,12 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 	}
 	if cfg.MaxRepeatCycleStreak != 5 {
 		t.Fatalf("expected defaulted MaxRepeatCycleStreak=5, got %d", cfg.MaxRepeatCycleStreak)
+	}
+	if cfg.Assets.MaxSessionAssetBytes != 11 {
+		t.Fatalf("expected defaulted MaxSessionAssetBytes=11, got %d", cfg.Assets.MaxSessionAssetBytes)
+	}
+	if cfg.Assets.MaxSessionAssetsTotalBytes != 22 {
+		t.Fatalf("expected defaulted MaxSessionAssetsTotalBytes=22, got %d", cfg.Assets.MaxSessionAssetsTotalBytes)
 	}
 
 	cfg = RuntimeConfig{MaxNoProgressStreak: 5, MaxRepeatCycleStreak: 8}
@@ -65,5 +88,36 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: bad}).Validate(); err == nil {
 			t.Fatalf("expected validation error for MaxRepeatCycleStreak=%d", bad)
 		}
+	}
+
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:  1,
+		MaxRepeatCycleStreak: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       1,
+			MaxSessionAssetsTotalBytes: 1,
+		},
+	}).Validate(); err != nil {
+		t.Fatalf("expected valid assets config, got %v", err)
+	}
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:  1,
+		MaxRepeatCycleStreak: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       -1,
+			MaxSessionAssetsTotalBytes: 1,
+		},
+	}).Validate(); err == nil {
+		t.Fatal("expected validation error for assets.max_session_asset_bytes=-1")
+	}
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:  1,
+		MaxRepeatCycleStreak: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       1,
+			MaxSessionAssetsTotalBytes: -1,
+		},
+	}).Validate(); err == nil {
+		t.Fatal("expected validation error for assets.max_session_assets_total_bytes=-1")
 	}
 }

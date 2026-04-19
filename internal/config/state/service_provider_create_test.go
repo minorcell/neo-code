@@ -35,7 +35,6 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
 		APIKey:    "test-key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -192,26 +191,19 @@ func TestNormalizeCreateCustomProviderInputRejectsInvalidModelSource(t *testing.
 
 func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t *testing.T) {
 	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
-		Name:                     "manual-no-discovery-validation",
-		Driver:                   provider.DriverOpenAICompat,
-		BaseURL:                  "https://llm.example.com/v1",
-		APIKeyEnv:                "MANUAL_NO_DISCOVERY_VALIDATION_API_KEY",
-		APIKey:                   "test-key",
-		ModelSource:              provider.ModelSourceManual,
-		DiscoveryResponseProfile: "invalid-profile",
-		ManualModelsJSON:         `[{"id":"manual-model","name":"Manual Model"}]`,
+		Name:             "manual-no-discovery-validation",
+		Driver:           provider.DriverOpenAICompat,
+		BaseURL:          "https://llm.example.com/v1",
+		APIKeyEnv:        "MANUAL_NO_DISCOVERY_VALIDATION_API_KEY",
+		APIKey:           "test-key",
+		ModelSource:      provider.ModelSourceManual,
+		ManualModelsJSON: `[{"id":"manual-model","name":"Manual Model"}]`,
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreateCustomProviderInput() error = %v", err)
 	}
 	if normalized.DiscoveryEndpointPath != "" {
 		t.Fatalf("expected manual mode to clear discovery endpoint path, got %q", normalized.DiscoveryEndpointPath)
-	}
-	if normalized.DiscoveryResponseProfile != "" {
-		t.Fatalf(
-			"expected manual mode to clear discovery response profile, got %q",
-			normalized.DiscoveryResponseProfile,
-		)
 	}
 	if len(normalized.ManualModels) != 1 {
 		t.Fatalf("expected one manual model, got %d", len(normalized.ManualModels))
@@ -234,7 +226,6 @@ func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "ROLLBACK_GATEWAY_API_KEY",
 		APIKey:    "new-key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -278,7 +269,6 @@ func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: configpkg.OpenAIDefaultAPIKeyEnv,
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicates provider") {
 		t.Fatalf("expected duplicate env error, got %v", err)
@@ -303,7 +293,6 @@ func TestCreateCustomProviderRejectsDuplicateCustomProviderName(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "DUPLICATE_CUSTOM_PROVIDER_A_API_KEY",
 		APIKey:    "key-a",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 	restoreA := captureEnvForCreateProvider(t, firstInput.APIKeyEnv)
 	defer restoreA()
@@ -341,7 +330,6 @@ func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "PATH",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("expected protected env error, got %v", err)
@@ -366,7 +354,6 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "INVALID_PROVIDER_NAME_API_KEY",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider name") {
 		t.Fatalf("expected invalid provider name error, got %v", err)
@@ -405,7 +392,6 @@ func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T
 		BaseURL:   "https://shared.example.com/v1",
 		APIKeyEnv: "SHARED_GATEWAY_API_KEY",
 		APIKey:    "key-a",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -484,7 +470,6 @@ func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "SAVE_FAILED_PROVIDER_API_KEY",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
 	saveCustomProviderWithModelsForCreate = func(baseDir string, input configpkg.SaveCustomProviderInput) error {
@@ -553,7 +538,6 @@ func TestCreateCustomProviderSerializesAcrossManagersSharingBaseDir(t *testing.T
 		BaseURL:   "https://shared.example.com/v1",
 		APIKeyEnv: "SHARED_BY_MANAGERS_API_KEY",
 		APIKey:    "key-a",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -661,7 +645,6 @@ func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
 		BaseURL:               "https://llm.example.com/v1",
 		APIKeyEnv:             "INVALID_DISCOVERY_PROVIDER_API_KEY",
 		APIKey:                "key",
-		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
 		DiscoveryEndpointPath: "https://llm.example.com/models",
 	})
 	if err == nil || !strings.Contains(err.Error(), "discovery endpoint path") {
@@ -669,17 +652,15 @@ func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	_, err = service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:                     "invalid-discovery-profile-provider",
-		Driver:                   provider.DriverOpenAICompat,
-		BaseURL:                  "https://llm.example.com/v1",
-		APIKeyEnv:                "INVALID_DISCOVERY_PROFILE_PROVIDER_API_KEY",
-		APIKey:                   "key",
-		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
-		DiscoveryEndpointPath:    "/models",
-		DiscoveryResponseProfile: "unsupported",
+		Name:             "invalid-chat-endpoint-provider",
+		Driver:           provider.DriverOpenAICompat,
+		BaseURL:          "https://llm.example.com/v1",
+		APIKeyEnv:        "INVALID_CHAT_ENDPOINT_PROVIDER_API_KEY",
+		APIKey:           "key",
+		ChatEndpointPath: "https://llm.example.com/chat/completions",
 	})
-	if err == nil || !strings.Contains(err.Error(), "discovery response profile") {
-		t.Fatalf("expected invalid discovery response profile error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("expected invalid chat endpoint path error, got %v", err)
 	}
 }
 
