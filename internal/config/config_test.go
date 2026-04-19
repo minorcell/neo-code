@@ -26,7 +26,6 @@ func testDefaultProviderConfig() ProviderConfig {
 		BaseURL:   testBaseURL,
 		Model:     testModel,
 		APIKeyEnv: testAPIKeyEnv,
-		APIStyle:  providerpkg.OpenAICompatibleAPIStyleChatCompletions,
 		Source:    ProviderSourceBuiltin,
 	}
 }
@@ -910,7 +909,6 @@ func TestAssembleProvidersRejectsIdenticalDuplicateCustomProviderNames(t *testin
 			Driver:    "openaicompat",
 			BaseURL:   "https://example.com/v1",
 			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-			APIStyle:  "responses",
 			Source:    ProviderSourceCustom,
 		},
 		{
@@ -918,7 +916,6 @@ func TestAssembleProvidersRejectsIdenticalDuplicateCustomProviderNames(t *testin
 			Driver:    "openaicompat",
 			BaseURL:   "https://example.com/v1",
 			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-			APIStyle:  "responses",
 			Source:    ProviderSourceCustom,
 		},
 	}
@@ -1913,19 +1910,19 @@ func TestToRuntimeConfigMapsAllFields(t *testing.T) {
 
 	resolved := ResolvedProviderConfig{
 		ProviderConfig: ProviderConfig{
-			Name:           "test-provider",
-			Driver:         "gemini",
-			BaseURL:        "https://generativelanguage.googleapis.com/v1beta/openai",
-			Model:          "gemini-2.5-flash",
-			APIKeyEnv:      "TEST_ENV_KEY",
-			APIStyle:       "responses",
-			DeploymentMode: "vertex",
-			APIVersion:     "v1beta",
+			Name:      "test-provider",
+			Driver:    "gemini",
+			BaseURL:   "https://generativelanguage.googleapis.com/v1beta/openai",
+			Model:     "gemini-2.5-flash",
+			APIKeyEnv: "TEST_ENV_KEY",
 		},
 		APIKey: "resolved-secret-key",
 	}
 
-	got := resolved.ToRuntimeConfig()
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
 	if got.Name != "test-provider" {
 		t.Fatalf("expected Name=test-provider, got %q", got.Name)
 	}
@@ -1937,12 +1934,6 @@ func TestToRuntimeConfigMapsAllFields(t *testing.T) {
 	}
 	if got.APIKey != "resolved-secret-key" {
 		t.Fatalf("expected APIKey=resolved-secret-key, got %q", got.APIKey)
-	}
-	if got.DeploymentMode != "vertex" {
-		t.Fatalf("expected DeploymentMode=vertex, got %q", got.DeploymentMode)
-	}
-	if got.APIVersion != "v1beta" {
-		t.Fatalf("expected APIVersion=v1beta, got %q", got.APIVersion)
 	}
 }
 

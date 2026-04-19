@@ -254,16 +254,15 @@ func (a App) renderProviderAddForm() string {
 				required: baseURLRequired,
 				note:     note,
 			})
-		case providerAddFieldAPIStyle:
+		case providerAddFieldChatEndpointPath:
 			note := ""
-			if strings.TrimSpace(a.providerAddForm.APIStyle) == "" {
-				note = "默认 chat_completions"
+			trimmedPath := strings.TrimSpace(a.providerAddForm.ChatEndpointPath)
+			if trimmedPath == "" || trimmedPath == "/" {
+				note = "留空或\"/\" 使用直连 base_url"
+			} else {
+				note = "以 \"/\" 开头的端点路径"
 			}
-			fields = append(fields, renderField{label: "API Style", value: a.providerAddForm.APIStyle, note: note})
-		case providerAddFieldDeploymentMode:
-			fields = append(fields, renderField{label: "Deployment Mode", value: a.providerAddForm.DeploymentMode})
-		case providerAddFieldAPIVersion:
-			fields = append(fields, renderField{label: "API Version", value: a.providerAddForm.APIVersion})
+			fields = append(fields, renderField{label: "Chat Endpoint", value: a.providerAddForm.ChatEndpointPath, note: note})
 		case providerAddFieldDiscoveryEndpointPath:
 			note := ""
 			if strings.TrimSpace(a.providerAddForm.DiscoveryEndpointPath) == "" {
@@ -272,16 +271,6 @@ func (a App) renderProviderAddForm() string {
 			fields = append(fields, renderField{
 				label: "Discovery Endpoint",
 				value: a.providerAddForm.DiscoveryEndpointPath,
-				note:  note,
-			})
-		case providerAddFieldDiscoveryResponseProfile:
-			note := "支持 openai / gemini / generic"
-			if strings.TrimSpace(a.providerAddForm.DiscoveryResponseProfile) == "" {
-				note = "OpenAI-compatible 默认 openai"
-			}
-			fields = append(fields, renderField{
-				label: "Discovery Profile",
-				value: a.providerAddForm.DiscoveryResponseProfile,
 				note:  note,
 			})
 		case providerAddFieldAPIKeyEnv:
@@ -315,7 +304,7 @@ func (a App) renderProviderAddForm() string {
 		sb.WriteString("\n" + label + " " + a.providerAddForm.Error + "\n")
 	}
 
-	sb.WriteString("\n[Tab] switch field  [Enter] confirm  [Esc] cancel")
+	sb.WriteString("\n[Tab] switch field  [Up/Down or K/J] change option  [Enter] confirm  [Esc] cancel")
 
 	return sb.String()
 }

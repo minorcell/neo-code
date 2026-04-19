@@ -2442,11 +2442,8 @@ const (
 	providerAddFieldDriver
 	providerAddFieldModelSource
 	providerAddFieldBaseURL
-	providerAddFieldAPIStyle
-	providerAddFieldDeploymentMode
-	providerAddFieldAPIVersion
+	providerAddFieldChatEndpointPath
 	providerAddFieldDiscoveryEndpointPath
-	providerAddFieldDiscoveryResponseProfile
 	providerAddFieldAPIKeyEnv
 	providerAddFieldAPIKey
 )
@@ -2457,19 +2454,11 @@ func providerAddVisibleFields(driver string, modelSource string) []providerAddFi
 		providerAddFieldDriver,
 		providerAddFieldModelSource,
 		providerAddFieldBaseURL,
-	}
-
-	switch provider.NormalizeProviderDriver(driver) {
-	case provider.DriverOpenAICompat:
-		fields = append(fields, providerAddFieldAPIStyle)
-	case provider.DriverGemini:
-		fields = append(fields, providerAddFieldDeploymentMode)
-	case provider.DriverAnthropic:
-		fields = append(fields, providerAddFieldAPIVersion)
+		providerAddFieldChatEndpointPath,
 	}
 
 	if provider.NormalizeModelSource(strings.TrimSpace(modelSource)) == provider.ModelSourceDiscover {
-		fields = append(fields, providerAddFieldDiscoveryEndpointPath, providerAddFieldDiscoveryResponseProfile)
+		fields = append(fields, providerAddFieldDiscoveryEndpointPath)
 	}
 	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
 	return fields
@@ -2504,26 +2493,33 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 	return fields[form.Step]
 }
 
+// isProviderAddEnumField 判断当前新增 Provider 表单焦点是否在枚举字段（Driver/Model Source）。
+func isProviderAddEnumField(form *providerAddFormState) bool {
+	switch currentProviderAddField(form) {
+	case providerAddFieldDriver, providerAddFieldModelSource:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *App) startProviderAddForm() {
 	a.providerAddForm = &providerAddFormState{
-		Stage:                    providerAddFormStageFields,
-		Step:                     0,
-		Name:                     "",
-		Driver:                   provider.DriverOpenAICompat,
-		ModelSource:              provider.ModelSourceDiscover,
-		BaseURL:                  "",
-		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
-		DeploymentMode:           "",
-		APIVersion:               "",
-		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
-		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
-		ManualModelsJSON:         "",
-		APIKeyEnv:                "",
-		APIKey:                   "",
-		Error:                    "",
-		ErrorIsHard:              false,
-		Drivers:                  []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
-		ModelSources:             []string{provider.ModelSourceDiscover, provider.ModelSourceManual},
+		Stage:                 providerAddFormStageFields,
+		Step:                  0,
+		Name:                  "",
+		Driver:                provider.DriverOpenAICompat,
+		ModelSource:           provider.ModelSourceDiscover,
+		BaseURL:               "",
+		ChatEndpointPath:      "/chat/completions",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		ManualModelsJSON:      "",
+		APIKeyEnv:             "",
+		APIKey:                "",
+		Error:                 "",
+		ErrorIsHard:           false,
+		Drivers:               []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
+		ModelSources:          []string{provider.ModelSourceDiscover, provider.ModelSourceManual},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -2586,27 +2582,19 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch currentProviderAddField(a.providerAddForm) {
 		case providerAddFieldName:
 			a.providerAddForm.Name = trimLastRune(a.providerAddForm.Name)
-		case providerAddFieldDriver:
-			a.providerAddForm.Driver = trimLastRune(a.providerAddForm.Driver)
 		case providerAddFieldBaseURL:
 			a.providerAddForm.BaseURL = trimLastRune(a.providerAddForm.BaseURL)
-		case providerAddFieldAPIStyle:
-			a.providerAddForm.APIStyle = trimLastRune(a.providerAddForm.APIStyle)
-		case providerAddFieldDeploymentMode:
-			a.providerAddForm.DeploymentMode = trimLastRune(a.providerAddForm.DeploymentMode)
-		case providerAddFieldAPIVersion:
-			a.providerAddForm.APIVersion = trimLastRune(a.providerAddForm.APIVersion)
+		case providerAddFieldChatEndpointPath:
+			a.providerAddForm.ChatEndpointPath = trimLastRune(a.providerAddForm.ChatEndpointPath)
 		case providerAddFieldDiscoveryEndpointPath:
 			a.providerAddForm.DiscoveryEndpointPath = trimLastRune(a.providerAddForm.DiscoveryEndpointPath)
-		case providerAddFieldDiscoveryResponseProfile:
-			a.providerAddForm.DiscoveryResponseProfile = trimLastRune(a.providerAddForm.DiscoveryResponseProfile)
 		case providerAddFieldAPIKeyEnv:
 			a.providerAddForm.APIKeyEnv = trimLastRune(a.providerAddForm.APIKeyEnv)
 		case providerAddFieldAPIKey:
 			a.providerAddForm.APIKey = trimLastRune(a.providerAddForm.APIKey)
 		}
 		return a, nil
-	case typed.Type == tea.KeyUp:
+	case typed.Type == tea.KeyUp || (isProviderAddEnumField(a.providerAddForm) && key.Matches(typed, a.keys.ScrollUp)):
 		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
 			currentIdx := -1
 			for i, d := range a.providerAddForm.Drivers {
@@ -2633,7 +2621,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
-	case typed.Type == tea.KeyDown:
+	case typed.Type == tea.KeyDown || (isProviderAddEnumField(a.providerAddForm) && key.Matches(typed, a.keys.ScrollDown)):
 		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
 			currentIdx := -1
 			for i, d := range a.providerAddForm.Drivers {
@@ -2668,16 +2656,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.providerAddForm.Name += cleanInput
 				case providerAddFieldBaseURL:
 					a.providerAddForm.BaseURL += cleanInput
-				case providerAddFieldAPIStyle:
-					a.providerAddForm.APIStyle += cleanInput
-				case providerAddFieldDeploymentMode:
-					a.providerAddForm.DeploymentMode += cleanInput
-				case providerAddFieldAPIVersion:
-					a.providerAddForm.APIVersion += cleanInput
+				case providerAddFieldChatEndpointPath:
+					a.providerAddForm.ChatEndpointPath += cleanInput
 				case providerAddFieldDiscoveryEndpointPath:
 					a.providerAddForm.DiscoveryEndpointPath += cleanInput
-				case providerAddFieldDiscoveryResponseProfile:
-					a.providerAddForm.DiscoveryResponseProfile += cleanInput
 				case providerAddFieldAPIKeyEnv:
 					a.providerAddForm.APIKeyEnv += cleanInput
 				case providerAddFieldAPIKey:
@@ -2710,9 +2692,6 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 		a.providerAddForm.Stage = providerAddFormStageManualModels
 		a.providerAddForm.Error = ""
 		a.providerAddForm.ErrorIsHard = false
-		if strings.TrimSpace(a.providerAddForm.ManualModelsJSON) == "" {
-			a.providerAddForm.ManualModelsJSON = providerAddManualModelsJSONTemplate
-		}
 		a.state.StatusText = "Fill manual model JSON"
 		return nil
 	}
@@ -2732,18 +2711,15 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 }
 
 type providerAddRequest struct {
-	Name                     string
-	Driver                   string
-	BaseURL                  string
-	ModelSource              string
-	ManualModelsJSON         string
-	APIStyle                 string
-	DeploymentMode           string
-	APIVersion               string
-	DiscoveryEndpointPath    string
-	DiscoveryResponseProfile string
-	APIKeyEnv                string
-	APIKey                   string
+	Name                  string
+	Driver                string
+	BaseURL               string
+	ChatEndpointPath      string
+	ModelSource           string
+	ManualModelsJSON      string
+	DiscoveryEndpointPath string
+	APIKeyEnv             string
+	APIKey                string
 }
 
 type providerAddResultMsg struct {
@@ -2755,18 +2731,15 @@ type providerAddResultMsg struct {
 
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
 	request := providerAddRequest{
-		Name:                     normalizeProviderAddFieldValue(form.Name),
-		Driver:                   provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
-		ModelSource:              provider.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
-		BaseURL:                  normalizeProviderAddFieldValue(form.BaseURL),
-		ManualModelsJSON:         strings.TrimSpace(form.ManualModelsJSON),
-		APIStyle:                 normalizeProviderAddFieldValue(form.APIStyle),
-		DeploymentMode:           normalizeProviderAddFieldValue(form.DeploymentMode),
-		APIVersion:               normalizeProviderAddFieldValue(form.APIVersion),
-		DiscoveryEndpointPath:    normalizeProviderAddFieldValue(form.DiscoveryEndpointPath),
-		DiscoveryResponseProfile: normalizeProviderAddFieldValue(form.DiscoveryResponseProfile),
-		APIKeyEnv:                normalizeProviderAddFieldValue(form.APIKeyEnv),
-		APIKey:                   normalizeProviderAddFieldValue(form.APIKey),
+		Name:                  normalizeProviderAddFieldValue(form.Name),
+		Driver:                provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
+		ModelSource:           provider.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
+		BaseURL:               normalizeProviderAddFieldValue(form.BaseURL),
+		ChatEndpointPath:      normalizeProviderAddFieldValue(form.ChatEndpointPath),
+		ManualModelsJSON:      strings.TrimSpace(form.ManualModelsJSON),
+		DiscoveryEndpointPath: normalizeProviderAddFieldValue(form.DiscoveryEndpointPath),
+		APIKeyEnv:             normalizeProviderAddFieldValue(form.APIKeyEnv),
+		APIKey:                normalizeProviderAddFieldValue(form.APIKey),
 	}
 
 	if request.Name == "" {
@@ -2796,63 +2769,40 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		if request.BaseURL == "" {
 			request.BaseURL = config.OpenAIDefaultBaseURL
 		}
-		if request.APIStyle == "" {
-			request.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
-		}
-		request.DeploymentMode = ""
-		request.APIVersion = ""
 	case provider.DriverGemini:
 		if request.BaseURL == "" {
 			request.BaseURL = config.GeminiDefaultBaseURL
 		}
-		request.APIStyle = ""
-		request.APIVersion = ""
 	case provider.DriverAnthropic:
 		if request.BaseURL == "" {
 			return providerAddRequest{}, "Base URL is required for anthropic provider"
 		}
-		request.APIStyle = ""
-		request.DeploymentMode = ""
 	default:
 		if request.BaseURL == "" {
 			return providerAddRequest{}, "Base URL is required for custom driver"
 		}
-		request.APIStyle = ""
-		request.DeploymentMode = ""
-		request.APIVersion = ""
-	}
-
-	if request.ModelSource == provider.ModelSourceManual {
-		request.DiscoveryEndpointPath = ""
-		request.DiscoveryResponseProfile = ""
-		return request, ""
-	}
-
-	if request.DiscoveryEndpointPath == "" {
-		return providerAddRequest{}, "Discovery Endpoint is required for discover model source"
 	}
 
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		request.Driver,
 		"",
-		"",
+		request.ChatEndpointPath,
 		"",
 		request.DiscoveryEndpointPath,
 		"",
 		"",
-		request.APIStyle,
-		request.DiscoveryResponseProfile,
+		"",
+		"",
 	)
 	if err != nil {
 		return providerAddRequest{}, err.Error()
 	}
-	if request.Driver == provider.DriverOpenAICompat {
-		request.APIStyle = normalizedProtocols.LegacyAPIStyle
-	} else {
-		request.APIStyle = ""
+	request.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
+	if request.ModelSource == provider.ModelSourceManual {
+		request.DiscoveryEndpointPath = ""
+		return request, ""
 	}
 	request.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
-	request.DiscoveryResponseProfile = normalizedProtocols.ResponseProfile
 
 	return request, ""
 }
@@ -2940,18 +2890,15 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 		defer cancel()
 
 		selection, err := providerSvc.CreateCustomProvider(ctx, configstate.CreateCustomProviderInput{
-			Name:                     request.Name,
-			Driver:                   request.Driver,
-			BaseURL:                  request.BaseURL,
-			ModelSource:              request.ModelSource,
-			ManualModelsJSON:         request.ManualModelsJSON,
-			APIStyle:                 request.APIStyle,
-			DeploymentMode:           request.DeploymentMode,
-			APIVersion:               request.APIVersion,
-			DiscoveryEndpointPath:    request.DiscoveryEndpointPath,
-			DiscoveryResponseProfile: request.DiscoveryResponseProfile,
-			APIKeyEnv:                request.APIKeyEnv,
-			APIKey:                   request.APIKey,
+			Name:                  request.Name,
+			Driver:                request.Driver,
+			BaseURL:               request.BaseURL,
+			ChatEndpointPath:      request.ChatEndpointPath,
+			ModelSource:           request.ModelSource,
+			ManualModelsJSON:      request.ManualModelsJSON,
+			DiscoveryEndpointPath: request.DiscoveryEndpointPath,
+			APIKeyEnv:             request.APIKeyEnv,
+			APIKey:                request.APIKey,
 		})
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -11,8 +13,15 @@ const (
 
 // RuntimeConfig 定义 runtime 层的可调参数。
 type RuntimeConfig struct {
-	MaxNoProgressStreak  int `yaml:"max_no_progress_streak,omitempty"`
-	MaxRepeatCycleStreak int `yaml:"max_repeat_cycle_streak,omitempty"`
+	MaxNoProgressStreak  int                 `yaml:"max_no_progress_streak,omitempty"`
+	MaxRepeatCycleStreak int                 `yaml:"max_repeat_cycle_streak,omitempty"`
+	Assets               RuntimeAssetsConfig `yaml:"assets,omitempty"`
+}
+
+// RuntimeAssetsConfig 定义运行时对 session_asset 的大小限制。
+type RuntimeAssetsConfig struct {
+	MaxSessionAssetBytes       int64 `yaml:"max_session_asset_bytes,omitempty"`
+	MaxSessionAssetsTotalBytes int64 `yaml:"max_session_assets_total_bytes,omitempty"`
 }
 
 // defaultRuntimeConfig 返回 runtime 配置的静态默认值。
@@ -20,15 +29,28 @@ func defaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
 		MaxNoProgressStreak:  DefaultMaxNoProgressStreak,
 		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
+		Assets:               defaultRuntimeAssetsConfig(),
+	}
+}
+
+// defaultRuntimeAssetsConfig 返回 runtime 附件限制配置默认值。
+func defaultRuntimeAssetsConfig() RuntimeAssetsConfig {
+	return RuntimeAssetsConfig{
+		MaxSessionAssetBytes:       providertypes.MaxSessionAssetBytes,
+		MaxSessionAssetsTotalBytes: providertypes.MaxSessionAssetsTotalBytes,
 	}
 }
 
 // Clone 复制 runtime 配置，避免调用方共享可变状态。
 func (c RuntimeConfig) Clone() RuntimeConfig {
-	return c
+	return RuntimeConfig{
+		MaxNoProgressStreak:  c.MaxNoProgressStreak,
+		MaxRepeatCycleStreak: c.MaxRepeatCycleStreak,
+		Assets:               c.Assets.Clone(),
+	}
 }
 
-// ApplyDefaults 在配置缺失或非法时回填默认阈值。
+// ApplyDefaults 在配置缺失、为零或非法时回填默认阈值。
 func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c == nil {
 		return
@@ -39,6 +61,7 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c.MaxRepeatCycleStreak <= 0 {
 		c.MaxRepeatCycleStreak = defaults.MaxRepeatCycleStreak
 	}
+	c.Assets.ApplyDefaults(defaults.Assets)
 }
 
 // Validate 校验 runtime 配置是否满足最小约束。
@@ -49,5 +72,50 @@ func (c RuntimeConfig) Validate() error {
 	if c.MaxRepeatCycleStreak <= 0 {
 		return errors.New("max_repeat_cycle_streak must be greater than 0")
 	}
+	if err := c.Assets.Validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ResolveSessionAssetLimits 归一化 runtime 附件限制并施加代码硬上限兜底。
+func (c RuntimeConfig) ResolveSessionAssetLimits() providertypes.SessionAssetLimits {
+	return c.Assets.ResolveSessionAssetLimits()
+}
+
+// Clone 复制附件限制配置，避免调用方共享可变状态。
+func (c RuntimeAssetsConfig) Clone() RuntimeAssetsConfig {
+	return c
+}
+
+// ApplyDefaults 在配置缺失、为零或非法时回填附件限制默认值。
+func (c *RuntimeAssetsConfig) ApplyDefaults(defaults RuntimeAssetsConfig) {
+	if c == nil {
+		return
+	}
+	if c.MaxSessionAssetBytes <= 0 {
+		c.MaxSessionAssetBytes = defaults.MaxSessionAssetBytes
+	}
+	if c.MaxSessionAssetsTotalBytes <= 0 {
+		c.MaxSessionAssetsTotalBytes = defaults.MaxSessionAssetsTotalBytes
+	}
+}
+
+// Validate 校验附件限制配置是否满足最小约束；0 表示使用默认值，仅禁止负数。
+func (c RuntimeAssetsConfig) Validate() error {
+	if c.MaxSessionAssetBytes < 0 {
+		return errors.New("runtime.assets.max_session_asset_bytes must be greater than or equal to 0")
+	}
+	if c.MaxSessionAssetsTotalBytes < 0 {
+		return errors.New("runtime.assets.max_session_assets_total_bytes must be greater than or equal to 0")
+	}
+	return nil
+}
+
+// ResolveSessionAssetLimits 归一化附件限制并应用代码硬上限。
+func (c RuntimeAssetsConfig) ResolveSessionAssetLimits() providertypes.SessionAssetLimits {
+	return providertypes.NormalizeSessionAssetLimits(providertypes.SessionAssetLimits{
+		MaxSessionAssetBytes:       c.MaxSessionAssetBytes,
+		MaxSessionAssetsTotalBytes: c.MaxSessionAssetsTotalBytes,
+	})
 }
