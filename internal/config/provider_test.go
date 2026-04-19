@@ -62,6 +62,50 @@ func TestResolveSelectedProviderNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveSelectedProviderIncludesRuntimeSessionAssetLimits(t *testing.T) {
+	const (
+		maxSingle = int64(128)
+		maxTotal  = int64(512)
+	)
+	envName := "TEST_PROVIDER_KEY"
+	t.Setenv(envName, "secret")
+
+	cfg := Config{
+		SelectedProvider: "custom",
+		Providers: []ProviderConfig{
+			{
+				Name:      "custom",
+				Driver:    "openaicompat",
+				BaseURL:   "https://llm.example.com/v1",
+				APIKeyEnv: envName,
+				Source:    ProviderSourceCustom,
+			},
+		},
+		Runtime: RuntimeConfig{
+			Assets: RuntimeAssetsConfig{
+				MaxSessionAssetBytes:       maxSingle,
+				MaxSessionAssetsTotalBytes: maxTotal,
+			},
+		},
+	}
+
+	resolved, err := ResolveSelectedProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveSelectedProvider() error = %v", err)
+	}
+
+	if resolved.SessionAssetLimits.MaxSessionAssetBytes != maxSingle {
+		t.Fatalf("expected MaxSessionAssetBytes=%d, got %d", maxSingle, resolved.SessionAssetLimits.MaxSessionAssetBytes)
+	}
+	if resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes != maxTotal {
+		t.Fatalf(
+			"expected MaxSessionAssetsTotalBytes=%d, got %d",
+			maxTotal,
+			resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes,
+		)
+	}
+}
+
 func TestProviderConfigIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -514,15 +558,23 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 			Model:   "server-default",
 		},
 		APIKey: "secret-key",
+		SessionAssetLimits: providertypes.SessionAssetLimits{
+			MaxSessionAssetBytes:       1024,
+			MaxSessionAssetsTotalBytes: 2048,
+		},
 	}
 
 	got := resolved.ToRuntimeConfig()
 	want := providerpkg.RuntimeConfig{
-		Name:                  "company-gateway",
-		Driver:                "openaicompat",
-		BaseURL:               "https://llm.example.com/v1",
-		DefaultModel:          "server-default",
-		APIKey:                "secret-key",
+		Name:         "company-gateway",
+		Driver:       "openaicompat",
+		BaseURL:      "https://llm.example.com/v1",
+		DefaultModel: "server-default",
+		APIKey:       "secret-key",
+		SessionAssetLimits: providertypes.SessionAssetLimits{
+			MaxSessionAssetBytes:       1024,
+			MaxSessionAssetsTotalBytes: 2048,
+		},
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}

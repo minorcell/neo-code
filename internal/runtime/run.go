@@ -263,7 +263,6 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		return turnSnapshot{}, false, err
 	}
 	providerRuntimeCfg := resolvedProvider.ToRuntimeConfig()
-	providerRuntimeCfg.SessionAssetLimits = cfg.Runtime.ResolveSessionAssetLimits()
 
 	state.mu.Lock()
 	streak := state.progress.LastScore.NoProgressStreak
