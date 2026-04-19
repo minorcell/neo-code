@@ -1,10 +1,11 @@
-package tui
+﻿package tui
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,13 +49,20 @@ const providerAddNonPersistentEnvWarning = "API key is applied to the current pr
 const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n    \"name\": \"Model Name\"\n  }\n]"
 
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
+const logViewerEntryLimit = 500
+const logViewerPersistDir = "log-viewer"
+const footerErrorFlashDuration = 4 * time.Second
 
-var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
+var panelOrder = []panel{panelTranscript, panelInput}
 var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
+var persistProviderUserEnvVar = config.PersistUserEnvVar
+var deleteProviderUserEnvVar = config.DeleteUserEnvVar
+var lookupProviderUserEnvVar = config.LookupUserEnvVar
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var spinCmd tea.Cmd
+	a.syncFooterErrorToast()
 	a.spinner, spinCmd = a.spinner.Update(msg)
 	if a.isBusy() {
 		cmds = append(cmds, spinCmd)
@@ -217,6 +225,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 	case tea.MouseMsg:
+		if a.logViewerVisible && a.handleLogViewerMouse(typed) {
+			return a, tea.Batch(cmds...)
+		}
 		if a.handleTranscriptMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
@@ -248,6 +259,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
+		if a.logViewerVisible {
+			if handled := a.handleLogViewerKey(typed); handled {
+				return a, tea.Batch(cmds...)
+			}
+		}
 
 		if a.focus == panelInput {
 			if cmd, handled := a.updateCommandMenuSelection(typed); handled {
@@ -275,6 +291,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
+			if a.logViewerVisible {
+				a.logViewerVisible = false
+				a.state.StatusText = statusReady
+				a.applyComponentLayout(false)
+				return a, tea.Batch(cmds...)
+			}
 			a.focus = panelInput
 			a.applyFocus()
 			return a, tea.Batch(cmds...)
@@ -289,6 +311,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.state.StatusText = err.Error()
 				a.appendActivity("multimodal", "Failed to paste image", err.Error(), true)
 			}
+			return a, tea.Batch(cmds...)
+		}
+
+		if key.Matches(typed, a.keys.LogViewer) {
+			a.logViewerVisible = !a.logViewerVisible
+			if a.logViewerVisible {
+				a.logViewerOffset = 0
+			}
+			a.viewDirty = true
+			if a.logViewerVisible {
+				a.state.StatusText = "Log viewer"
+			} else {
+				a.state.StatusText = statusReady
+			}
+			a.applyComponentLayout(false)
 			return a, tea.Batch(cmds...)
 		}
 
@@ -479,8 +516,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			// image capability precheck is intentionally disabled.
-			// 保持与 CLI 一致，先允许输入提交流转，再由后续链路统一处理能力兜底。
-			a.input.Reset()
+			// 淇濇寔涓?CLI 涓€鑷达紝鍏堝厑璁歌緭鍏ユ彁浜ゆ祦杞紝鍐嶇敱鍚庣画閾捐矾缁熶竴澶勭悊鑳藉姏鍏滃簳銆?			a.input.Reset()
 			a.state.InputText = ""
 			a.applyComponentLayout(true)
 			a.refreshCommandMenu()
@@ -794,6 +830,7 @@ func (a *App) refreshMessages() error {
 		a.activeMessages = nil
 		a.clearActivities()
 		a.clearTodos()
+		a.loadLogEntriesForSession("")
 		return nil
 	}
 
@@ -807,6 +844,7 @@ func (a *App) refreshMessages() error {
 	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
 	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
+	a.loadLogEntriesForSession(session.ID)
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
@@ -865,7 +903,7 @@ func (a *App) activateSelectedSession() error {
 		return err
 	}
 
-	a.state.ActiveSessionID = item.Summary.ID
+	a.setActiveSessionID(item.Summary.ID)
 	a.state.ActiveSessionTitle = item.Summary.Title
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
@@ -879,7 +917,7 @@ func (a *App) activateSessionByID(sessionID string) error {
 	}
 	for _, s := range a.state.Sessions {
 		if s.ID == sessionID {
-			a.state.ActiveSessionID = s.ID
+			a.setActiveSessionID(s.ID)
 			a.state.ActiveSessionTitle = s.Title
 			a.state.ExecutionError = ""
 			a.state.CurrentTool = ""
@@ -972,7 +1010,7 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸婵炴潙鍚嬫穱娲儊閼恒儳鈻斿┑鐘辫兌閻熸捇鏌￠崒姘闁绘搫绱曢幏鐘诲閿濆懎骞嬮梺鍛婃⒐缁嬪繘鍩€
+// runtimeSessionContextSource 缂傚倷鐒﹂幏婵嬫⒔閸曨偒鐒芥い鎰剁畱閻銇勯弽顐汗闁稿鎸诲鍕沪閸撗勬濠电偞娼欓崥瀣┍濞差亝鍎婇柤鎭掑劤閳绘柨鈹戦悩杈厡闁荤喐鎹囬弻锟犲磼濮橆厼顦╅梺缁樻惈缁辨洟骞忛悩璇差潊闁挎繂鎳庨獮瀣⒑閸涘﹥鈷愮紒瀣箻閸┾偓
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
@@ -1026,7 +1064,7 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 婵犮垼娉涚€氼噣骞冩繝鍥ц埞妞ゆ牗鐟ч杈╃磽娴ｅ摜澧涙い鎺撶⊕缁傚秶鈧綆浜為弶钘壝瑰鍐惧剮婵炲棎鍨芥俊
+// runtimeEventStopReasonDecidedHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崶褑鍩炲銈嗙墬閻熝囶敂鏉堚晝纾藉ù锝呮憸婢ф稒銇勯幒鎾垛姇缂佸倸绉堕埀顒婄秵娴滅偤寮堕挊澹濈懓顭ㄩ崘鎯у壆濠电偛妫庨崹鑺ヤ繆
 func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
 	if !ok {
@@ -1223,7 +1261,7 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 		a.state.ActiveRunID = runID
 	}
 	if sessionID := strings.TrimSpace(event.SessionID); sessionID != "" {
-		a.state.ActiveSessionID = sessionID
+		a.setActiveSessionID(sessionID)
 	}
 	a.state.StatusText = statusThinking
 	a.state.StreamingReply = false
@@ -1259,7 +1297,7 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 	mapped := tuiservices.MapRunContextPayload(event.RunID, event.SessionID, payload)
 	a.state.RunContext = mapped
 	if strings.TrimSpace(mapped.SessionID) != "" {
-		a.state.ActiveSessionID = strings.TrimSpace(mapped.SessionID)
+		a.setActiveSessionID(mapped.SessionID)
 	}
 	if strings.TrimSpace(mapped.RunID) != "" {
 		a.state.ActiveRunID = mapped.RunID
@@ -1303,7 +1341,7 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟偡濞嗗繐顏╅柛銊︾箞濮婂ジ鎳滃▓鍨杸婵炲瓨绮岄鍕枎閵忋倕违
+// runtimeEventToolCallThinkingHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崒銈呮櫊闂侀潧顦崕鍗烆嚗閺冨牊鍋℃繛鍡楃箰椤忊晠鏌涢妸锔剧疄婵﹤銈搁幊婊冣枔閸喗鏉稿┑鐐茬摠缁矂顢栭崟顐熸瀻闁靛繈鍊曡繚
 func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -1313,7 +1351,7 @@ func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent
 	return false
 }
 
-// runtimeEventToolStartHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃傗偓娈垮枓閸嬫挸鈹戦纰卞剱濠⒀呮櫕閹壆浠﹂懖鈺冩婵炲濮剧紙浼村焵
+// runtimeEventToolStartHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崒銈呮櫊闂侀潧顦崕鍗烆嚗閺冨倵鍋撳▓鍨灀闁稿鎸搁埞鎴︻敊绾板崬鍓辨繝鈷€鍛珪闁诡喗澹嗘禒锕傛嚃閳哄啯顓诲┑鐐差嚟婵墽绱欐导鏉戠劦
 func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusRunningTool
 	a.state.StreamingReply = false
@@ -1349,7 +1387,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return true
 }
 
-// runtimeEventAgentChunkHandler 婵犮垼娉涚€氼噣骞冩繝鍋界喖鍨惧畷鍥ｅ亾瀹勬噴瑙勬媴閸濄儳顢呮繝鈷€鍛槐闁革絿鍎ゅ蹇涘箻閸愬弶鐦旈梺
+// runtimeEventAgentChunkHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崑鐣屽枛閸ㄦ儳鐣烽崶锝呬壕鐎瑰嫭鍣寸憴鍕闁告縿鍎抽、鍛節閳封偓閸涱厺妲愰梺闈╃悼閸庛倕顭囪箛娑樼闁告劕寮堕惁鏃堟⒑
 func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(string)
 	if !ok {
@@ -1370,7 +1408,7 @@ func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventAgentDoneHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫倵閻熺増婀伴柛銊︾缁傚秶鈧絺鏅滈浠嬫煏
+// runtimeEventAgentDoneHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崘鈺€姘﹂梺褰掑亰閸ㄥジ寮ㄦ禒瀣€甸柣鐔哄濠€浼存煕閵婏妇顣茬紒鍌氱Ф閳ь剨绲洪弲婊堫敃娴犲鐓
 func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -1404,7 +1442,7 @@ func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventErrorHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫煛閸愩劎鍩ｉ柡浣革功閹风娀顢涘▎鎴犳婵炲濮剧紙浼村焵
+// runtimeEventErrorHandler 濠电姰鍨煎▔娑氣偓姘煎櫍楠炲啯绻濋崘鈺€姘﹂梺褰掑亰閸ㄥジ寮ㄦ禒瀣厸闁告劑鍔庨崺锝夋煛娴ｉ潻鍔熼柟椋庡█椤㈡稑鈻庨幋鐘愁吇濠电偛顕慨鍓х礄娴兼潙鐒
 func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusError
 	a.state.IsAgentRunning = false
@@ -1489,7 +1527,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 	return false
 }
 
-// refreshPermissionPromptLayout 闂侀潻璐熼崝宀€绮╂搴濇勃闁逞屽墮椤斿繘骞撻幒鎴犱淮婵犳鍠栭鍛偓鍨叀瀵喚鎹勯崫鍕幈闂佸搫鍊绘晶妤€顭囬崼銉︹挃闁规壆澧楀銊╂煛婢跺孩纭舵繛鏉戭樀瀹曟鎼归銏㈢懇闂佺粯顨呴悧鍕焵
+// refreshPermissionPromptLayout 闂備線娼荤拹鐔煎礉瀹€鈧划鈺傤槹鎼存繃鍕冮梺閫炲苯澧い鏂跨箻楠炴捇骞掗幋鐘辨樊濠电姵顔栭崰鏍敄閸涱垪鍋撻崹顐ゅ弨鐎殿噮鍠氶幑鍕传閸曨厼骞堥梻浣告惈閸婄粯鏅跺Δ鈧…鍥醇閵夛腹鎸冮梺瑙勫婢ф顩奸妸鈺傜厸濠㈣泛瀛╃涵鑸电箾閺夋埈妯€鐎规洘顨婇幖褰掝敃閵忋垻鎳囬梻浣虹帛椤ㄥ懘鎮ч崟顖氱劦
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -1576,8 +1614,37 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	if len(a.activities) > maxActivityEntries {
 		a.activities = a.activities[len(a.activities)-maxActivityEntries:]
 	}
+	if isError {
+		a.showFooterError(fallbackText(detail, title))
+	}
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
+	a.addLogEntry(kind, title, detail)
+}
+
+func (a *App) syncFooterErrorToast() {
+	current := strings.TrimSpace(a.state.ExecutionError)
+	if current == "" {
+		a.footerErrorLast = ""
+		return
+	}
+	if strings.EqualFold(current, a.footerErrorLast) {
+		return
+	}
+	a.footerErrorLast = current
+	a.showFooterError(current)
+}
+
+func (a *App) showFooterError(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(message), "error:") {
+		message = "Error: " + message
+	}
+	a.footerErrorText = message
+	a.footerErrorUntil = a.now().Add(footerErrorFlashDuration)
 }
 
 func (a *App) clearActivities() {
@@ -1587,6 +1654,30 @@ func (a *App) clearActivities() {
 	}
 	a.activities = nil
 	a.syncActivityViewport(previousCount)
+}
+
+func (a *App) addLogEntry(kind string, title string, detail string) {
+	level := "info"
+	if strings.Contains(title, "error") || strings.Contains(title, "Error") || strings.Contains(title, "failed") {
+		level = "error"
+	} else if strings.Contains(title, "warn") || strings.Contains(title, "Warn") {
+		level = "warn"
+	}
+
+	a.logEntries = append(a.logEntries, logEntry{
+		Timestamp: time.Now(),
+		Level:     level,
+		Source:    kind,
+		Message:   title + ": " + detail,
+	})
+
+	a.logEntries = clampLogEntries(a.logEntries)
+	_, _, _, height := a.logViewerBounds()
+	maxOffset := a.logViewerMaxOffset(height)
+	if a.logViewerOffset > maxOffset {
+		a.logViewerOffset = maxOffset
+	}
+	a.persistLogEntriesForActiveSession()
 }
 
 func (a *App) syncActivityViewport(previousCount int) {
@@ -1624,7 +1715,91 @@ func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
 	}
 }
 
+func (a *App) handleLogViewerKey(msg tea.KeyMsg) bool {
+	_, _, _, height := a.logViewerBounds()
+	rows := a.logViewerRows(height)
+
+	switch {
+	case key.Matches(msg, a.keys.LogViewer), key.Matches(msg, a.keys.FocusInput):
+		a.logViewerVisible = false
+		a.state.StatusText = statusReady
+		a.applyComponentLayout(false)
+		a.viewDirty = true
+	case key.Matches(msg, a.keys.ScrollUp):
+		a.scrollLogViewer(-1, height)
+	case key.Matches(msg, a.keys.ScrollDown):
+		a.scrollLogViewer(1, height)
+	case key.Matches(msg, a.keys.PageUp):
+		a.scrollLogViewer(-rows, height)
+	case key.Matches(msg, a.keys.PageDown):
+		a.scrollLogViewer(rows, height)
+	case key.Matches(msg, a.keys.Top):
+		if a.logViewerOffset != 0 {
+			a.logViewerOffset = 0
+			a.viewDirty = true
+		}
+	case key.Matches(msg, a.keys.Bottom):
+		maxOffset := a.logViewerMaxOffset(height)
+		if a.logViewerOffset != maxOffset {
+			a.logViewerOffset = maxOffset
+			a.viewDirty = true
+		}
+	}
+	return true
+}
+
+func (a *App) handleLogViewerMouse(msg tea.MouseMsg) bool {
+	if !a.isMouseWithinLogViewer(msg) {
+		return true
+	}
+
+	_, _, _, height := a.logViewerBounds()
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
+		a.scrollLogViewer(-1, height)
+	case msg.Button == tea.MouseButtonWheelDown && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelDown):
+		a.scrollLogViewer(1, height)
+	}
+	return true
+}
+
+func (a *App) scrollLogViewer(delta int, height int) {
+	if delta == 0 {
+		return
+	}
+	next := a.logViewerOffset + delta
+	if next < 0 {
+		next = 0
+	}
+	maxOffset := a.logViewerMaxOffset(height)
+	if next > maxOffset {
+		next = maxOffset
+	}
+	if next != a.logViewerOffset {
+		a.logViewerOffset = next
+		a.viewDirty = true
+	}
+}
+
 func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
+	if a.transcriptScrollbarDrag {
+		switch {
+		case msg.Action == tea.MouseActionMotion:
+			a.setTranscriptOffsetFromScrollbarY(msg.Y)
+			return true
+		case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
+			a.transcriptScrollbarDrag = false
+			a.setTranscriptOffsetFromScrollbarY(msg.Y)
+			return true
+		}
+	}
+
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress && a.isMouseWithinTranscriptScrollbar(msg) {
+		a.transcriptScrollbarDrag = true
+		a.setTranscriptOffsetFromScrollbarY(msg.Y)
+		return true
+	}
+
 	switch {
 	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
 		if !a.isMouseWithinTranscript(msg) {
@@ -1643,13 +1818,12 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	if !a.isMouseWithinTranscript(msg) {
 		if msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease {
 			a.pendingCopyID = 0
+			a.transcriptScrollbarDrag = false
 		}
 		return false
 	}
 
 	switch {
-	case msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion:
-		return false
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 		if buttonID, ok := a.copyButtonIDAtMouse(msg); ok {
 			a.pendingCopyID = buttonID
@@ -1682,8 +1856,38 @@ func (a App) isMouseWithinTranscript(msg tea.MouseMsg) bool {
 	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
 }
 
-func (a App) transcriptBounds() (int, int, int, int) {
+func (a App) isMouseWithinTranscriptScrollbar(msg tea.MouseMsg) bool {
+	x, y, width, height := a.transcriptScrollbarBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) isMouseWithinLogViewer(msg tea.MouseMsg) bool {
+	x, y, width, height := a.logViewerBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) logViewerBounds() (int, int, int, int) {
 	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	return contentX, contentY + headerBarHeight, lay.contentWidth, lay.contentHeight
+}
+
+func (a App) logViewerRows(height int) int {
+	return max(1, height-5)
+}
+
+func (a App) logViewerMaxOffset(height int) int {
+	return max(0, len(a.logEntries)-a.logViewerRows(height))
+}
+
+func (a App) transcriptBounds() (int, int, int, int) {
 	contentX := a.styles.doc.GetPaddingLeft()
 	contentY := a.styles.doc.GetPaddingTop()
 	headerHeight := headerBarHeight
@@ -1692,7 +1896,16 @@ func (a App) transcriptBounds() (int, int, int, int) {
 	streamX := contentX
 	streamY := bodyY
 
-	return streamX, streamY, lay.contentWidth, a.transcript.Height
+	return streamX, streamY, a.transcript.Width, a.transcript.Height
+}
+
+func (a App) transcriptScrollbarBounds() (int, int, int, int) {
+	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	bodyY := contentY + headerBarHeight
+	scrollbarWidth := max(0, lay.contentWidth-a.transcript.Width)
+	return contentX + a.transcript.Width, bodyY, scrollbarWidth, a.transcript.Height
 }
 
 func (a App) isMouseWithinInput(msg tea.MouseMsg) bool {
@@ -1997,11 +2210,11 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	prevTodoWidth := a.todo.Width
 	prevTodoHeight := a.todo.Height
 	a.help.ShowAll = a.state.ShowHelp
-	a.transcript.Width = lay.contentWidth
+	a.transcript.Width = max(1, lay.contentWidth-a.transcriptScrollbarWidth(lay.contentWidth))
 	a.resizeCommandMenu()
 	a.input.SetWidth(a.composerInnerWidth(lay.contentWidth))
 	a.input.SetHeight(a.composerHeight())
-	transcriptHeight, activityHeight, _, todoHeight := a.waterfallMetrics(a.transcript.Width, lay.contentHeight)
+	transcriptHeight, activityHeight, _, todoHeight := a.waterfallMetrics(lay.contentWidth, lay.contentHeight)
 	a.transcript.Height = transcriptHeight
 
 	if activityHeight > 0 {
@@ -2046,7 +2259,7 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.fileBrowser.SetHeight(max(pickerListMinHeight, pickerLayout.listHeight))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
-	} else if a.transcript.AtBottom() || a.isBusy() {
+	} else if a.transcript.AtBottom() {
 		a.transcript.GotoBottom()
 	}
 	if prevActivityWidth != a.activity.Width || prevActivityHeight != a.activity.Height {
@@ -2087,7 +2300,7 @@ func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
 		a.setCodeCopyBlocks(nil)
-		a.transcript.SetContent(a.styles.empty.Width(width).Render(emptyConversationText))
+		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
 		a.transcript.GotoTop()
 		return
 	}
@@ -2110,10 +2323,20 @@ func (a *App) rebuildTranscript() {
 	}
 	a.setCodeCopyBlocks(copyButtons)
 
-	a.transcript.SetContent(strings.Join(blocks, "\n\n"))
-	if atBottom || a.state.IsAgentRunning {
+	a.setTranscriptContent(strings.Join(blocks, "\n\n"))
+	if atBottom {
 		a.transcript.GotoBottom()
 	}
+}
+
+func (a *App) setTranscriptContent(content string) {
+	normalized := normalizeTranscriptForDisplay(content)
+	a.transcriptContent = normalized
+	a.transcript.SetContent(normalized)
+}
+
+func normalizeTranscriptForDisplay(content string) string {
+	return strings.ReplaceAll(content, "\t", "    ")
 }
 
 func (a *App) rebuildActivity() {
@@ -2273,7 +2496,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 }
 
 func (a *App) startDraftSession() {
-	a.state.ActiveSessionID = ""
+	a.setActiveSessionID("")
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
@@ -2355,6 +2578,152 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 		agentruntime.CompactInput{SessionID: sessionID},
 		func(err error) tea.Msg { return compactFinishedMsg{Err: err} },
 	)
+}
+
+func (a *App) setActiveSessionID(sessionID string) {
+	next := strings.TrimSpace(sessionID)
+	current := strings.TrimSpace(a.state.ActiveSessionID)
+	if strings.EqualFold(current, next) {
+		a.state.ActiveSessionID = next
+		return
+	}
+
+	previousEntries := a.logEntries
+	a.state.ActiveSessionID = next
+	if next == "" {
+		a.loadLogEntriesForSession("")
+		return
+	}
+
+	loaded := a.readLogEntriesForSession(next)
+	if current == "" && len(previousEntries) > 0 {
+		loaded = append(loaded, previousEntries...)
+		loaded = clampLogEntries(loaded)
+	}
+	a.logEntries = loaded
+	a.logViewerOffset = 0
+	a.clampLogViewerOffset()
+	if current == "" && len(previousEntries) > 0 {
+		a.persistLogEntriesForActiveSession()
+	}
+}
+
+func (a *App) loadLogEntriesForSession(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		a.logEntries = nil
+		a.logViewerOffset = 0
+		return
+	}
+	a.logEntries = a.readLogEntriesForSession(sessionID)
+	a.logViewerOffset = 0
+	a.clampLogViewerOffset()
+}
+
+func (a *App) readLogEntriesForSession(sessionID string) []logEntry {
+	logPath := a.sessionLogEntriesPath(sessionID)
+	if logPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil
+	}
+	var entries []logEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+	return clampLogEntries(entries)
+}
+
+func (a *App) persistLogEntriesForActiveSession() {
+	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	if sessionID == "" {
+		return
+	}
+
+	logPath := a.sessionLogEntriesPath(sessionID)
+	if logPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return
+	}
+	payload, err := json.Marshal(clampLogEntries(a.logEntries))
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(logPath, payload, 0o600)
+}
+
+func (a App) sessionLogEntriesPath(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	baseDir := strings.TrimSpace(a.configManager.BaseDir())
+	if sessionID == "" || baseDir == "" {
+		return ""
+	}
+	name := sanitizeSessionIDForFilename(sessionID)
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(baseDir, logViewerPersistDir, name+".json")
+}
+
+func sanitizeSessionIDForFilename(sessionID string) string {
+	var b strings.Builder
+	for _, r := range sessionID {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	return strings.TrimSpace(strings.Trim(b.String(), "_"))
+}
+
+func clampLogEntries(entries []logEntry) []logEntry {
+	if len(entries) <= logViewerEntryLimit {
+		return entries
+	}
+	return append([]logEntry(nil), entries[len(entries)-logViewerEntryLimit:]...)
+}
+
+func (a *App) clampLogViewerOffset() {
+	_, _, _, height := a.logViewerBounds()
+	maxOffset := a.logViewerMaxOffset(height)
+	if a.logViewerOffset > maxOffset {
+		a.logViewerOffset = maxOffset
+	}
+}
+
+func (a App) transcriptMaxOffset() int {
+	return max(0, a.transcript.TotalLineCount()-a.transcript.VisibleLineCount())
+}
+
+func (a *App) setTranscriptOffsetFromScrollbarY(mouseY int) {
+	_, y, _, height := a.transcriptScrollbarBounds()
+	if height <= 0 {
+		return
+	}
+	maxOffset := a.transcriptMaxOffset()
+	if maxOffset <= 0 {
+		a.transcript.SetYOffset(0)
+		return
+	}
+	relative := mouseY - y
+	if relative < 0 {
+		relative = 0
+	}
+	if relative >= height {
+		relative = height - 1
+	}
+
+	denominator := max(1, height-1)
+	target := (relative*maxOffset + denominator/2) / denominator
+	target = max(0, min(target, maxOffset))
+	if target != a.transcript.YOffset {
+		a.transcript.SetYOffset(target)
+	}
 }
 
 // isBusy reports whether an agent run or compact operation is in progress.
@@ -2493,7 +2862,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 	return fields[form.Step]
 }
 
-// isProviderAddEnumField 判断当前新增 Provider 表单焦点是否在枚举字段（Driver/Model Source）。
+// isProviderAddEnumField 鍒ゆ柇褰撳墠鏂板 Provider 琛ㄥ崟鐒︾偣鏄惁鍦ㄦ灇涓惧瓧娈碉紙Driver/Model Source锛夈€
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
 	case providerAddFieldDriver, providerAddFieldModelSource:
@@ -2807,7 +3176,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	return request, ""
 }
 
-// sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染配置字段。
+// sanitizeProviderAddInputRunes 杩囨护 provider 琛ㄥ崟杈撳叆涓殑鎺у埗瀛楃锛岄伩鍏嶄笉鍙瀛楃姹℃煋閰嶇疆瀛楁銆
 func sanitizeProviderAddInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -2824,7 +3193,7 @@ func sanitizeProviderAddInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// sanitizeProviderAddJSONInputRunes 过滤不可见格式控制字符，保留 JSON 编辑需要的换行与制表符。
+// sanitizeProviderAddJSONInputRunes 杩囨护涓嶅彲瑙佹牸寮忔帶鍒跺瓧绗︼紝淇濈暀 JSON 缂栬緫闇€瑕佺殑鎹㈣涓庡埗琛ㄧ銆
 func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -2847,7 +3216,7 @@ func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// normalizeProviderAddFieldValue 对 provider 表单字段做统一清理，去除控制字符并裁剪首尾空白。
+// normalizeProviderAddFieldValue 瀵?provider 琛ㄥ崟瀛楁鍋氱粺涓€娓呯悊锛屽幓闄ゆ帶鍒跺瓧绗﹀苟瑁佸壀棣栧熬绌虹櫧銆
 func normalizeProviderAddFieldValue(value string) string {
 	return strings.TrimSpace(sanitizeProviderAddInputRunes([]rune(value)))
 }
@@ -2963,3 +3332,6 @@ func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {
 		a.appendActivity("system", "Failed to refresh models", err.Error(), true)
 	}
 }
+
+
+

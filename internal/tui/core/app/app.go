@@ -23,6 +23,13 @@ import (
 	tuistate "neo-code/internal/tui/state"
 )
 
+type logEntry struct {
+	Timestamp time.Time
+	Level     string
+	Source    string
+	Message   string
+}
+
 type panel = tuistate.Panel
 
 const (
@@ -122,6 +129,14 @@ type appRuntimeState struct {
 	cachedWidth             int
 	cachedHeight            int
 	viewDirty               bool
+	logViewerVisible        bool
+	logViewerOffset         int
+	logEntries              []logEntry
+	transcriptContent       string
+	transcriptScrollbarDrag bool
+	footerErrorLast         string
+	footerErrorText         string
+	footerErrorUntil        time.Time
 }
 
 type pendingImageAttachment struct {
