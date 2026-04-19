@@ -42,7 +42,7 @@ type customProviderFile struct {
 
 type customProviderModelFile struct {
 	ID              string `yaml:"id"`
-	Name            string `yaml:"name,omitempty"`
+	Name            string `yaml:"name"`
 	ContextWindow   *int   `yaml:"context_window,omitempty"`
 	MaxOutputTokens *int   `yaml:"max_output_tokens,omitempty"`
 }
@@ -248,6 +248,10 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 		if id == "" {
 			return nil, fmt.Errorf("models[%d].id is empty", index)
 		}
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			return nil, fmt.Errorf("models[%d].name is empty", index)
+		}
 
 		key := provider.NormalizeKey(id)
 		if _, exists := seen[key]; exists {
@@ -257,7 +261,7 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 
 		descriptor := providertypes.ModelDescriptor{
 			ID:   id,
-			Name: strings.TrimSpace(model.Name),
+			Name: name,
 		}
 		if model.ContextWindow != nil {
 			if *model.ContextWindow <= 0 {
@@ -409,7 +413,11 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	if modelSource == "" {
 		modelSource = provider.ModelSourceDiscover
 	}
-	normalizedModels := providertypes.MergeModelDescriptors(input.Models)
+	normalizedInputModels, err := validateModelDescriptorsRequireName(input.Models)
+	if err != nil {
+		return err
+	}
+	normalizedModels := providertypes.MergeModelDescriptors(normalizedInputModels)
 	if modelSource == provider.ModelSourceManual {
 		discoveryEndpointPath = ""
 		discoveryResponseProfile = ""
@@ -496,6 +504,35 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	}
 
 	return nil
+}
+
+// validateModelDescriptorsRequireName 校验模型描述的 id/name 必填，拒绝 name 缺省回填为 id。
+func validateModelDescriptorsRequireName(
+	models []providertypes.ModelDescriptor,
+) ([]providertypes.ModelDescriptor, error) {
+	if len(models) == 0 {
+		return nil, nil
+	}
+	normalized := make([]providertypes.ModelDescriptor, 0, len(models))
+	for index, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			return nil, fmt.Errorf("config: models[%d].id is empty", index)
+		}
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			return nil, fmt.Errorf("config: models[%d].name is empty", index)
+		}
+		normalized = append(normalized, providertypes.ModelDescriptor{
+			ID:              id,
+			Name:            name,
+			Description:     strings.TrimSpace(model.Description),
+			ContextWindow:   model.ContextWindow,
+			MaxOutputTokens: model.MaxOutputTokens,
+			CapabilityHints: model.CapabilityHints,
+		})
+	}
+	return normalized, nil
 }
 
 // toCustomProviderModelFiles 将模型描述列表转换为 custom provider.yaml 可持久化格式。

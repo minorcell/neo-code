@@ -661,6 +661,7 @@ driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
+    name: DeepSeek Coder
     context_window: 0
 openai_compatible:
   base_url: https://llm.example.com/v1
@@ -690,6 +691,7 @@ driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
+    name: DeepSeek Coder
     max_output_tokens: 0
 openai_compatible:
   base_url: https://llm.example.com/v1
@@ -719,7 +721,9 @@ driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
+    name: DeepSeek Coder
   - id: DeepSeek-Coder
+    name: DeepSeek Coder Duplicate
 openai_compatible:
   base_url: https://llm.example.com/v1
 `
@@ -1265,6 +1269,24 @@ func TestSaveCustomProviderRejectsManualSourceWithoutModels(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "manual model source requires non-empty models") {
 		t.Fatalf("expected manual source empty models validation error, got %v", err)
+	}
+}
+
+func TestSaveCustomProviderRejectsModelWithoutName(t *testing.T) {
+	t.Parallel()
+
+	err := SaveCustomProviderWithModels(t.TempDir(), SaveCustomProviderInput{
+		Name:        "manual-missing-model-name",
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "MANUAL_MISSING_MODEL_NAME_API_KEY",
+		ModelSource: provider.ModelSourceManual,
+		Models: []providertypes.ModelDescriptor{
+			{ID: "manual-model-1"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "models[0].name is empty") {
+		t.Fatalf("expected empty model name validation error, got %v", err)
 	}
 }
 
