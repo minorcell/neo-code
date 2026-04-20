@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
+
+const errorPrefix = "openaicompat provider: "
 
 const maxSessionAssetReadBytes = providertypes.MaxSessionAssetBytes
 const maxSessionAssetsTotalBytes = providertypes.MaxSessionAssetsTotalBytes
@@ -66,7 +67,7 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 				Function: FunctionDefinition{
 					Name:        spec.Name,
 					Description: spec.Description,
-					Parameters:  normalizeToolSchemaForOpenAI(spec.Schema),
+					Parameters:  provider.NormalizeToolSchemaObject(spec.Schema),
 				},
 			}
 			payload.Tools = append(payload.Tools, def)
@@ -78,37 +79,8 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 
 // normalizeToolSchemaForOpenAI 归一化工具参数 schema，避免修改调用方原始结构并尽量保持语义。
 // 仅在缺失 schema 或明显非法（非 object 顶层）时做最小兼容降级，不再删除顶层组合约束关键字。
-func normalizeToolSchemaForOpenAI(schema map[string]any) map[string]any {
-	normalized := cloneSchemaTopLevel(schema)
-	if len(normalized) == 0 {
-		return map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}
-	}
-
-	typeName, _ := normalized["type"].(string)
-	if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
-		normalized["type"] = "object"
-	}
-
-	if _, ok := normalized["properties"].(map[string]any); !ok {
-		normalized["properties"] = map[string]any{}
-	}
-	return normalized
-}
 
 // cloneSchemaTopLevel 复制 schema 顶层 map，避免归一化阶段修改调用方原始结构。
-func cloneSchemaTopLevel(schema map[string]any) map[string]any {
-	if len(schema) == 0 {
-		return map[string]any{}
-	}
-	cloned := make(map[string]any, len(schema))
-	for key, value := range schema {
-		cloned[key] = value
-	}
-	return cloned
-}
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。
 func ToOpenAIMessage(ctx context.Context, message providertypes.Message, assetReader providertypes.SessionAssetReader) (Message, error) {
@@ -239,62 +211,16 @@ func resolveSessionAssetDataURL(
 	remainingBudget int64,
 	assetLimits providertypes.SessionAssetLimits,
 ) (string, int64, error) {
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
+	normalizedMime, data, readBytes, err := provider.ReadSessionAssetImage(
+		ctx,
+		assetReader,
+		asset,
+		remainingBudget,
+		assetLimits,
+	)
+	if err != nil {
 		return "", 0, err
 	}
-	if remainingBudget <= 0 {
-		return "", 0, fmt.Errorf(
-			"session_asset total exceeds %d bytes",
-			normalizedAssetLimits.MaxSessionAssetsTotalBytes,
-		)
-	}
-	reader, mimeType, err := assetReader.Open(ctx, asset.ID)
-	if err != nil {
-		return "", 0, fmt.Errorf("open session_asset %q: %w", asset.ID, err)
-	}
-	defer func() { _ = reader.Close() }()
-
-	readLimit := normalizedAssetLimits.MaxSessionAssetBytes
-	if remainingBudget < readLimit {
-		readLimit = remainingBudget
-	}
-
-	data, err := io.ReadAll(io.LimitReader(reader, readLimit+1))
-	if err != nil {
-		return "", 0, fmt.Errorf("read session_asset %q: %w", asset.ID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", 0, err
-	}
-	if int64(len(data)) > readLimit {
-		if readLimit < normalizedAssetLimits.MaxSessionAssetBytes {
-			return "", 0, fmt.Errorf(
-				"session_asset total exceeds %d bytes",
-				normalizedAssetLimits.MaxSessionAssetsTotalBytes,
-			)
-		}
-		return "", 0, fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, normalizedAssetLimits.MaxSessionAssetBytes)
-	}
-	if len(data) == 0 {
-		return "", 0, fmt.Errorf("session_asset %q is empty", asset.ID)
-	}
-
-	resolvedMime := strings.TrimSpace(mimeType)
-	if resolvedMime == "" {
-		resolvedMime = strings.TrimSpace(asset.MimeType)
-	}
-	normalizedMime := strings.ToLower(resolvedMime)
-	if normalizedMime == "" {
-		return "", 0, fmt.Errorf("session_asset %q missing mime type", asset.ID)
-	}
-	if !strings.HasPrefix(normalizedMime, "image/") {
-		return "", 0, fmt.Errorf("session_asset %q has unsupported mime type %q", asset.ID, resolvedMime)
-	}
-
 	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), int64(len(data)), nil
+	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), readBytes, nil
 }

@@ -48,24 +48,32 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
 	if normalized.ModelSource == provider.ModelSourceManual {
 		normalizedDiscoveryEndpointPath = ""
+	} else if strings.TrimSpace(normalizedDiscoveryEndpointPath) == "" {
+		return SaveCustomProviderInput{}, fmt.Errorf(
+			"config: provider %q model_source discover requires discovery_endpoint_path; "+
+				"if provider does not expose discover endpoint, set model_source to manual",
+			normalized.Name,
+		)
 	}
 
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+	chatEndpointPath, err := provider.NormalizeProviderChatEndpointPath(normalized.ChatEndpointPath)
+	if err != nil {
+		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider chat endpoint path: %w", err)
+	}
+	discoveryEndpointPath, _, err := provider.NormalizeProviderDiscoverySettings(
 		normalized.Driver,
-		"",
-		normalized.ChatEndpointPath,
-		"",
 		normalizedDiscoveryEndpointPath,
-		"",
-		"",
-		"",
 		"",
 	)
 	if err != nil {
-		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider protocol settings: %w", err)
+		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider discovery settings: %w", err)
 	}
 
-	normalized.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
+	if normalized.Driver == provider.DriverOpenAICompat {
+		normalized.ChatEndpointPath = chatEndpointPath
+	} else {
+		normalized.ChatEndpointPath = ""
+	}
 	if normalized.ModelSource == provider.ModelSourceManual {
 		if len(normalized.Models) == 0 {
 			return SaveCustomProviderInput{}, fmt.Errorf(
@@ -77,7 +85,14 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		return normalized, nil
 	}
 
-	normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+	if strings.TrimSpace(discoveryEndpointPath) == "" {
+		return SaveCustomProviderInput{}, fmt.Errorf(
+			"config: provider %q model_source discover requires discovery_endpoint_path; "+
+				"if provider does not expose discover endpoint, set model_source to manual",
+			normalized.Name,
+		)
+	}
+	normalized.DiscoveryEndpointPath = discoveryEndpointPath
 	return normalized, nil
 }
 

@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -88,26 +89,21 @@ func TestProviderGenerate(t *testing.T) {
 	}
 }
 
-func TestResolveGeminiStreamEndpoint(t *testing.T) {
+func TestNewAcceptsCustomChatEndpointPath(t *testing.T) {
 	t.Parallel()
 
-	endpoint, err := resolveGeminiStreamEndpoint("https://api.example.com/v1beta", "", "gemini-flash")
+	p, err := New(provider.RuntimeConfig{
+		Driver:           provider.DriverGemini,
+		BaseURL:          "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:     "gemini-2.5-flash",
+		APIKey:           "test-key",
+		ChatEndpointPath: "/custom/models",
+	})
 	if err != nil {
-		t.Fatalf("resolveGeminiStreamEndpoint() error = %v", err)
+		t.Fatalf("expected custom chat endpoint path to be accepted, got %v", err)
 	}
-	if endpoint != "https://api.example.com/v1beta/models/gemini-flash:streamGenerateContent?alt=sse" {
-		t.Fatalf("unexpected endpoint: %q", endpoint)
-	}
-	endpoint, err = resolveGeminiStreamEndpoint("https://api.example.com/v1beta", "/models", "models/gemini-2.5-flash")
-	if err != nil {
-		t.Fatalf("resolveGeminiStreamEndpoint() with prefix error = %v", err)
-	}
-	if endpoint != "https://api.example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse" {
-		t.Fatalf("unexpected endpoint with models prefix: %q", endpoint)
-	}
-
-	if _, err := resolveGeminiStreamEndpoint("https://api.example.com/v1beta", "/", ""); err == nil || !strings.Contains(err.Error(), "model is empty") {
-		t.Fatalf("expected empty model error, got %v", err)
+	if p == nil {
+		t.Fatal("expected non-nil provider")
 	}
 }
 
@@ -120,7 +116,7 @@ func TestBuildRequestSupportsImageParts(t *testing.T) {
 		DefaultModel: "gemini-2.5-flash",
 		APIKey:       "test-key",
 	}
-	payload, model, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
+	model, contents, requestConfig, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
 		Messages: []providertypes.Message{
 			{
 				Role: providertypes.RoleUser,
@@ -148,15 +144,18 @@ func TestBuildRequestSupportsImageParts(t *testing.T) {
 	if model != "gemini-2.5-flash" {
 		t.Fatalf("unexpected model: %q", model)
 	}
-	if len(payload.Contents) != 2 {
-		t.Fatalf("expected 2 contents, got %+v", payload.Contents)
+	if requestConfig == nil {
+		t.Fatal("expected request config")
 	}
-	firstParts := payload.Contents[0].Parts
+	if len(contents) != 2 {
+		t.Fatalf("expected 2 contents, got %+v", contents)
+	}
+	firstParts := contents[0].Parts
 	if len(firstParts) != 2 || firstParts[1].FileData == nil || firstParts[1].FileData.FileURI != "https://example.com/cat.png" {
 		t.Fatalf("unexpected remote image mapping: %+v", firstParts)
 	}
-	secondParts := payload.Contents[1].Parts
-	if len(secondParts) != 1 || secondParts[0].InlineData == nil || !strings.HasPrefix(secondParts[0].InlineData.Data, "aW1hZ2Ut") {
+	secondParts := contents[1].Parts
+	if len(secondParts) != 1 || secondParts[0].InlineData == nil || !bytes.HasPrefix(secondParts[0].InlineData.Data, []byte("image-")) {
 		t.Fatalf("unexpected session_asset mapping: %+v", secondParts)
 	}
 }
@@ -170,7 +169,7 @@ func TestBuildRequestRejectsSessionAssetWithoutReader(t *testing.T) {
 		DefaultModel: "gemini-2.5-flash",
 		APIKey:       "test-key",
 	}
-	_, _, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
+	_, _, _, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
 		Messages: []providertypes.Message{
 			{
 				Role:  providertypes.RoleUser,

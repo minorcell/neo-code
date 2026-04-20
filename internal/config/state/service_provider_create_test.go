@@ -30,11 +30,12 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 	})
 
 	input := CreateCustomProviderInput{
-		Name:      "company-gateway",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		APIKey:    "test-key",
+		Name:                  "company-gateway",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		APIKey:                "test-key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -157,21 +158,15 @@ func TestCreateCustomProviderManualSourcePersistsModels(t *testing.T) {
 }
 
 func TestNormalizeCreateCustomProviderInputDefaultsToDiscoverWhenModelSourceEmpty(t *testing.T) {
-	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+	_, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
 		Name:      "default-discover-provider",
 		Driver:    provider.DriverOpenAICompat,
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "DEFAULT_DISCOVER_PROVIDER_API_KEY",
 		APIKey:    "test-key",
 	})
-	if err != nil {
-		t.Fatalf("normalizeCreateCustomProviderInput() error = %v", err)
-	}
-	if normalized.ModelSource != provider.ModelSourceDiscover {
-		t.Fatalf("expected default model source discover, got %q", normalized.ModelSource)
-	}
-	if normalized.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
-		t.Fatalf("expected default discovery endpoint /models, got %q", normalized.DiscoveryEndpointPath)
+	if err == nil || !strings.Contains(err.Error(), "model_source discover requires discovery_endpoint_path") {
+		t.Fatalf("expected missing discovery endpoint error, got %v", err)
 	}
 }
 
@@ -191,11 +186,12 @@ func TestNormalizeCreateCustomProviderInputRejectsInvalidModelSource(t *testing.
 
 func TestNormalizeCreateCustomProviderInputAllowsAnthropicDriver(t *testing.T) {
 	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
-		Name:      "anthropic-provider",
-		Driver:    provider.DriverAnthropic,
-		BaseURL:   "https://api.anthropic.com/v1",
-		APIKeyEnv: "ANTHROPIC_PROVIDER_API_KEY",
-		APIKey:    "test-key",
+		Name:                  "anthropic-provider",
+		Driver:                provider.DriverAnthropic,
+		BaseURL:               "https://api.anthropic.com/v1",
+		APIKeyEnv:             "ANTHROPIC_PROVIDER_API_KEY",
+		APIKey:                "test-key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	})
 	if err != nil {
 		t.Fatalf("expected anthropic driver to be allowed, got %v", err)
@@ -237,11 +233,12 @@ func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 	service := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
 
 	input := CreateCustomProviderInput{
-		Name:      "rollback-gateway",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "ROLLBACK_GATEWAY_API_KEY",
-		APIKey:    "new-key",
+		Name:                  "rollback-gateway",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "ROLLBACK_GATEWAY_API_KEY",
+		APIKey:                "new-key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -280,11 +277,12 @@ func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
 	})
 
 	_, err := service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:      "conflict-provider",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: configpkg.OpenAIDefaultAPIKeyEnv,
-		APIKey:    "key",
+		Name:                  "conflict-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             configpkg.OpenAIDefaultAPIKeyEnv,
+		APIKey:                "key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicates provider") {
 		t.Fatalf("expected duplicate env error, got %v", err)
@@ -304,11 +302,12 @@ func TestCreateCustomProviderRejectsDuplicateCustomProviderName(t *testing.T) {
 	})
 
 	firstInput := CreateCustomProviderInput{
-		Name:      "duplicate-custom-provider",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "DUPLICATE_CUSTOM_PROVIDER_A_API_KEY",
-		APIKey:    "key-a",
+		Name:                  "duplicate-custom-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "DUPLICATE_CUSTOM_PROVIDER_A_API_KEY",
+		APIKey:                "key-a",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 	restoreA := captureEnvForCreateProvider(t, firstInput.APIKeyEnv)
 	defer restoreA()
@@ -341,11 +340,12 @@ func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
 	})
 
 	_, err := service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:      "protected-env-provider",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "PATH",
-		APIKey:    "key",
+		Name:                  "protected-env-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "PATH",
+		APIKey:                "key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	})
 	if err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("expected protected env error, got %v", err)
@@ -365,11 +365,12 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 	})
 
 	_, err := service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:      "../invalid-provider",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "INVALID_PROVIDER_NAME_API_KEY",
-		APIKey:    "key",
+		Name:                  "../invalid-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "INVALID_PROVIDER_NAME_API_KEY",
+		APIKey:                "key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider name") {
 		t.Fatalf("expected invalid provider name error, got %v", err)
@@ -403,11 +404,12 @@ func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T
 	}
 
 	inputA := CreateCustomProviderInput{
-		Name:      "shared-gateway",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://shared.example.com/v1",
-		APIKeyEnv: "SHARED_GATEWAY_API_KEY",
-		APIKey:    "key-a",
+		Name:                  "shared-gateway",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://shared.example.com/v1",
+		APIKeyEnv:             "SHARED_GATEWAY_API_KEY",
+		APIKey:                "key-a",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -481,11 +483,12 @@ func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
 		listModels: []providertypes.ModelDescriptor{{ID: "m1", Name: "m1"}},
 	})
 	input := CreateCustomProviderInput{
-		Name:      "save-failed-provider",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "SAVE_FAILED_PROVIDER_API_KEY",
-		APIKey:    "key",
+		Name:                  "save-failed-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "SAVE_FAILED_PROVIDER_API_KEY",
+		APIKey:                "key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 
 	saveCustomProviderWithModelsForCreate = func(baseDir string, input configpkg.SaveCustomProviderInput) error {
@@ -549,11 +552,12 @@ func TestCreateCustomProviderSerializesAcrossManagersSharingBaseDir(t *testing.T
 	}
 
 	inputA := CreateCustomProviderInput{
-		Name:      "shared-by-managers",
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   "https://shared.example.com/v1",
-		APIKeyEnv: "SHARED_BY_MANAGERS_API_KEY",
-		APIKey:    "key-a",
+		Name:                  "shared-by-managers",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://shared.example.com/v1",
+		APIKeyEnv:             "SHARED_BY_MANAGERS_API_KEY",
+		APIKey:                "key-a",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -668,12 +672,13 @@ func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	_, err = service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:             "invalid-chat-endpoint-provider",
-		Driver:           provider.DriverOpenAICompat,
-		BaseURL:          "https://llm.example.com/v1",
-		APIKeyEnv:        "INVALID_CHAT_ENDPOINT_PROVIDER_API_KEY",
-		APIKey:           "key",
-		ChatEndpointPath: "https://llm.example.com/chat/completions",
+		Name:                  "invalid-chat-endpoint-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "INVALID_CHAT_ENDPOINT_PROVIDER_API_KEY",
+		APIKey:                "key",
+		ChatEndpointPath:      "https://llm.example.com/chat/completions",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 	})
 	if err == nil || !strings.Contains(err.Error(), "must be a relative path") {
 		t.Fatalf("expected invalid chat endpoint path error, got %v", err)

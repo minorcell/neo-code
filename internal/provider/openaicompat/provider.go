@@ -2,31 +2,54 @@ package openaicompat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"neo-code/internal/provider"
-	httpdiscovery "neo-code/internal/provider/discovery/http"
 	providertypes "neo-code/internal/provider/types"
 )
 
-// Provider 封装 OpenAI 兼容协议的运行时配置与 HTTP 客户端。
+const errorPrefix = "openaicompat provider: "
+
+const (
+	chatEndpointPathCompletions = "/chat/completions"
+	chatEndpointPathResponses   = "/responses"
+	executionModeCompletions    = "chat_completions"
+	executionModeResponses      = "responses"
+)
+
+// validateRuntimeConfig 校验 OpenAI-compatible 运行时最小配置，避免请求阶段才暴露空配置错误。
+func validateRuntimeConfig(cfg provider.RuntimeConfig) error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return errors.New(errorPrefix + "base url is empty")
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return errors.New(errorPrefix + "api key is empty")
+	}
+	return nil
+}
+
+// Provider 封装 OpenAI-compatible 协议的运行时配置与 HTTP 客户端。
 type Provider struct {
-	cfg           provider.RuntimeConfig
-	client        *http.Client
-	executionMode string
+	cfg    provider.RuntimeConfig
+	client *http.Client
 }
 
 // buildOptions 控制 provider 构建时的可选注入项。
 type buildOptions struct {
-	transport     http.RoundTripper
-	executionMode string
+	transport http.RoundTripper
 }
 
 // buildOption 是 New 的函数式配置项。
 type buildOption func(*buildOptions)
+
+// defaultRetryTransport 返回 OpenAI-compatible 默认使用的 HTTP Transport。
+func defaultRetryTransport() http.RoundTripper {
+	return http.DefaultTransport
+}
 
 // withTransport 注入自定义 HTTP Transport。
 func withTransport(rt http.RoundTripper) buildOption {
@@ -35,34 +58,21 @@ func withTransport(rt http.RoundTripper) buildOption {
 	}
 }
 
-// withExecutionMode 显式覆盖 openaicompat Generate 的执行模式（auto/http/sdk）。
-func withExecutionMode(mode string) buildOption {
-	return func(o *buildOptions) {
-		o.executionMode = mode
-	}
-}
-
-// New 创建 OpenAI 兼容 provider 实例。
+// New 创建 OpenAI-compatible provider 实例。
 func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 	if err := validateRuntimeConfig(cfg); err != nil {
 		return nil, err
 	}
 
 	o := &buildOptions{
-		transport:     http.DefaultTransport,
-		executionMode: executionModeAuto,
+		transport: defaultRetryTransport(),
 	}
 	for _, apply := range opts {
 		apply(o)
 	}
-	mode, err := normalizeExecutionMode(o.executionMode)
-	if err != nil {
-		return nil, err
-	}
 
 	return &Provider{
-		cfg:           cfg,
-		executionMode: mode,
+		cfg: cfg,
 		client: &http.Client{
 			Timeout:   90 * time.Second,
 			Transport: o.transport,
@@ -72,73 +82,53 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 
 // DiscoverModels 通过统一 discovery/http 入口发现可用模型。
 func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	requestCfg, err := httpdiscovery.RequestConfigFromRuntime(p.cfg)
+	requestCfg, err := RequestConfigFromRuntime(p.cfg)
 	if err != nil {
 		return nil, err
 	}
-	return httpdiscovery.DiscoverModelDescriptors(ctx, p.client, requestCfg)
+	return DiscoverModelDescriptors(ctx, p.client, requestCfg)
 }
 
 // Generate 发起流式生成请求。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	chatProtocol, err := supportedChatProtocol(p.cfg)
+	mode, err := resolveExecutionMode(p.cfg)
 	if err != nil {
 		return err
 	}
 
-	executionMode := resolveExecutionMode(p.cfg, chatProtocol, p.executionMode)
-	switch executionMode {
-	case executionModeSDK:
-		return p.generateViaSDK(ctx, req, events, chatProtocol)
-	case executionModeHTTP:
-		return p.generateViaHTTP(ctx, req, events, chatProtocol)
+	switch mode {
+	case executionModeCompletions:
+		return p.generateSDKChatCompletions(ctx, req, events)
+	case executionModeResponses:
+		return p.generateSDKResponses(ctx, req, events)
 	default:
 		return provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: unsupported execution mode %q", executionMode),
+			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported execution mode %q", p.cfg.Driver, mode),
 		)
 	}
 }
 
-// supportedChatProtocol 校验当前驱动可用的聊天协议。
-func supportedChatProtocol(cfg provider.RuntimeConfig) (string, error) {
-	driverProtocol := provider.ResolveDriverProtocolDefaults(cfg.Driver).ChatProtocol
-	if driverProtocol != provider.ChatProtocolOpenAIChatCompletions &&
-		driverProtocol != provider.ChatProtocolOpenAIResponses {
+// resolveExecutionMode 解析当前配置对应的 OpenAI-compatible 执行模式。
+func resolveExecutionMode(cfg provider.RuntimeConfig) (string, error) {
+	if provider.NormalizeProviderDriver(cfg.Driver) != DriverName {
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported chat protocol %q", cfg.Driver, driverProtocol),
+			fmt.Sprintf("openaicompat provider: driver %q is unsupported", cfg.Driver),
 		)
 	}
 
-	normalized := provider.NormalizeProviderChatProtocol(cfg.ChatProtocol)
-	if normalized == "" {
-		normalized = inferChatProtocolFromEndpointPath(cfg.ChatEndpointPath)
-	}
-	if normalized == "" {
-		normalized = driverProtocol
-	}
-	switch normalized {
-	case provider.ChatProtocolOpenAIChatCompletions, provider.ChatProtocolOpenAIResponses:
-		return normalized, nil
-	default:
-		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported chat protocol %q", cfg.Driver, normalized),
-		)
-	}
-}
-
-// inferChatProtocolFromEndpointPath 根据聊天端点路径推断 OpenAI-compatible 的协议类型。
-func inferChatProtocolFromEndpointPath(endpointPath string) string {
-	normalizedPath, err := provider.NormalizeProviderChatEndpointPath(endpointPath)
+	normalizedPath, err := provider.NormalizeProviderChatEndpointPath(cfg.ChatEndpointPath)
 	if err != nil {
-		return ""
+		return "", provider.NewDiscoveryConfigError(err.Error())
 	}
 	trimmedPath := strings.Trim(strings.ToLower(strings.TrimSpace(normalizedPath)), "/")
 	switch {
-	case trimmedPath == "responses" || strings.HasSuffix(trimmedPath, "/responses"):
-		return provider.ChatProtocolOpenAIResponses
-	case trimmedPath == "chat/completions" || strings.HasSuffix(trimmedPath, "/chat/completions"):
-		return provider.ChatProtocolOpenAIChatCompletions
+	case normalizedPath == "", normalizedPath == "/", trimmedPath == "chat/completions", strings.HasSuffix(trimmedPath, "/chat/completions"):
+		return executionModeCompletions, nil
+	case trimmedPath == "responses", strings.HasSuffix(trimmedPath, "/responses"):
+		return executionModeResponses, nil
 	default:
-		return ""
+		return "", provider.NewDiscoveryConfigError(
+			fmt.Sprintf("openaicompat provider: unsupported chat endpoint path %q", normalizedPath),
+		)
 	}
 }

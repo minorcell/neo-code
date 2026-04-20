@@ -14,9 +14,9 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/streaming"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )

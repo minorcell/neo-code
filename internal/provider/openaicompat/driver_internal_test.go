@@ -27,11 +27,12 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	defer server.Close()
 
 	cfg := provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       DriverName,
-		BaseURL:      server.URL,
-		DefaultModel: "gpt-4.1",
-		APIKey:       "test-key",
+		Name:                  DriverName,
+		Driver:                DriverName,
+		BaseURL:               server.URL,
+		DefaultModel:          "gpt-4.1",
+		APIKey:                "test-key",
+		DiscoveryEndpointPath: "/models",
 	}
 	driver := Driver()
 
@@ -52,24 +53,24 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 		t.Fatalf("unexpected models: %+v", models)
 	}
 
-	if got, err := supportedChatProtocol(provider.RuntimeConfig{Driver: DriverName}); err != nil || got != provider.ChatProtocolOpenAIChatCompletions {
-		t.Fatalf("expected default chat protocol, got protocol=%q err=%v", got, err)
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{Driver: DriverName}); err != nil || got != executionModeCompletions {
+		t.Fatalf("expected default execution mode, got mode=%q err=%v", got, err)
 	}
-	if got, err := supportedChatProtocol(provider.RuntimeConfig{
-		Driver:       DriverName,
-		ChatProtocol: provider.ChatProtocolOpenAIResponses,
-	}); err != nil || got != provider.ChatProtocolOpenAIResponses {
-		t.Fatalf("expected explicit responses chat protocol, got protocol=%q err=%v", got, err)
-	}
-	if got, err := supportedChatProtocol(provider.RuntimeConfig{
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
 		Driver:           DriverName,
 		ChatEndpointPath: "/responses",
-	}); err != nil || got != provider.ChatProtocolOpenAIResponses {
-		t.Fatalf("expected endpoint inferred responses protocol, got protocol=%q err=%v", got, err)
+	}); err != nil || got != executionModeResponses {
+		t.Fatalf("expected responses execution mode, got mode=%q err=%v", got, err)
 	}
-	if _, err := supportedChatProtocol(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
-		!strings.Contains(err.Error(), "unsupported chat protocol") {
-		t.Fatalf("expected unsupported anthropic protocol error, got %v", err)
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
+		ChatEndpointPath: "/responses",
+	}); err != nil || got != executionModeResponses {
+		t.Fatalf("expected endpoint inferred responses mode, got mode=%q err=%v", got, err)
+	}
+	if _, err := resolveExecutionMode(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported anthropic driver error, got %v", err)
 	}
 }
 
@@ -78,10 +79,11 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 
 	p := &Provider{
 		cfg: provider.RuntimeConfig{
-			Name:    DriverName,
-			Driver:  DriverName,
-			BaseURL: "://bad",
-			APIKey:  "test-key",
+			Name:                  DriverName,
+			Driver:                DriverName,
+			BaseURL:               "://bad",
+			APIKey:                "test-key",
+			DiscoveryEndpointPath: "/models",
 		},
 		client: &http.Client{},
 	}
@@ -113,10 +115,11 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 
 	p = &Provider{
 		cfg: provider.RuntimeConfig{
-			Name:    DriverName,
-			Driver:  DriverName,
-			BaseURL: server.URL,
-			APIKey:  "   ",
+			Name:                  DriverName,
+			Driver:                DriverName,
+			BaseURL:               server.URL,
+			APIKey:                "   ",
+			DiscoveryEndpointPath: "/models",
 		},
 		client: server.Client(),
 	}
@@ -140,8 +143,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
 		Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "unsupported chat protocol") {
-		t.Fatalf("expected unsupported chat protocol error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported driver error, got %v", err)
 	}
 }
 
@@ -158,11 +161,11 @@ func TestValidateCatalogIdentityRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	err = validateCatalogIdentity(provider.ProviderIdentity{
-		Driver:          DriverName,
-		BaseURL:         "https://api.example.com/v1",
-		ResponseProfile: "unsupported",
+		Driver:           DriverName,
+		BaseURL:          "https://api.example.com/v1",
+		ChatEndpointPath: "https://api.example.com/responses",
 	})
 	if err == nil || !provider.IsDiscoveryConfigError(err) {
-		t.Fatalf("expected discovery config error for response profile, got %v", err)
+		t.Fatalf("expected discovery config error for chat endpoint path, got %v", err)
 	}
 }

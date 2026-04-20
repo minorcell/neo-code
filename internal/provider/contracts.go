@@ -14,7 +14,6 @@ type RuntimeConfig struct {
 	DefaultModel          string
 	APIKey                string
 	SessionAssetLimits    providertypes.SessionAssetLimits
-	ChatProtocol          string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
 }

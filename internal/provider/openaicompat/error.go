@@ -1,4 +1,4 @@
-package wire
+package openaicompat
 
 import (
 	"encoding/json"
@@ -11,9 +11,15 @@ import (
 )
 
 const (
-	errorPrefix      = "openaicompat provider: "
 	maxErrorBodySize = 64 * 1024
 )
+
+type errorResponse struct {
+	Error struct {
+		Message string `json:"message"`
+		Code    string `json:"code,omitempty"`
+	} `json:"error"`
+}
 
 // ParseError 解析 OpenAI-compatible HTTP 错误响应，并在读取阶段限制响应体大小。
 func ParseError(resp *http.Response) error {
@@ -25,7 +31,7 @@ func ParseError(resp *http.Response) error {
 		)
 	}
 
-	var parsed ErrorResponse
+	var parsed errorResponse
 	if err := json.Unmarshal(data, &parsed); err == nil && strings.TrimSpace(parsed.Error.Message) != "" {
 		return provider.NewProviderErrorFromStatus(resp.StatusCode, parsed.Error.Message)
 	}

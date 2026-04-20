@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"neo-code/internal/provider"
@@ -64,7 +63,7 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 
 	driver := Driver()
 
-	t.Run("valid identity", func(t *testing.T) {
+	t.Run("accepts default identity", func(t *testing.T) {
 		t.Parallel()
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
@@ -76,21 +75,29 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid discovery endpoint path", func(t *testing.T) {
+	t.Run("accepts custom endpoints in sdk mode", func(t *testing.T) {
+		t.Parallel()
+
+		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
+			Driver:                DriverName,
+			ChatEndpointPath:      "/gateway/models",
+			DiscoveryEndpointPath: "/custom/models",
+		})
+		if err != nil {
+			t.Fatalf("expected custom endpoints to be accepted, got %v", err)
+		}
+	})
+
+	t.Run("accepts non-relative endpoints in catalog identity", func(t *testing.T) {
 		t.Parallel()
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
 			Driver:                DriverName,
 			DiscoveryEndpointPath: "https://api.example.com/models",
+			ChatEndpointPath:      "https://api.example.com/models",
 		})
-		if err == nil {
-			t.Fatal("expected discovery config error")
-		}
-		if !provider.IsDiscoveryConfigError(err) {
-			t.Fatalf("expected discovery config error, got %v", err)
-		}
-		if !strings.Contains(err.Error(), "must be a relative path") {
-			t.Fatalf("unexpected error message: %v", err)
+		if err != nil {
+			t.Fatalf("expected non-relative endpoints to be accepted, got %v", err)
 		}
 	})
 }

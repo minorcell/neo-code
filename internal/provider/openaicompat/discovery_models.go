@@ -1,4 +1,4 @@
-package discovery
+package openaicompat
 
 import (
 	"fmt"
@@ -265,7 +265,7 @@ func normalizeResponseProfile(profile string) string {
 	case provider.DiscoveryResponseProfileGeneric:
 		return provider.DiscoveryResponseProfileGeneric
 	default:
-		return provider.DiscoveryResponseProfileOpenAI
+		return provider.DiscoveryResponseProfileGeneric
 	}
 }
 

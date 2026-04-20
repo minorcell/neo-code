@@ -1,4 +1,4 @@
-package httpdiscovery
+package openaicompat
 
 import (
 	"context"
@@ -55,10 +55,10 @@ func TestDiscoverRawModels(t *testing.T) {
 	defer server.Close()
 
 	models, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-		BaseURL:           server.URL,
-		DiscoveryProtocol: provider.DiscoveryProtocolOpenAIModels,
-		AuthStrategy:      provider.AuthStrategyBearer,
-		APIKey:            "test-key",
+		Driver:       provider.DriverOpenAICompat,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
+		APIKey:       "test-key",
 	})
 	if err != nil {
 		t.Fatalf("DiscoverRawModels() error = %v", err)
@@ -93,8 +93,8 @@ func TestDiscoverRawModelsRejectsTooLargeResponseBody(t *testing.T) {
 	defer server.Close()
 
 	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-		BaseURL:           server.URL,
-		DiscoveryProtocol: provider.DiscoveryProtocolOpenAIModels,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
 	})
 	if err == nil {
 		t.Fatal("expected oversized body error")
@@ -161,7 +161,8 @@ func TestDiscoverRawModelsReturnsHTTPClassifiedErrors(t *testing.T) {
 			defer server.Close()
 
 			_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-				BaseURL: server.URL,
+				BaseURL:      server.URL,
+				EndpointPath: "/models",
 			})
 			if err == nil {
 				t.Fatal("expected provider error")
@@ -193,7 +194,8 @@ func TestDiscoverRawModelsIncludesSanitizedHTTPErrorBody(t *testing.T) {
 	defer server.Close()
 
 	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-		BaseURL: server.URL,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
 	})
 	if err == nil {
 		t.Fatal("expected provider error")
@@ -231,7 +233,8 @@ func TestDiscoverRawModelsRedactsSensitiveHTTPErrorBody(t *testing.T) {
 	defer server.Close()
 
 	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-		BaseURL: server.URL,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
 	})
 	if err == nil {
 		t.Fatal("expected provider error")
@@ -261,7 +264,8 @@ func TestDiscoverRawModelsTruncatesHTTPErrorBodySummary(t *testing.T) {
 	defer server.Close()
 
 	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
-		BaseURL: server.URL,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
 	})
 	if err == nil {
 		t.Fatal("expected provider error")
@@ -287,7 +291,8 @@ func TestDiscoverRawModelsReturnsTransportErrors(t *testing.T) {
 			}),
 		}
 		_, err := DiscoverRawModels(context.Background(), client, RequestConfig{
-			BaseURL: "https://api.example.com",
+			BaseURL:      "https://api.example.com",
+			EndpointPath: "/models",
 		})
 		assertTransportProviderError(t, err, provider.ErrorCodeTimeout, "timeout")
 	})
@@ -301,7 +306,8 @@ func TestDiscoverRawModelsReturnsTransportErrors(t *testing.T) {
 			}),
 		}
 		_, err := DiscoverRawModels(context.Background(), client, RequestConfig{
-			BaseURL: "https://api.example.com",
+			BaseURL:      "https://api.example.com",
+			EndpointPath: "/models",
 		})
 		assertTransportProviderError(t, err, provider.ErrorCodeTimeout, "i/o timeout")
 	})
@@ -315,7 +321,8 @@ func TestDiscoverRawModelsReturnsTransportErrors(t *testing.T) {
 			}),
 		}
 		_, err := DiscoverRawModels(context.Background(), client, RequestConfig{
-			BaseURL: "https://api.example.com",
+			BaseURL:      "https://api.example.com",
+			EndpointPath: "/models",
 		})
 		assertTransportProviderError(t, err, provider.ErrorCodeNetwork, "send models request")
 	})
@@ -330,7 +337,10 @@ func TestDiscoverRawModelsContextAndClientValidation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := DiscoverRawModels(ctx, &http.Client{}, RequestConfig{BaseURL: "https://api.example.com"})
+		_, err := DiscoverRawModels(ctx, &http.Client{}, RequestConfig{
+			BaseURL:      "https://api.example.com",
+			EndpointPath: "/models",
+		})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled, got %v", err)
 		}
@@ -350,27 +360,25 @@ func TestRequestConfigFromRuntime(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := RequestConfigFromRuntime(provider.RuntimeConfig{
-		Driver:  provider.DriverAnthropic,
-		BaseURL: "https://api.anthropic.com/v1",
-		APIKey:  "test-key",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://api.openai.com/v1",
+		APIKey:                "test-key",
+		DiscoveryEndpointPath: "/models",
 	})
 	if err != nil {
 		t.Fatalf("RequestConfigFromRuntime() error = %v", err)
 	}
-	if cfg.DiscoveryProtocol != provider.DiscoveryProtocolAnthropicModels {
-		t.Fatalf("expected discovery protocol %q, got %q", provider.DiscoveryProtocolAnthropicModels, cfg.DiscoveryProtocol)
-	}
 	if cfg.EndpointPath != provider.DiscoveryEndpointPathModels {
 		t.Fatalf("expected endpoint path %q, got %q", provider.DiscoveryEndpointPathModels, cfg.EndpointPath)
 	}
-	if cfg.ResponseProfile != provider.DiscoveryResponseProfileGeneric {
-		t.Fatalf("expected response profile %q, got %q", provider.DiscoveryResponseProfileGeneric, cfg.ResponseProfile)
-	}
-	if cfg.AuthStrategy != provider.AuthStrategyAnthropic {
-		t.Fatalf("expected auth strategy %q, got %q", provider.AuthStrategyAnthropic, cfg.AuthStrategy)
+	if cfg.ResponseProfile != provider.DiscoveryResponseProfileOpenAI {
+		t.Fatalf("expected response profile %q, got %q", provider.DiscoveryResponseProfileOpenAI, cfg.ResponseProfile)
 	}
 	if cfg.APIKey != "test-key" {
 		t.Fatalf("expected api key to be preserved, got %q", cfg.APIKey)
+	}
+	if cfg.Driver != provider.DriverOpenAICompat {
+		t.Fatalf("expected driver %q, got %q", provider.DriverOpenAICompat, cfg.Driver)
 	}
 }
 
@@ -390,6 +398,21 @@ func TestRequestConfigFromRuntimeRejectsInvalidDiscoveryPath(t *testing.T) {
 	}
 }
 
+func TestRequestConfigFromRuntimeDefaultsEmptyDiscoveryPath(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := RequestConfigFromRuntime(provider.RuntimeConfig{
+		Driver:  provider.DriverOpenAICompat,
+		BaseURL: "https://api.example.com/v1",
+	})
+	if err != nil {
+		t.Fatalf("RequestConfigFromRuntime() error = %v", err)
+	}
+	if cfg.EndpointPath != provider.DiscoveryEndpointPathModels {
+		t.Fatalf("expected endpoint path %q, got %q", provider.DiscoveryEndpointPathModels, cfg.EndpointPath)
+	}
+}
+
 func TestDiscoverModelDescriptors(t *testing.T) {
 	t.Parallel()
 
@@ -406,8 +429,8 @@ func TestDiscoverModelDescriptors(t *testing.T) {
 	defer server.Close()
 
 	models, err := DiscoverModelDescriptors(context.Background(), server.Client(), RequestConfig{
-		BaseURL:           server.URL,
-		DiscoveryProtocol: provider.DiscoveryProtocolOpenAIModels,
+		BaseURL:      server.URL,
+		EndpointPath: "/models",
 	})
 	if err != nil {
 		t.Fatalf("DiscoverModelDescriptors() error = %v", err)

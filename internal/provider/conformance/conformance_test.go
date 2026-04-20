@@ -2,6 +2,7 @@ package conformance_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,7 +38,6 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "gpt-4.1",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolOpenAIChatCompletions,
 					ChatEndpointPath: "/chat/completions",
 				}
 			},
@@ -60,7 +60,6 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "gemini-2.5-flash",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolGeminiNative,
 					ChatEndpointPath: "/models",
 				}
 			},
@@ -81,11 +80,10 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "claude-3-7-sonnet",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolAnthropicMessages,
 					ChatEndpointPath: "/messages",
 				}
 			},
-			expectedPath:   "/messages",
+			expectedPath:   "/v1/messages",
 			expectedHeader: "x-api-key",
 			streamBody: "event: message_start\n" +
 				"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4}}}\n\n" +
@@ -214,7 +212,7 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			},
 			expectedPath:   "/models",
 			expectedHeader: "x-api-key",
-			responseBody:   `{"models":[{"id":"claude-3-7-sonnet","name":"Claude 3.7 Sonnet"}]}`,
+			responseBody:   `{"data":[{"id":"claude-3-7-sonnet","display_name":"Claude 3.7 Sonnet"}],"has_more":false}`,
 		},
 	}
 
@@ -261,7 +259,6 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "gpt-4.1",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolOpenAIChatCompletions,
 					ChatEndpointPath: "/chat/completions",
 				}
 			},
@@ -277,7 +274,6 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "gemini-2.5-flash",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolGeminiNative,
 					ChatEndpointPath: "/models",
 				}
 			},
@@ -293,11 +289,10 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 					BaseURL:          baseURL,
 					DefaultModel:     "claude-3-7-sonnet",
 					APIKey:           "test-key",
-					ChatProtocol:     provider.ChatProtocolAnthropicMessages,
 					ChatEndpointPath: "/messages",
 				}
 			},
-			path: "/messages",
+			path: "/v1/messages",
 			body: `{"error":{"message":"invalid x-api-key"}}`,
 		},
 	}
@@ -332,7 +327,7 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 			if !strings.Contains(err.Error(), "provider error") && !strings.Contains(err.Error(), "unauthorized") {
 				t.Fatalf("expected provider error message, got %v", err)
 			}
-			if !asProviderError(err, &pErr) {
+			if !errors.As(err, &pErr) {
 				t.Fatalf("expected *provider.ProviderError, got %T: %v", err, err)
 			}
 			if pErr.Code != provider.ErrorCodeAuthFailed {
@@ -396,21 +391,4 @@ func (r staticAssetReader) Open(_ context.Context, assetID string) (io.ReadClose
 		return nil, "", fmt.Errorf("asset not found: %s", assetID)
 	}
 	return io.NopCloser(strings.NewReader(string(payload.data))), payload.mime, nil
-}
-
-func asProviderError(err error, target **provider.ProviderError) bool {
-	if err == nil {
-		return false
-	}
-	type unwrapper interface {
-		Unwrap() error
-	}
-	if pErr, ok := err.(*provider.ProviderError); ok {
-		*target = pErr
-		return true
-	}
-	if wrapper, ok := err.(unwrapper); ok {
-		return asProviderError(wrapper.Unwrap(), target)
-	}
-	return false
 }

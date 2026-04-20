@@ -11,7 +11,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// ---- state/model.go 辅助函数测试 ----
+// ---- state/model.go 鏉堝懎濮崙鑺ユ殶濞村锟?----
 
 func TestSelectionFromConfig(t *testing.T) {
 	t.Parallel()
@@ -229,7 +229,7 @@ func TestEnsureSupportedProvider(t *testing.T) {
 		t.Fatalf("expected error to contain driver name, got %v", err)
 	}
 
-	// 支持的 driver 不应返回错误
+	// 鏀寔�?driver 涓嶅簲杩斿洖閿欒€?
 	err = ensureSupportedProvider(supporters, configpkg.ProviderConfig{
 		Name:   "test",
 		Driver: "openaicompat",
@@ -239,7 +239,7 @@ func TestEnsureSupportedProvider(t *testing.T) {
 	}
 }
 
-// ---- state/service.go 错误路径测试 ----
+// ---- state/service.go 闁挎瑨顕ょ捄顖氱窞濞村锟?----
 
 type additionalCatalogStub struct{}
 
@@ -262,14 +262,15 @@ func (*denyAllDriverSupporter) Supports(_ string) bool { return false }
 func TestSelectionServiceSelectProviderNoModelsAvailable(t *testing.T) {
 	t.Parallel()
 
-	// 使用自定义 provider，因为 builtin provider 在 snapshot 返回空时会回退到默认模型
+	// 浣跨敤鑷畾锟?provider锛岄伩锟?builtin provider 锟?snapshot 涓虹┖鏃跺洖閫€榛樿妯″瀷锟?
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "empty-model-provider",
-		Driver:    "openaicompat",
-		BaseURL:   "https://example.com/v1",
-		APIKeyEnv: "EMPTY_PROVIDER_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "empty-model-provider",
+		Driver:                "openaicompat",
+		BaseURL:               "https://example.com/v1",
+		APIKeyEnv:             "EMPTY_PROVIDER_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 
 	manager := newSelectionTestManager(t, defaults)
@@ -362,7 +363,7 @@ func TestSelectionServiceListProviderOptionsSkipsUnsupportedDrivers(t *testing.T
 	}
 }
 
-// ---- catalogInputFromProvider 边界测试 ----
+// ---- catalogInputFromProvider 鏉堝湱鏅ù瀣槸 ----
 
 func TestCatalogInputFromProviderCustomWithoutModelField(t *testing.T) {
 	t.Setenv("CUSTOM_NO_MODEL_KEY", "secret-key")
@@ -373,7 +374,7 @@ func TestCatalogInputFromProviderCustomWithoutModelField(t *testing.T) {
 		BaseURL:   "https://example.com/v1",
 		APIKeyEnv: "CUSTOM_NO_MODEL_KEY",
 		Source:    configpkg.ProviderSourceCustom,
-		// Model 故意为空，自定义 provider 可以不设 model
+		// Model 閺佸懏鍓版稉铏光敄閿涘矁鍤滅€规矮锟?provider 閸欘垯浜掓稉宥堫啎 model
 	})
 	if err != nil {
 		t.Fatalf("catalogInputFromProvider() error = %v", err)
@@ -383,18 +384,19 @@ func TestCatalogInputFromProviderCustomWithoutModelField(t *testing.T) {
 	}
 }
 
-// ---- EnsureSelection 自定义 provider 无快照且有模型时的回退 ----
+// ---- EnsureSelection 閼奉亜鐣鹃敓?provider 閺冪姴鎻╅悡褌绗栭張澶嬆侀崹瀣閻ㄥ嫬娲栭柅锟?----
 
 func TestEnsureSelectionCustomProviderWithSnapshotModels(t *testing.T) {
 	t.Parallel()
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "custom-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://example.com/v1",
-		APIKeyEnv: "CUSTOM_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "custom-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://example.com/v1",
+		APIKeyEnv:             "CUSTOM_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "custom-gateway"
 	defaults.CurrentModel = "unknown-model"
@@ -415,20 +417,21 @@ func TestEnsureSelectionCustomProviderWithSnapshotModels(t *testing.T) {
 	}
 }
 
-// ---- SelectProvider 更新失败时状态不变 ----
+// ---- SelectProvider 閺囧瓨鏌婃径杈Е閺冨墎濮搁幀浣风瑝锟?----
 
 func TestSelectProviderUpdateFailsPreservesState(t *testing.T) {
 	t.Parallel()
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
-	// 先加载初始配置
+	// 鍏堝姞杞藉垵濮嬮厤缃拷?
 	manager := newSelectionTestManager(t, defaults)
 	service := NewService(manager, &failingDriverSupporter{}, newCatalogStub())
 
@@ -443,14 +446,14 @@ func TestSelectProviderUpdateFailsPreservesState(t *testing.T) {
 	}
 }
 
-// ---- SetCurrentModel 更新内部校验失败 ----
+// ---- SetCurrentModel 閺囧瓨鏌婇崘鍛村劥閺嶏繝鐛欐径杈Е ----
 
 func TestSetCurrentModelInternalValidationFails(t *testing.T) {
 	t.Parallel()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 
-	// 先切换到一个自定义 provider
+	// 閸忓牆鍨忛幑銏犲煂娑撯偓娑擃亣鍤滅€规矮锟?provider
 	err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
 		cfg.SelectedProvider = "nonexistent-provider"
 		return nil
@@ -460,14 +463,14 @@ func TestSetCurrentModelInternalValidationFails(t *testing.T) {
 	}
 
 	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
-	// SetCurrentModel 会先找到当前选中 provider，但 Update 内部再次查找会失败
+	// SetCurrentModel 浼氬厛鎵惧埌褰撳墠閫変腑 provider锛屼絾 Update 鍐呴儴鍐嶆鏌ユ壘浼氬け璐ワ拷?
 	_, err = service.SetCurrentModel(context.Background(), OpenAIDefaultModel)
 	if err == nil {
 		t.Fatal("expected error when current selection is invalid")
 	}
 }
 
-// ---- 测试辅助 ----
+// ---- 濞村鐦潏鍛И ----
 
 type failingDriverSupporter struct{}
 

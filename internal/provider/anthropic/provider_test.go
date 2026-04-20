@@ -58,7 +58,7 @@ func TestProviderGenerate(t *testing.T) {
 		t.Fatalf("Generate() error = %v", err)
 	}
 
-	if capturedPath != "/messages" {
+	if capturedPath != "/v1/messages" {
 		t.Fatalf("unexpected request path: %q", capturedPath)
 	}
 	if capturedKey != "test-key" {
@@ -98,6 +98,24 @@ func TestProviderGenerate(t *testing.T) {
 	}
 }
 
+func TestNewAcceptsCustomChatEndpointPath(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:           provider.DriverAnthropic,
+		BaseURL:          "https://api.anthropic.com/v1",
+		DefaultModel:     "claude-3-7-sonnet",
+		APIKey:           "test-key",
+		ChatEndpointPath: "/custom/messages",
+	})
+	if err != nil {
+		t.Fatalf("expected custom chat endpoint path to be accepted, got %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
 func TestBuildRequestRejectsToolResultWithoutToolCallID(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +133,7 @@ func TestBuildRequestRejectsToolResultWithoutToolCallID(t *testing.T) {
 func TestBuildRequestSupportsImageParts(t *testing.T) {
 	t.Parallel()
 
-	payload, err := BuildRequest(context.Background(), provider.RuntimeConfig{
+	params, err := BuildRequest(context.Background(), provider.RuntimeConfig{
 		DefaultModel: "claude-3-7-sonnet",
 		Driver:       provider.DriverAnthropic,
 	}, providertypes.GenerateRequest{
@@ -143,16 +161,19 @@ func TestBuildRequestSupportsImageParts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest() error = %v", err)
 	}
-	if len(payload.Messages) != 2 {
-		t.Fatalf("unexpected messages: %+v", payload.Messages)
+	if len(params.Messages) != 2 {
+		t.Fatalf("unexpected messages: %+v", params.Messages)
 	}
-	firstContent := payload.Messages[0].Content
-	if len(firstContent) != 2 || firstContent[1].Type != "image" || firstContent[1].Source == nil || firstContent[1].Source.URL != "https://example.com/cat.png" {
+	firstContent := params.Messages[0].Content
+	if len(firstContent) != 2 ||
+		firstContent[1].OfImage == nil ||
+		firstContent[1].OfImage.Source.OfURL == nil ||
+		firstContent[1].OfImage.Source.OfURL.URL != "https://example.com/cat.png" {
 		t.Fatalf("unexpected remote image conversion: %+v", firstContent)
 	}
-	secondContent := payload.Messages[1].Content
-	if len(secondContent) != 1 || secondContent[0].Type != "image" || secondContent[0].Source == nil ||
-		secondContent[0].Source.Type != "base64" || !strings.HasPrefix(secondContent[0].Source.Data, "aW1hZ2Ut") {
+	secondContent := params.Messages[1].Content
+	if len(secondContent) != 1 || secondContent[0].OfImage == nil || secondContent[0].OfImage.Source.OfBase64 == nil ||
+		!strings.HasPrefix(secondContent[0].OfImage.Source.OfBase64.Data, "aW1hZ2Ut") {
 		t.Fatalf("unexpected session asset conversion: %+v", secondContent)
 	}
 }

@@ -2451,19 +2451,16 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("openai compat discover mode uses default discovery endpoint path", func(t *testing.T) {
-		req, err := buildProviderAddRequest(providerAddFormState{
+	t.Run("openai compat discover mode requires discovery endpoint path", func(t *testing.T) {
+		_, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
 			ModelSource: provider.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "OPENAI_COMPAT_API_KEY",
 		})
-		if err != "" {
-			t.Fatalf("expected default discovery endpoint, got %q and req=%+v", err, req)
-		}
-		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
-			t.Fatalf("expected default discovery endpoint /models, got %+v", req)
+		if !strings.Contains(err, "requires discovery_endpoint_path") {
+			t.Fatalf("expected missing discovery endpoint error, got %q", err)
 		}
 	})
 
@@ -2493,11 +2490,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "openai-compat",
-			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceDiscover,
-			APIKey:      "k",
-			APIKeyEnv:   "\x00OPENAI_COMPAT_API_KEY",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "\x00OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2509,11 +2507,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("rejects protected env key", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "openai-compat",
-			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceDiscover,
-			APIKey:      "k",
-			APIKeyEnv:   "PATH",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "PATH",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		}); !strings.Contains(err, "protected") {
 			t.Fatalf("expected protected env key error, got %q", err)
 		}
@@ -2521,11 +2520,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("gemini applies default base url", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "gemini",
-			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceDiscover,
-			APIKey:      "k",
-			APIKeyEnv:   "GEMINI_GATEWAY_API_KEY",
+			Name:                  "gemini",
+			Driver:                provider.DriverGemini,
+			ModelSource:           provider.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "GEMINI_GATEWAY_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2550,12 +2550,13 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("rejects invalid chat endpoint path", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:             "openai-compat",
-			Driver:           provider.DriverOpenAICompat,
-			ModelSource:      provider.ModelSourceDiscover,
-			APIKey:           "k",
-			APIKeyEnv:        "OPENAI_COMPAT_API_KEY",
-			ChatEndpointPath: "https://api.example.com/chat/completions",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+			ChatEndpointPath:      "https://api.example.com/chat/completions",
 		}); !strings.Contains(err, "relative path") {
 			t.Fatalf("expected invalid chat endpoint path error, got %q", err)
 		}

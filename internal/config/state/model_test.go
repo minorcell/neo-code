@@ -35,17 +35,14 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if input.Identity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected normalized base URL, got %+v", input.Identity)
 	}
-	if input.Identity.ChatProtocol != providerpkg.ChatProtocolOpenAIChatCompletions {
-		t.Fatalf("expected normalized chat protocol, got %+v", input.Identity)
-	}
-	if input.Identity.DiscoveryProtocol != providerpkg.DiscoveryProtocolOpenAIModels {
-		t.Fatalf("expected normalized discovery protocol, got %+v", input.Identity)
+	if input.Identity.ChatEndpointPath != "" {
+		t.Fatalf("expected default chat endpoint path to be omitted, got %+v", input.Identity)
 	}
 	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint, got %+v", input.Identity)
 	}
-	if input.Identity.ResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf("expected default discovery response profile, got %+v", input.Identity)
+	if input.Identity.ResponseProfile != "" {
+		t.Fatalf("expected openaicompat identity to omit response profile, got %+v", input.Identity)
 	}
 	if len(input.DefaultModels) != 1 || input.DefaultModels[0].ID != "server-default" {
 		t.Fatalf("expected builtin default model, got %+v", input.DefaultModels)
@@ -68,7 +65,7 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	}
 }
 
-func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityProtocols(t *testing.T) {
+func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityPaths(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
 	input, err := catalogInputFromProvider(configpkg.ProviderConfig{
@@ -83,19 +80,8 @@ func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityProtocols(t *te
 		t.Fatalf("catalogInputFromProvider() error = %v", err)
 	}
 
-	if input.Identity.ChatProtocol != providerpkg.ChatProtocolOpenAIChatCompletions {
-		t.Fatalf(
-			"expected default chat protocol %q, got %+v",
-			providerpkg.ChatProtocolOpenAIChatCompletions,
-			input.Identity,
-		)
-	}
-	if input.Identity.DiscoveryProtocol != providerpkg.DiscoveryProtocolOpenAIModels {
-		t.Fatalf(
-			"expected default discovery protocol %q, got %+v",
-			providerpkg.DiscoveryProtocolOpenAIModels,
-			input.Identity,
-		)
+	if input.Identity.ChatEndpointPath != "" {
+		t.Fatalf("expected default chat endpoint path to be omitted, got %+v", input.Identity)
 	}
 	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf(
@@ -104,12 +90,8 @@ func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityProtocols(t *te
 			input.Identity,
 		)
 	}
-	if input.Identity.ResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf(
-			"expected default discovery response profile %q, got %+v",
-			providerpkg.DiscoveryResponseProfileOpenAI,
-			input.Identity,
-		)
+	if input.Identity.ResponseProfile != "" {
+		t.Fatalf("expected openaicompat identity to omit response profile, got %+v", input.Identity)
 	}
 }
 

@@ -35,6 +35,9 @@ func saveCustomProviderWithModelsForTest(
 	discoveryEndpointPath string,
 	chatEndpointPath string,
 ) error {
+	if strings.TrimSpace(discoveryEndpointPath) == "" {
+		discoveryEndpointPath = provider.DiscoveryEndpointPathModels
+	}
 	return SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
 		Name:                  name,
 		Driver:                driver,
@@ -238,6 +241,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -342,6 +346,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(validDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -467,19 +472,9 @@ models:
 		t.Fatalf("write provider.yaml: %v", err)
 	}
 
-	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	loadedProvider, err := cfg.ProviderByName("company-gateway")
-	if err != nil {
-		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
-	}
-	if loadedProvider.ModelSource != provider.ModelSourceDiscover {
-		t.Fatalf("expected default model_source discover, got %q", loadedProvider.ModelSource)
-	}
-	if loadedProvider.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
-		t.Fatalf("expected discovery endpoint to use default /models, got %q", loadedProvider.DiscoveryEndpointPath)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "model_source discover requires discovery_endpoint_path") {
+		t.Fatalf("expected legacy discover config without endpoint to fail, got %v", err)
 	}
 }
 
@@ -556,6 +551,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	modelsYAML := `
 models:
@@ -773,6 +769,7 @@ name: openai
 driver: openaicompat
 base_url: https://api.example.com/v1
 api_key_env: OPENAI_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -801,12 +798,14 @@ name: gateway-a
 driver: openaicompat
 base_url: https://api.example.com/v1/
 api_key_env: GATEWAY_A_API_KEY
+discovery_endpoint_path: /models
 `
 	providerB := `
 name: gateway-b
 driver: openaicompat
 base_url: https://API.EXAMPLE.COM/v1
 api_key_env: GATEWAY_B_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customA, customProviderConfigName), []byte(strings.TrimSpace(providerA)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider a: %v", err)
@@ -879,6 +878,7 @@ shell: powershell
 name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -1085,11 +1085,12 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 		{
 			name: "discover source",
 			input: SaveCustomProviderInput{
-				Name:        "roundtrip-discover",
-				Driver:      provider.DriverOpenAICompat,
-				BaseURL:     "https://llm.example.com/v1",
-				APIKeyEnv:   "ROUNDTRIP_DISCOVER_API_KEY",
-				ModelSource: provider.ModelSourceDiscover,
+				Name:                  "roundtrip-discover",
+				Driver:                provider.DriverOpenAICompat,
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "ROUNDTRIP_DISCOVER_API_KEY",
+				ModelSource:           provider.ModelSourceDiscover,
+				DiscoveryEndpointPath: "/models",
 			},
 			wantModelSource:      provider.ModelSourceDiscover,
 			wantChatPath:         "",
@@ -1446,6 +1447,7 @@ name: company-gateway
 driver: custom-driver
 base_url: https://custom.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /catalog/models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)

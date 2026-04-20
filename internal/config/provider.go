@@ -60,10 +60,11 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("provider name is empty")
 	}
-	if normalizeProviderDriver(p.Driver) == "" {
+	normalizedDriver := normalizeProviderDriver(p.Driver)
+	if normalizedDriver == "" {
 		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
-	if strings.TrimSpace(p.BaseURL) == "" {
+	if strings.TrimSpace(p.BaseURL) == "" && !allowsEmptyBaseURL(normalizedDriver) {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
 	}
 	if p.Source == ProviderSourceCustom && strings.TrimSpace(p.Model) != "" {
@@ -83,12 +84,17 @@ func (p ProviderConfig) Validate() error {
 	if normalizedModelSource == provider.ModelSourceManual && len(p.Models) == 0 {
 		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
 	}
+	if p.Source == ProviderSourceCustom && normalizedModelSource == provider.ModelSourceDiscover &&
+		strings.TrimSpace(p.DiscoveryEndpointPath) == "" {
+		return fmt.Errorf(
+			"provider %q model source discover requires discovery_endpoint_path; set model_source to manual if endpoint is unavailable",
+			p.Name,
+		)
+	}
 
-	normalizedProtocols, err := normalizeProviderProtocolSettingsFromConfig(p)
-	if err != nil {
+	if _, _, err := normalizeProviderRuntimePathsFromConfig(p); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
-	_ = normalizedProtocols
 	if _, err := p.Identity(); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
@@ -188,25 +194,41 @@ func normalizeProviderDriver(driver string) string {
 
 // providerIdentityFromConfig 根据 provider 配置构造用于去重与缓存的规范化连接身份。
 func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, error) {
-	normalizedProtocols, err := normalizeProviderProtocolSettingsFromConfig(cfg)
+	baseURL := identityBaseURL(cfg)
+	identity := provider.ProviderIdentity{
+		Driver:  cfg.Driver,
+		BaseURL: baseURL,
+	}
+
+	if normalizeProviderDriver(cfg.Driver) == provider.DriverOpenAICompat {
+		chatEndpointPath, err := provider.NormalizeProviderChatEndpointPath(cfg.ChatEndpointPath)
+		if err != nil {
+			return provider.ProviderIdentity{}, err
+		}
+		discoveryEndpointPath, _, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
+		if err != nil {
+			return provider.ProviderIdentity{}, err
+		}
+		identity.ChatEndpointPath = chatEndpointPath
+		identity.DiscoveryEndpointPath = discoveryEndpointPath
+		return provider.NormalizeProviderIdentity(identity)
+	}
+
+	discoveryEndpointPath, responseProfile, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
 	if err != nil {
 		return provider.ProviderIdentity{}, err
 	}
-	return provider.NormalizeProviderIdentity(provider.ProviderIdentity{
-		Driver:                cfg.Driver,
-		BaseURL:               cfg.BaseURL,
-		ChatProtocol:          normalizedProtocols.ChatProtocol,
-		ChatEndpointPath:      normalizedProtocols.ChatEndpointPath,
-		DiscoveryProtocol:     normalizedProtocols.DiscoveryProtocol,
-		AuthStrategy:          normalizedProtocols.AuthStrategy,
-		ResponseProfile:       normalizedProtocols.ResponseProfile,
-		DiscoveryEndpointPath: normalizedProtocols.DiscoveryEndpointPath,
-	})
+	identity.DiscoveryEndpointPath = discoveryEndpointPath
+	if normalizeProviderDriver(cfg.Driver) != provider.DriverGemini &&
+		normalizeProviderDriver(cfg.Driver) != provider.DriverAnthropic {
+		identity.ResponseProfile = responseProfile
+	}
+	return provider.NormalizeProviderIdentity(identity)
 }
 
 // ToRuntimeConfig 将解析后的 provider 配置收敛为 provider 层使用的最小运行时输入。
 func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error) {
-	normalizedProtocols, err := normalizeProviderProtocolSettingsFromConfig(p.ProviderConfig)
+	chatEndpointPath, discoveryEndpointPath, err := normalizeProviderRuntimePathsFromConfig(p.ProviderConfig)
 	if err != nil {
 		return provider.RuntimeConfig{}, err
 	}
@@ -219,25 +241,30 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		DefaultModel:          p.Model,
 		APIKey:                p.APIKey,
 		SessionAssetLimits:    p.SessionAssetLimits,
-		ChatProtocol:          normalizedProtocols.ChatProtocol,
-		ChatEndpointPath:      normalizedProtocols.ChatEndpointPath,
-		DiscoveryEndpointPath: normalizedProtocols.DiscoveryEndpointPath,
+		ChatEndpointPath:      chatEndpointPath,
+		DiscoveryEndpointPath: discoveryEndpointPath,
 	}, nil
 }
 
-// normalizeProviderProtocolSettingsFromConfig 根据最小外部字段推导 provider 内部协议配置。
-func normalizeProviderProtocolSettingsFromConfig(cfg ProviderConfig) (provider.NormalizedProtocolSettings, error) {
-	return provider.NormalizeProviderProtocolSettings(
-		cfg.Driver,
-		"",
-		cfg.ChatEndpointPath,
-		"",
-		cfg.DiscoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
+// normalizeProviderDiscoverySettingsFromConfig 归一化 discovery 所需的最小路径与响应解析设置。
+func normalizeProviderDiscoverySettingsFromConfig(cfg ProviderConfig) (string, string, error) {
+	return provider.NormalizeProviderDiscoverySettings(cfg.Driver, cfg.DiscoveryEndpointPath, "")
+}
+
+// normalizeProviderRuntimePathsFromConfig 归一化运行时真正消费的端点路径。
+func normalizeProviderRuntimePathsFromConfig(cfg ProviderConfig) (string, string, error) {
+	chatEndpointPath, err := provider.NormalizeProviderChatEndpointPath(cfg.ChatEndpointPath)
+	if err != nil {
+		return "", "", err
+	}
+	discoveryEndpointPath, _, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
+	if err != nil {
+		return "", "", err
+	}
+	if normalizeProviderDriver(cfg.Driver) != provider.DriverOpenAICompat {
+		chatEndpointPath = ""
+	}
+	return chatEndpointPath, discoveryEndpointPath, nil
 }
 
 // sanitizeRuntimeBaseURL 对运行时 base_url 做最小安全规整，确保不会透传 userinfo 等敏感片段。
@@ -255,6 +282,31 @@ func sanitizeRuntimeBaseURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return strings.TrimSpace(parsed.String())
+}
+
+// allowsEmptyBaseURL 判断指定 driver 是否允许通过 SDK 默认地址运行。
+func allowsEmptyBaseURL(driver string) bool {
+	switch normalizeProviderDriver(driver) {
+	case provider.DriverGemini, provider.DriverAnthropic:
+		return true
+	default:
+		return false
+	}
+}
+
+// identityBaseURL 返回用于身份归一化的 base_url，确保空值场景也有稳定键。
+func identityBaseURL(cfg ProviderConfig) string {
+	if strings.TrimSpace(cfg.BaseURL) != "" {
+		return cfg.BaseURL
+	}
+	switch normalizeProviderDriver(cfg.Driver) {
+	case provider.DriverGemini:
+		return GeminiDefaultBaseURL
+	case provider.DriverAnthropic:
+		return AnthropicDefaultBaseURL
+	default:
+		return cfg.BaseURL
+	}
 }
 
 const (

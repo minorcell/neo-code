@@ -1,4 +1,4 @@
-package discovery
+package openaicompat
 
 import (
 	"testing"
@@ -128,6 +128,16 @@ func TestExtractRawModels(t *testing.T) {
 				},
 			},
 			profile: provider.DiscoveryResponseProfileGeneric,
+			wantLen: 1,
+		},
+		{
+			name: "unknown profile falls back to generic keys",
+			payload: map[string]any{
+				"items": []any{
+					map[string]any{"id": "m1"},
+				},
+			},
+			profile: "unknown-profile",
 			wantLen: 1,
 		},
 		{

@@ -1,144 +1,139 @@
 package gemini
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
+	"google.golang.org/genai"
+
 	"neo-code/internal/provider"
-	httpdiscovery "neo-code/internal/provider/discovery/http"
-	"neo-code/internal/provider/gemini/wire"
 	providertypes "neo-code/internal/provider/types"
 )
+
+const errorPrefix = "gemini provider: "
 
 // Provider 封装 Gemini native 协议的请求发送与流式响应解析。
 type Provider struct {
 	cfg    provider.RuntimeConfig
-	client *http.Client
+	client *genai.Client
 }
 
-// buildOptions 描述 Gemini provider 构建时可选注入项。
-type buildOptions struct {
-	transport http.RoundTripper
-}
-
-// buildOption 为 New 提供函数式配置。
-type buildOption func(*buildOptions)
-
-// withTransport 注入自定义 HTTP Transport。
-func withTransport(rt http.RoundTripper) buildOption {
-	return func(o *buildOptions) {
-		o.transport = rt
-	}
-}
-
-// New 创建 Gemini native provider 实例。
-func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
-	if err := validateRuntimeConfig(cfg); err != nil {
-		return nil, err
+// New 创建 Gemini native provider 实例，并初始化官方 SDK 客户端。
+func New(cfg provider.RuntimeConfig) (*Provider, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, errors.New(errorPrefix + "api key is empty")
 	}
 
-	o := &buildOptions{transport: http.DefaultTransport}
-	for _, apply := range opts {
-		apply(o)
+	httpClient := &http.Client{
+		Timeout: 90 * time.Second,
+	}
+	clientConfig := &genai.ClientConfig{
+		APIKey:     strings.TrimSpace(cfg.APIKey),
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: httpClient,
+	}
+	if strings.TrimSpace(cfg.BaseURL) != "" {
+		clientConfig.HTTPOptions = genai.HTTPOptions{
+			BaseURL:    strings.TrimSpace(cfg.BaseURL),
+			APIVersion: "/",
+		}
+	}
+	client, err := genai.NewClient(context.Background(), clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("%screate sdk client: %w", errorPrefix, err)
 	}
 
 	return &Provider{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout:   90 * time.Second,
-			Transport: o.transport,
-		},
+		cfg:    cfg,
+		client: client,
 	}, nil
 }
 
-// DiscoverModels 通过统一 discovery/http 入口发现 Gemini 可用模型。
-func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	requestCfg, err := httpdiscovery.RequestConfigFromRuntime(p.cfg)
-	if err != nil {
-		return nil, err
-	}
-	return httpdiscovery.DiscoverModelDescriptors(ctx, p.client, requestCfg)
-}
-
-// Generate 发起 Gemini streamGenerateContent 流式请求。
+// Generate 发起 Gemini 流式请求，并将 SDK chunk 转为统一流式事件。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	if err := supportedChatProtocol(p.cfg); err != nil {
-		return err
-	}
-
-	payload, model, err := BuildRequest(ctx, p.cfg, req)
+	model, contents, config, err := BuildRequest(ctx, p.cfg, req)
 	if err != nil {
 		return err
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("%smarshal request: %w", errorPrefix, err)
-	}
-
-	endpoint, err := resolveGeminiStreamEndpoint(p.cfg.BaseURL, p.cfg.ChatEndpointPath, model)
-	if err != nil {
-		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("%sbuild request: %w", errorPrefix, err)
-	}
-	applyAuthHeaders(httpReq.Header, p.cfg)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
-	}
-	defer func(body io.ReadCloser) {
-		if closeErr := body.Close(); closeErr != nil {
-			log.Printf("%sclose response body: %v", errorPrefix, closeErr)
-		}
-	}(resp.Body)
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		return wire.ParseError(resp)
-	}
-
-	return wire.ConsumeStream(ctx, resp.Body, events)
-}
-
-// resolveGeminiStreamEndpoint 生成 Gemini streamGenerateContent 最终请求地址。
-func resolveGeminiStreamEndpoint(baseURL string, endpointPath string, model string) (string, error) {
 	normalizedModel := normalizeGeminiModelName(model)
 	if normalizedModel == "" {
-		return "", errors.New("model is empty")
+		return errors.New(errorPrefix + "model is empty")
 	}
 
-	normalizedPath, err := provider.ResolveChatEndpointPath(endpointPath)
-	if err != nil {
-		return "", err
-	}
-	if normalizedPath == "" {
-		normalizedPath = "/models"
-	}
-	if !strings.HasSuffix(normalizedPath, "/models") {
-		normalizedPath = strings.TrimRight(normalizedPath, "/") + "/models"
-	}
+	var (
+		finishReason string
+		usage        providertypes.Usage
+		hasPayload   bool
+		callSeq      int
+	)
+	for chunk, streamErr := range p.client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
+		if streamErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if mappedErr := mapGeminiSDKError(streamErr); mappedErr != nil {
+				return mappedErr
+			}
+			return fmt.Errorf("%sstream generate: %w", errorPrefix, streamErr)
+		}
 
-	endpointBase, err := provider.ResolveChatEndpointURL(baseURL, normalizedPath)
-	if err != nil {
-		return "", err
+		if chunk == nil {
+			continue
+		}
+		hasPayload = true
+		extractUsage(&usage, chunk.UsageMetadata)
+
+		for _, candidate := range chunk.Candidates {
+			if reason := normalizeFinishReason(string(candidate.FinishReason)); reason != "" {
+				finishReason = reason
+			}
+			if candidate.Content == nil {
+				continue
+			}
+			for _, part := range candidate.Content.Parts {
+				if part == nil {
+					continue
+				}
+				if strings.TrimSpace(part.Text) != "" {
+					if err := provider.EmitTextDelta(ctx, events, part.Text); err != nil {
+						return err
+					}
+				}
+				if part.FunctionCall == nil {
+					continue
+				}
+
+				callSeq++
+				callID := strings.TrimSpace(part.FunctionCall.ID)
+				if callID == "" {
+					callID = fmt.Sprintf("gemini-call-%d", callSeq)
+				}
+				name := strings.TrimSpace(part.FunctionCall.Name)
+				if name == "" {
+					continue
+				}
+				if err := provider.EmitToolCallStart(ctx, events, callSeq-1, callID, name); err != nil {
+					return err
+				}
+				argsJSON, err := encodeArguments(part.FunctionCall.Args)
+				if err != nil {
+					return err
+				}
+				if err := provider.EmitToolCallDelta(ctx, events, callSeq-1, callID, argsJSON); err != nil {
+					return err
+				}
+			}
+		}
 	}
-	endpointBase = strings.TrimRight(endpointBase, "/")
-	return endpointBase + "/" + url.PathEscape(normalizedModel) + ":streamGenerateContent?alt=sse", nil
+	if !hasPayload {
+		return fmt.Errorf("%w: empty gemini stream payload", provider.ErrStreamInterrupted)
+	}
+	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
 }
 
 // normalizeGeminiModelName 统一清洗 Gemini 模型名，兼容 discover 返回的 "models/{id}" 形式。
@@ -150,8 +145,76 @@ func normalizeGeminiModelName(model string) string {
 	return strings.TrimSpace(strings.TrimPrefix(trimmed, "models/"))
 }
 
-// applyAuthHeaders 应用 Gemini 请求所需认证头。
-func applyAuthHeaders(header http.Header, cfg provider.RuntimeConfig) {
-	authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
-	provider.ApplyAuthHeaders(header, authStrategy, cfg.APIKey, apiVersion)
+// extractUsage 从 SDK usageMetadata 中抽取统一 token 统计。
+func extractUsage(usage *providertypes.Usage, raw *genai.GenerateContentResponseUsageMetadata) {
+	if raw == nil {
+		return
+	}
+	usage.InputTokens = int(raw.PromptTokenCount)
+	usage.OutputTokens = int(raw.CandidatesTokenCount)
+	usage.TotalTokens = int(raw.TotalTokenCount)
+}
+
+// encodeArguments 将函数参数对象编码为 JSON 字符串，供统一 tool_call_delta 事件复用。
+func encodeArguments(args map[string]any) (string, error) {
+	if len(args) == 0 {
+		return "{}", nil
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("%sencode function args: %w", errorPrefix, err)
+	}
+	return string(encoded), nil
+}
+
+// normalizeFinishReason 规范化 Gemini finish reason，便于上层统一处理。
+func normalizeFinishReason(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// mapGeminiSDKError 将 Gemini SDK 错误映射为 provider 领域错误，仅保留状态码级别兜底。
+func mapGeminiSDKError(err error) error {
+	var apiErr genai.APIError
+	if !errors.As(err, &apiErr) {
+		var apiErrPtr *genai.APIError
+		if !errors.As(err, &apiErrPtr) || apiErrPtr == nil {
+			return nil
+		}
+		apiErr = *apiErrPtr
+	}
+
+	statusCode := apiErr.Code
+	statusName := strings.ToUpper(strings.TrimSpace(apiErr.Status))
+	message := strings.TrimSpace(apiErr.Message)
+
+	if statusCode == 0 {
+		switch statusName {
+		case "UNAUTHENTICATED":
+			statusCode = http.StatusUnauthorized
+		case "PERMISSION_DENIED":
+			statusCode = http.StatusForbidden
+		case "RESOURCE_EXHAUSTED":
+			statusCode = http.StatusTooManyRequests
+		default:
+			statusCode = http.StatusBadRequest
+		}
+	}
+	if message == "" {
+		message = strings.TrimSpace(err.Error())
+	}
+	if statusCode == http.StatusBadRequest {
+		normalized := strings.ToLower(message)
+		switch {
+		case strings.Contains(normalized, "api key"),
+			strings.Contains(normalized, "api-key"),
+			strings.Contains(normalized, "x-goog-api-key"),
+			strings.Contains(normalized, "unauthorized"):
+			statusCode = http.StatusUnauthorized
+		case strings.Contains(normalized, "rate limit"),
+			strings.Contains(normalized, "quota"),
+			strings.Contains(normalized, "resource_exhausted"):
+			statusCode = http.StatusTooManyRequests
+		}
+	}
+	return provider.NewProviderErrorFromStatus(statusCode, message)
 }

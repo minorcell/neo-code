@@ -1,4 +1,4 @@
-package httpdiscovery
+package openaicompat
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"unicode"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/discovery"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -21,42 +20,43 @@ const maxDiscoveryResponseBodyBytes int64 = 2 * 1024 * 1024
 const maxHTTPErrorSummaryBytes int64 = 4 * 1024
 
 var (
-	bearerTokenPattern     = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9\-._~+/]+=*)`)
-	headerSecretPattern    = regexp.MustCompile(`(?i)\b(x-?api-?key|api[_-]?key|authorization)\b\s*[:=]\s*([^\s,;]+)`)
-	jsonSecretPattern      = regexp.MustCompile(`(?i)"(x-?api-?key|api[_-]?key|authorization)"\s*:\s*"[^"]*"`)
-	openAIKeyLikeIDPattern = regexp.MustCompile(`\bsk-[a-zA-Z0-9]{8,}\b`)
+	bearerTokenPattern       = regexp.MustCompile(`(?i)\bbearer\s+([a-z0-9\-._~+/]+=*)`)
+	headerSecretPattern      = regexp.MustCompile(`(?i)\b(x-?api-?key|api[_-]?key|authorization)\b\s*[:=]\s*([^\s,;]+)`)
+	jsonSecretPattern        = regexp.MustCompile(`(?i)"(x-?api-?key|api[_-]?key|authorization)"\s*:\s*"[^"]*"`)
+	providerKeyLikeIDPattern = regexp.MustCompile(`\bsk-[a-zA-Z0-9]{8,}\b`)
 )
 
 // RequestConfig 描述通用 HTTP discovery 请求所需参数。
 type RequestConfig struct {
-	BaseURL           string
-	EndpointPath      string
-	DiscoveryProtocol string
-	ResponseProfile   string
-	AuthStrategy      string
-	APIKey            string
-	APIVersion        string
+	Driver          string
+	BaseURL         string
+	EndpointPath    string
+	ResponseProfile string
+	APIKey          string
 }
 
 // RequestConfigFromRuntime 基于运行时配置生成 discovery/http 请求参数。
 func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error) {
-	discoveryProtocol, discoveryEndpointPath, responseProfile, err := provider.ResolveDriverDiscoveryConfig(
+	normalizedEndpointPath, err := provider.NormalizeProviderDiscoveryEndpointPath(cfg.DiscoveryEndpointPath)
+	if err != nil {
+		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
+	}
+
+	discoveryEndpointPath, responseProfile, err := provider.NormalizeProviderDiscoverySettings(
 		cfg.Driver,
-		cfg.DiscoveryEndpointPath,
+		normalizedEndpointPath,
+		"",
 	)
 	if err != nil {
 		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
 	}
-	authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
 
 	return RequestConfig{
-		BaseURL:           cfg.BaseURL,
-		EndpointPath:      discoveryEndpointPath,
-		DiscoveryProtocol: discoveryProtocol,
-		ResponseProfile:   responseProfile,
-		AuthStrategy:      authStrategy,
-		APIKey:            cfg.APIKey,
-		APIVersion:        apiVersion,
+		Driver:          cfg.Driver,
+		BaseURL:         cfg.BaseURL,
+		EndpointPath:    discoveryEndpointPath,
+		ResponseProfile: responseProfile,
+		APIKey:          cfg.APIKey,
 	}, nil
 }
 
@@ -69,20 +69,17 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, errors.New("provider discovery: http client is nil")
 	}
 
-	discoveryProtocol := provider.NormalizeProviderDiscoveryProtocol(cfg.DiscoveryProtocol)
-	if discoveryProtocol == "" {
-		discoveryProtocol = provider.DiscoveryProtocolCustomHTTPJSON
-	}
-
 	endpointPath, err := provider.NormalizeProviderDiscoveryEndpointPath(cfg.EndpointPath)
 	if err != nil {
 		return nil, provider.NewDiscoveryConfigError(err.Error())
 	}
 	if endpointPath == "" {
-		endpointPath = provider.DiscoveryEndpointPathModels
+		return nil, provider.NewDiscoveryConfigError(
+			"provider discovery endpoint path is empty; set discovery_endpoint_path or switch to model_source=manual",
+		)
 	}
 
-	responseProfile, err := resolveResponseProfile(discoveryProtocol, cfg.ResponseProfile)
+	responseProfile, err := resolveResponseProfile(cfg.Driver, cfg.ResponseProfile)
 	if err != nil {
 		return nil, provider.NewDiscoveryConfigError(err.Error())
 	}
@@ -97,7 +94,7 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, fmt.Errorf("provider discovery: build models request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	provider.ApplyAuthHeaders(req.Header, cfg.AuthStrategy, cfg.APIKey, cfg.APIVersion)
+	applyAuthHeaders(req.Header, cfg.APIKey, cfg.Driver)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -128,7 +125,7 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, fmt.Errorf("provider discovery: decode models response: %w", err)
 	}
 
-	rawModels, err := discovery.ExtractRawModels(payload, responseProfile)
+	rawModels, err := ExtractRawModels(payload, responseProfile)
 	if err != nil {
 		return nil, fmt.Errorf("provider discovery: decode models response: %w", err)
 	}
@@ -157,8 +154,8 @@ func DiscoverModelDescriptors(
 	return providertypes.MergeModelDescriptors(descriptors), nil
 }
 
-// resolveResponseProfile 根据 discovery protocol 与显式配置确定响应提取策略。
-func resolveResponseProfile(discoveryProtocol string, profile string) (string, error) {
+// resolveResponseProfile 根据 driver 与显式配置确定响应提取策略。
+func resolveResponseProfile(driver string, profile string) (string, error) {
 	normalizedProfile, err := provider.NormalizeProviderDiscoveryResponseProfile(profile)
 	if err != nil {
 		return "", err
@@ -166,15 +163,7 @@ func resolveResponseProfile(discoveryProtocol string, profile string) (string, e
 	if normalizedProfile != "" {
 		return normalizedProfile, nil
 	}
-
-	switch discoveryProtocol {
-	case provider.DiscoveryProtocolGeminiModels:
-		return provider.DiscoveryResponseProfileGemini, nil
-	case provider.DiscoveryProtocolOpenAIModels:
-		return provider.DiscoveryResponseProfileOpenAI, nil
-	default:
-		return provider.DiscoveryResponseProfileGeneric, nil
-	}
+	return defaultResponseProfileForDriver(driver), nil
 }
 
 // parseHTTPError 将 discovery HTTP 错误映射为可分类 ProviderError。
@@ -270,7 +259,7 @@ func redactSensitiveSummary(summary string) string {
 	redacted := bearerTokenPattern.ReplaceAllString(summary, "Bearer [REDACTED]")
 	redacted = headerSecretPattern.ReplaceAllString(redacted, "$1: [REDACTED]")
 	redacted = jsonSecretPattern.ReplaceAllStringFunc(redacted, redactJSONSecretField)
-	redacted = openAIKeyLikeIDPattern.ReplaceAllString(redacted, "sk-[REDACTED]")
+	redacted = providerKeyLikeIDPattern.ReplaceAllString(redacted, "sk-[REDACTED]")
 	return redacted
 }
 
@@ -293,4 +282,38 @@ func isTimeoutTransportError(err error) bool {
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+const anthropicVersionHeaderValue = "2023-06-01"
+
+// applyAuthHeaders 根据 driver 注入 discover 所需鉴权头。
+func applyAuthHeaders(header http.Header, apiKey string, driver string) {
+	if header == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(apiKey)
+	if trimmed == "" {
+		return
+	}
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverGemini:
+		header.Set("X-API-Key", trimmed)
+		header.Set("X-Goog-Api-Key", trimmed)
+	case provider.DriverAnthropic:
+		header.Set("X-API-Key", trimmed)
+		header.Set("anthropic-version", anthropicVersionHeaderValue)
+	default:
+		header.Set("Authorization", "Bearer "+trimmed)
+	}
+}
+
+func defaultResponseProfileForDriver(driver string) string {
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverOpenAICompat:
+		return provider.DiscoveryResponseProfileOpenAI
+	case provider.DriverGemini:
+		return provider.DiscoveryResponseProfileGemini
+	default:
+		return provider.DiscoveryResponseProfileGeneric
+	}
 }

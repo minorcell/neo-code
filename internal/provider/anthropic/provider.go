@@ -1,124 +1,197 @@
 package anthropic
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthroption "github.com/anthropics/anthropic-sdk-go/option"
+
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/anthropic/wire"
-	httpdiscovery "neo-code/internal/provider/discovery/http"
 	providertypes "neo-code/internal/provider/types"
 )
+
+const errorPrefix = "anthropic provider: "
+
+type toolCallState struct {
+	ID       string
+	Name     string
+	SawStart bool
+	SawDelta bool
+}
 
 // Provider 封装 Anthropic messages 协议的请求发送与流式解析。
 type Provider struct {
 	cfg    provider.RuntimeConfig
-	client *http.Client
+	client anthropic.Client
 }
 
-// buildOptions 描述 Anthropic provider 构建时可选注入项。
-type buildOptions struct {
-	transport http.RoundTripper
-}
-
-// buildOption 为 New 提供函数式配置。
-type buildOption func(*buildOptions)
-
-// withTransport 注入自定义 HTTP Transport。
-func withTransport(rt http.RoundTripper) buildOption {
-	return func(o *buildOptions) {
-		o.transport = rt
-	}
-}
-
-// New 创建 Anthropic provider 实例。
-func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
-	if err := validateRuntimeConfig(cfg); err != nil {
-		return nil, err
+// New 创建 Anthropic provider 实例，并初始化官方 SDK 客户端。
+func New(cfg provider.RuntimeConfig) (*Provider, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, errors.New(errorPrefix + "api key is empty")
 	}
 
-	o := &buildOptions{transport: http.DefaultTransport}
-	for _, apply := range opts {
-		apply(o)
+	apiKey := strings.TrimSpace(cfg.APIKey)
+
+	httpClient := &http.Client{
+		Timeout: 90 * time.Second,
 	}
+	options := []anthroption.RequestOption{
+		anthroption.WithHTTPClient(httpClient),
+		anthroption.WithAPIKey(apiKey),
+	}
+	if strings.TrimSpace(cfg.BaseURL) != "" {
+		options = append(options, anthroption.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
+	}
+	client := anthropic.NewClient(options...)
 
 	return &Provider{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout:   90 * time.Second,
-			Transport: o.transport,
-		},
+		cfg:    cfg,
+		client: client,
 	}, nil
 }
 
-// DiscoverModels 通过统一 discovery/http 入口发现 Anthropic 可用模型。
-func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	requestCfg, err := httpdiscovery.RequestConfigFromRuntime(p.cfg)
-	if err != nil {
-		return nil, err
-	}
-	return httpdiscovery.DiscoverModelDescriptors(ctx, p.client, requestCfg)
-}
-
-// Generate 发起 Anthropic /messages 流式请求。
+// Generate 发起 Anthropic 流式请求，并将 typed stream 转为统一事件。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	if err := supportedChatProtocol(p.cfg); err != nil {
-		return err
-	}
-
-	payload, err := BuildRequest(ctx, p.cfg, req)
+	params, err := BuildRequest(ctx, p.cfg, req)
 	if err != nil {
 		return err
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("%smarshal request: %w", errorPrefix, err)
-	}
+	streamReader := p.client.Messages.NewStreaming(ctx, params)
+	defer func() { _ = streamReader.Close() }()
 
-	endpointPath := strings.TrimSpace(p.cfg.ChatEndpointPath)
-	if endpointPath == "" || endpointPath == "/" {
-		endpointPath = "/messages"
-	}
-	endpoint, err := provider.ResolveChatEndpointURL(p.cfg.BaseURL, endpointPath)
-	if err != nil {
-		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
-	}
+	var (
+		finishReason string
+		usage        providertypes.Usage
+		hasPayload   bool
+		toolCallSeq  int
+	)
+	toolCalls := make(map[int]toolCallState)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("%sbuild request: %w", errorPrefix, err)
-	}
-	applyAuthHeaders(httpReq.Header, p.cfg)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
+	for streamReader.Next() {
+		hasPayload = true
+		event := streamReader.Current()
+		switch variant := event.AsAny().(type) {
+		case anthropic.MessageStartEvent:
+			if variant.Message.Usage.InputTokens > 0 {
+				usage.InputTokens = int(variant.Message.Usage.InputTokens)
+			}
+			if variant.Message.Usage.OutputTokens > 0 {
+				usage.OutputTokens = int(variant.Message.Usage.OutputTokens)
+			}
+		case anthropic.ContentBlockStartEvent:
+			switch block := variant.ContentBlock.AsAny().(type) {
+			case anthropic.TextBlock:
+				if strings.TrimSpace(block.Text) != "" {
+					if emitErr := provider.EmitTextDelta(ctx, events, block.Text); emitErr != nil {
+						return emitErr
+					}
+				}
+			case anthropic.ToolUseBlock:
+				index := int(variant.Index)
+				state := toolCalls[index]
+				if id := strings.TrimSpace(block.ID); id != "" {
+					state.ID = id
+				}
+				if name := strings.TrimSpace(block.Name); name != "" {
+					state.Name = name
+				}
+				if state.ID == "" {
+					toolCallSeq++
+					state.ID = "anthropic-call-" + strconv.Itoa(toolCallSeq)
+				}
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
-	}
-	defer func(body io.ReadCloser) {
-		if closeErr := body.Close(); closeErr != nil {
-			log.Printf("%sclose response body: %v", errorPrefix, closeErr)
+				emitStart := !state.SawStart
+				state.SawStart = true
+				toolCalls[index] = state
+
+				if emitStart {
+					if emitErr := provider.EmitToolCallStart(ctx, events, index, state.ID, state.Name); emitErr != nil {
+						return emitErr
+					}
+				}
+				input := strings.TrimSpace(string(block.Input))
+				if input != "" && !state.SawDelta {
+					state.SawDelta = true
+					toolCalls[index] = state
+					if emitErr := provider.EmitToolCallDelta(ctx, events, index, state.ID, input); emitErr != nil {
+						return emitErr
+					}
+				}
+			}
+		case anthropic.ContentBlockDeltaEvent:
+			index := int(variant.Index)
+			switch delta := variant.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				if emitErr := provider.EmitTextDelta(ctx, events, delta.Text); emitErr != nil {
+					return emitErr
+				}
+			case anthropic.InputJSONDelta:
+				state := toolCalls[index]
+				if strings.TrimSpace(state.ID) == "" {
+					toolCallSeq++
+					state.ID = "anthropic-call-" + strconv.Itoa(toolCallSeq)
+				}
+				state.SawDelta = true
+				toolCalls[index] = state
+				if emitErr := provider.EmitToolCallDelta(ctx, events, index, state.ID, delta.PartialJSON); emitErr != nil {
+					return emitErr
+				}
+			}
+		case anthropic.MessageDeltaEvent:
+			if reason := strings.TrimSpace(string(variant.Delta.StopReason)); reason != "" {
+				finishReason = reason
+			}
+			if variant.Usage.OutputTokens > 0 {
+				usage.OutputTokens = int(variant.Usage.OutputTokens)
+			}
+			if variant.Usage.InputTokens > 0 {
+				usage.InputTokens = int(variant.Usage.InputTokens)
+			}
 		}
-	}(resp.Body)
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		return wire.ParseError(resp)
 	}
-
-	return wire.ConsumeStream(ctx, resp.Body, events)
+	if streamErr := streamReader.Err(); streamErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if mappedErr := mapAnthropicSDKError(streamErr); mappedErr != nil {
+			return mappedErr
+		}
+		return fmt.Errorf("%sstream receive: %w", errorPrefix, streamErr)
+	}
+	if !hasPayload {
+		return fmt.Errorf("%w: empty anthropic stream payload", provider.ErrStreamInterrupted)
+	}
+	for index, state := range toolCalls {
+		if state.SawDelta && !state.SawStart {
+			return fmt.Errorf("%sinvalid tool_use stream at index %d: missing content_block_start", errorPrefix, index)
+		}
+		if state.SawStart && strings.TrimSpace(state.Name) == "" {
+			return fmt.Errorf("%sinvalid tool_use stream at index %d: missing tool name", errorPrefix, index)
+		}
+	}
+	if usage.TotalTokens <= 0 {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
 }
 
-// applyAuthHeaders 应用 Anthropic 请求所需认证头。
-func applyAuthHeaders(header http.Header, cfg provider.RuntimeConfig) {
-	authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
-	provider.ApplyAuthHeaders(header, authStrategy, cfg.APIKey, apiVersion)
+// mapAnthropicSDKError 统一映射 SDK 错误为 provider 领域错误。
+func mapAnthropicSDKError(err error) error {
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		message := strings.TrimSpace(apiErr.RawJSON())
+		if message == "" {
+			message = strings.TrimSpace(err.Error())
+		}
+		return provider.NewProviderErrorFromStatus(apiErr.StatusCode, message)
+	}
+	return nil
 }

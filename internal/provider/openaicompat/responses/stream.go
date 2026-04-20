@@ -9,9 +9,7 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
-	openaicompatwire "neo-code/internal/provider/openaicompat/wire"
-	"neo-code/internal/provider/streaming"
-	"neo-code/internal/provider/streaming/sse"
+	"neo-code/internal/provider/openaicompat/sse"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -49,19 +47,19 @@ func ConsumeStream(
 
 		switch strings.TrimSpace(event.Type) {
 		case "response.output_text.delta":
-			if err := streaming.EmitTextDelta(ctx, events, event.Delta); err != nil {
+			if err := provider.EmitTextDelta(ctx, events, event.Delta); err != nil {
 				return err
 			}
 		case "response.function_call_arguments.delta":
 			toolIndex := resolveToolCallIndex(event.OutputIndex, event.ItemID, itemToolCallMap, &nextToolCallSlot)
-			delta := openaicompatwire.ToolCallDelta{
+			delta := responseToolCallDelta{
 				Index: toolIndex,
 				ID:    strings.TrimSpace(event.ItemID),
-				Function: openaicompatwire.FunctionCall{
+				Function: responseFunctionCall{
 					Arguments: event.Delta,
 				},
 			}
-			if err := openaicompatwire.MergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
+			if err := mergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
 				return err
 			}
 		case "response.output_item.added", "response.output_item.done":
@@ -73,15 +71,15 @@ func ConsumeStream(
 			if toolCallID == "" {
 				toolCallID = strings.TrimSpace(event.Item.ID)
 			}
-			delta := openaicompatwire.ToolCallDelta{
+			delta := responseToolCallDelta{
 				Index: toolIndex,
 				ID:    toolCallID,
-				Function: openaicompatwire.FunctionCall{
+				Function: responseFunctionCall{
 					Name:      strings.TrimSpace(event.Item.Name),
 					Arguments: event.Item.Arguments,
 				},
 			}
-			if err := openaicompatwire.MergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
+			if err := mergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
 				return err
 			}
 		case "response.completed":
@@ -113,12 +111,12 @@ func ConsumeStream(
 		if reason == "" {
 			reason = "stop"
 		}
-		return streaming.EmitMessageDone(ctx, events, reason, &usage)
+		return provider.EmitMessageDone(ctx, events, reason, &usage)
 	}
 
 	flushPendingData := func() error {
 		defer func() { dataLines = dataLines[:0] }()
-		return streaming.FlushDataLines(dataLines, processChunk)
+		return provider.FlushDataLines(dataLines, processChunk)
 	}
 
 	for {
@@ -188,6 +186,53 @@ func ConsumeStream(
 			return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
 		}
 	}
+}
+
+type responseFunctionCall struct {
+	Name      string
+	Arguments string
+}
+
+type responseToolCallDelta struct {
+	Index    int
+	ID       string
+	Function responseFunctionCall
+}
+
+// mergeToolCallDelta 将单个 tool call 增量合并到累积状态，并在必要时发出统一事件。
+func mergeToolCallDelta(
+	ctx context.Context,
+	events chan<- providertypes.StreamEvent,
+	toolCalls map[int]*providertypes.ToolCall,
+	delta responseToolCallDelta,
+) error {
+	call, exists := toolCalls[delta.Index]
+	if !exists {
+		call = &providertypes.ToolCall{}
+		toolCalls[delta.Index] = call
+	}
+
+	hadName := strings.TrimSpace(call.Name) != ""
+	if id := strings.TrimSpace(delta.ID); id != "" {
+		call.ID = id
+	}
+	if name := strings.TrimSpace(delta.Function.Name); name != "" {
+		call.Name = name
+	}
+
+	if !hadName && strings.TrimSpace(call.Name) != "" {
+		if err := provider.EmitToolCallStart(ctx, events, delta.Index, call.ID, call.Name); err != nil {
+			return err
+		}
+	}
+
+	if args := delta.Function.Arguments; args != "" {
+		call.Arguments += args
+		if err := provider.EmitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveToolCallIndex 维护 Responses 流中的 tool_call 索引，优先复用 output_index。

@@ -11,10 +11,7 @@ import (
 type ProviderIdentity struct {
 	Driver                string `json:"driver"`
 	BaseURL               string `json:"base_url"`
-	ChatProtocol          string `json:"chat_protocol,omitempty"`
 	ChatEndpointPath      string `json:"chat_endpoint_path,omitempty"`
-	DiscoveryProtocol     string `json:"discovery_protocol,omitempty"`
-	AuthStrategy          string `json:"auth_strategy,omitempty"`
 	ResponseProfile       string `json:"response_profile,omitempty"`
 	DiscoveryEndpointPath string `json:"discovery_endpoint_path,omitempty"`
 }
@@ -22,17 +19,8 @@ type ProviderIdentity struct {
 // Key 返回稳定的 provider 身份键，用于缓存命名与去重。
 func (i ProviderIdentity) Key() string {
 	parts := []string{i.Driver, i.BaseURL}
-	if strings.TrimSpace(i.ChatProtocol) != "" {
-		parts = append(parts, i.ChatProtocol)
-	}
 	if strings.TrimSpace(i.ChatEndpointPath) != "" {
 		parts = append(parts, i.ChatEndpointPath)
-	}
-	if strings.TrimSpace(i.DiscoveryProtocol) != "" {
-		parts = append(parts, i.DiscoveryProtocol)
-	}
-	if strings.TrimSpace(i.AuthStrategy) != "" {
-		parts = append(parts, i.AuthStrategy)
 	}
 	if strings.TrimSpace(i.ResponseProfile) != "" {
 		parts = append(parts, i.ResponseProfile)
@@ -58,9 +46,9 @@ func NormalizeProviderDriver(driver string) string {
 	return NormalizeKey(driver)
 }
 
-// NormalizeProviderAPIStyle 规范化 openaicompat 的 api_style。
-func NormalizeProviderAPIStyle(apiStyle string) string {
-	return NormalizeKey(apiStyle)
+// NormalizeProviderChatEndpointPath 规范化聊天端点路径，沿用 discovery 路径安全规则。
+func NormalizeProviderChatEndpointPath(endpointPath string) (string, error) {
+	return NormalizeProviderDiscoveryEndpointPath(endpointPath)
 }
 
 // NormalizeProviderDiscoveryEndpointPath 规范化模型发现端点路径，只允许相对路径。
@@ -120,17 +108,14 @@ func NormalizeProviderDiscoveryResponseProfile(profile string) (string, error) {
 
 // NormalizeProviderDiscoverySettings 根据 driver 规范化 discovery 设置，并在受支持场景补齐默认值。
 func NormalizeProviderDiscoverySettings(driver string, endpointPath string, responseProfile string) (string, string, error) {
-	normalizedDriver := NormalizeProviderDriver(driver)
 	candidateEndpointPath := strings.TrimSpace(endpointPath)
 	candidateResponseProfile := strings.TrimSpace(responseProfile)
 
-	if normalizedDriver == DriverOpenAICompat {
-		if candidateEndpointPath == "" {
-			candidateEndpointPath = DiscoveryEndpointPathModels
-		}
-		if candidateResponseProfile == "" {
-			candidateResponseProfile = DiscoveryResponseProfileOpenAI
-		}
+	if candidateEndpointPath == "" {
+		candidateEndpointPath = DiscoveryEndpointPathModels
+	}
+	if candidateResponseProfile == "" {
+		candidateResponseProfile = defaultDiscoveryResponseProfile(driver)
 	}
 
 	normalizedEndpointPath, err := NormalizeProviderDiscoveryEndpointPath(candidateEndpointPath)
@@ -142,6 +127,17 @@ func NormalizeProviderDiscoverySettings(driver string, endpointPath string, resp
 		return "", "", err
 	}
 	return normalizedEndpointPath, normalizedResponseProfile, nil
+}
+
+func defaultDiscoveryResponseProfile(driver string) string {
+	switch NormalizeProviderDriver(driver) {
+	case DriverOpenAICompat:
+		return DiscoveryResponseProfileOpenAI
+	case DriverGemini:
+		return DiscoveryResponseProfileGemini
+	default:
+		return DiscoveryResponseProfileGeneric
+	}
 }
 
 // NormalizeProviderBaseURL 将 provider 接入地址规范为可比较的稳定形式。
@@ -207,16 +203,28 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 	}
 
 	switch normalizedDriver {
-	case DriverOpenAICompat, DriverGemini, DriverAnthropic:
-		normalizedProtocols, err := NormalizeProviderProtocolSettings(
+	case DriverOpenAICompat:
+		chatEndpointPath, err := NormalizeProviderChatEndpointPath(identity.ChatEndpointPath)
+		if err != nil {
+			return ProviderIdentity{}, err
+		}
+		discoveryEndpointPath, _, err := NormalizeProviderDiscoverySettings(identity.Driver, identity.DiscoveryEndpointPath, "")
+		if err != nil {
+			return ProviderIdentity{}, err
+		}
+		if chatEndpointPath == "/chat/completions" {
+			chatEndpointPath = ""
+		}
+		return ProviderIdentity{
+			Driver:                normalizedDriver,
+			BaseURL:               normalizedBaseURL,
+			ChatEndpointPath:      chatEndpointPath,
+			DiscoveryEndpointPath: discoveryEndpointPath,
+		}, nil
+	case DriverGemini, DriverAnthropic:
+		discoveryEndpointPath, _, err := NormalizeProviderDiscoverySettings(
 			identity.Driver,
-			identity.ChatProtocol,
-			identity.ChatEndpointPath,
-			identity.DiscoveryProtocol,
 			identity.DiscoveryEndpointPath,
-			identity.AuthStrategy,
-			identity.ResponseProfile,
-			"",
 			"",
 		)
 		if err != nil {
@@ -225,12 +233,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 		return ProviderIdentity{
 			Driver:                normalizedDriver,
 			BaseURL:               normalizedBaseURL,
-			ChatProtocol:          normalizedProtocols.ChatProtocol,
-			ChatEndpointPath:      normalizedProtocols.ChatEndpointPath,
-			DiscoveryProtocol:     normalizedProtocols.DiscoveryProtocol,
-			AuthStrategy:          normalizedProtocols.AuthStrategy,
-			ResponseProfile:       normalizedProtocols.ResponseProfile,
-			DiscoveryEndpointPath: normalizedProtocols.DiscoveryEndpointPath,
+			DiscoveryEndpointPath: discoveryEndpointPath,
 		}, nil
 	default:
 		discoveryEndpointPath, responseProfile, err := NormalizeProviderDiscoverySettings(
