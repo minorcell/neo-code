@@ -113,7 +113,7 @@ func newRemoteRuntimeAdapterWithClients(
 	return adapter
 }
 
-// Submit 将用户输入提交到网关：先 authenticate，再 bindStream，最后 run。
+// Submit 将用户输入提交到网关：先 authenticate，再 loadSession 预热，随后 bindStream，最后 run。
 func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	sessionID := strings.TrimSpace(input.SessionID)
 	if sessionID == "" {
@@ -125,6 +125,9 @@ func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input agentruntime.Pr
 	}
 
 	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	if err := r.preloadSession(ctx, sessionID); err != nil {
 		return err
 	}
 	if err := r.bindStream(ctx, sessionID, runID); err != nil {
@@ -249,6 +252,17 @@ func (r *RemoteRuntimeAdapter) ResolvePermission(ctx context.Context, input agen
 	_, err := r.callFrame(ctx, protocol.MethodGatewayResolvePermission, protocol.ResolvePermissionParams{
 		RequestID: strings.TrimSpace(input.RequestID),
 		Decision:  strings.ToLower(strings.TrimSpace(string(input.Decision))),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	return err
+}
+
+// preloadSession 在 run 之前触发一次 gateway.loadSession，用于会话建档/预热。
+func (r *RemoteRuntimeAdapter) preloadSession(ctx context.Context, sessionID string) error {
+	_, err := r.callFrame(ctx, protocol.MethodGatewayLoadSession, protocol.LoadSessionParams{
+		SessionID: strings.TrimSpace(sessionID),
 	}, GatewayRPCCallOptions{
 		Timeout: r.timeout,
 		Retries: r.retryCount,

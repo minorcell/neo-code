@@ -16,9 +16,14 @@ import (
 	"neo-code/internal/tools"
 )
 
-func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsAndRuns(t *testing.T) {
+func TestRemoteRuntimeAdapterSubmitAuthenticatesPreloadsBindsAndRuns(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
 		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayLoadSession: {
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionLoadSession,
+				SessionID: "session-1",
+			},
 			protocol.MethodGatewayBindStream: {
 				Type:      gateway.FrameTypeAck,
 				Action:    gateway.FrameActionBindStream,
@@ -55,8 +60,21 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsAndRuns(t *testing.T) {
 	}
 
 	methods := rpcClient.snapshotMethods()
-	if len(methods) != 2 || methods[0] != protocol.MethodGatewayBindStream || methods[1] != protocol.MethodGatewayRun {
+	if len(methods) != 3 ||
+		methods[0] != protocol.MethodGatewayLoadSession ||
+		methods[1] != protocol.MethodGatewayBindStream ||
+		methods[2] != protocol.MethodGatewayRun {
 		t.Fatalf("rpc methods = %#v", methods)
+	}
+	loadSessionParams, ok := rpcClient.snapshotParams()[protocol.MethodGatewayLoadSession].(protocol.LoadSessionParams)
+	if !ok {
+		t.Fatalf(
+			"loadSession params type = %T, want protocol.LoadSessionParams",
+			rpcClient.snapshotParams()[protocol.MethodGatewayLoadSession],
+		)
+	}
+	if loadSessionParams.SessionID != "session-1" {
+		t.Fatalf("loadSession session_id = %q, want %q", loadSessionParams.SessionID, "session-1")
 	}
 
 	params, ok := rpcClient.snapshotParams()[protocol.MethodGatewayRun].(protocol.RunParams)
@@ -96,6 +114,32 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnAuthenticateError(t *testing.T) {
 	}
 	if methods := rpcClient.snapshotMethods(); len(methods) != 0 {
 		t.Fatalf("expected no rpc call after auth failure, got %#v", methods)
+	}
+}
+
+func TestRemoteRuntimeAdapterSubmitFailFastOnLoadSessionError(t *testing.T) {
+	rpcClient := &stubRemoteRPCClient{
+		callErrs: map[string]error{
+			protocol.MethodGatewayLoadSession: errors.New("session preload failed"),
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	err := adapter.Submit(context.Background(), agentruntime.PrepareInput{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		Text:      "hello",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session preload failed") {
+		t.Fatalf("expected loadSession failure, got %v", err)
+	}
+
+	methods := rpcClient.snapshotMethods()
+	if len(methods) != 1 || methods[0] != protocol.MethodGatewayLoadSession {
+		t.Fatalf("expected only loadSession call before failure, got %#v", methods)
 	}
 }
 

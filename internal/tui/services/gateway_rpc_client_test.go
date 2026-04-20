@@ -105,14 +105,11 @@ func TestGatewayRPCClientRetriesAfterTransportError(t *testing.T) {
 		TokenFile:     tokenFile,
 		Dial: func(_ string) (net.Conn, error) {
 			attempt := atomic.AddInt32(&dialCount, 1)
-			clientConn, serverConn := net.Pipe()
 			if attempt == 1 {
-				go func() {
-					_ = serverConn.Close()
-				}()
-				return clientConn, nil
+				return nil, errors.New("dial failed once")
 			}
 
+			clientConn, serverConn := net.Pipe()
 			go func() {
 				defer serverConn.Close()
 				decoder := json.NewDecoder(serverConn)
@@ -163,14 +160,11 @@ func TestGatewayRPCClientUsesDefaultRetryCountWhenOptionIsZero(t *testing.T) {
 		RetryCount:    0,
 		Dial: func(_ string) (net.Conn, error) {
 			attempt := atomic.AddInt32(&dialCount, 1)
-			clientConn, serverConn := net.Pipe()
 			if attempt == 1 {
-				go func() {
-					_ = serverConn.Close()
-				}()
-				return clientConn, nil
+				return nil, errors.New("dial failed once")
 			}
 
+			clientConn, serverConn := net.Pipe()
 			go func() {
 				defer serverConn.Close()
 				decoder := json.NewDecoder(serverConn)

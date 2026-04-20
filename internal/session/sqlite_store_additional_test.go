@@ -234,3 +234,35 @@ func TestResolveUpdatedAtReturnsProvidedValue(t *testing.T) {
 		t.Fatalf("resolveUpdatedAt should keep non-zero value, got %v want %v", got, provided)
 	}
 }
+
+func TestSQLiteStoreCreateSessionEnsuresDBParentDir(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	projectDir := filepath.Join(baseDir, "project")
+	dbPath := filepath.Join(baseDir, "db-parent", "nested", "session.db")
+
+	store := &SQLiteStore{
+		projectDir: projectDir,
+		assetsDir:  filepath.Join(projectDir, assetsDirName),
+		dbPath:     dbPath,
+		limits:     providertypes.DefaultSessionAssetLimits(),
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	created, err := store.CreateSession(context.Background(), CreateSessionInput{
+		ID:    "session_parent_dir",
+		Title: "parent dir",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if created.ID != "session_parent_dir" {
+		t.Fatalf("created session id = %q, want %q", created.ID, "session_parent_dir")
+	}
+	if _, err := os.Stat(filepath.Dir(dbPath)); err != nil {
+		t.Fatalf("expected db parent dir to exist, stat error = %v", err)
+	}
+}

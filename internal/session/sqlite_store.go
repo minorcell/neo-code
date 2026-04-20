@@ -88,6 +88,9 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
 	}
+	if err := s.ensureStorageDirs(); err != nil {
+		return Session{}, err
+	}
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return Session{}, err
@@ -635,11 +638,8 @@ func (s *SQLiteStore) ensureDB(ctx context.Context) (*sql.DB, error) {
 
 // initialize 打开数据库、设置 PRAGMA 并初始化 schema。
 func (s *SQLiteStore) initialize(ctx context.Context) error {
-	if err := os.MkdirAll(s.projectDir, 0o755); err != nil {
-		return fmt.Errorf("session: create project dir: %w", err)
-	}
-	if err := os.MkdirAll(s.assetsDir, 0o755); err != nil {
-		return fmt.Errorf("session: create assets dir: %w", err)
+	if err := s.ensureStorageDirs(); err != nil {
+		return err
 	}
 
 	db, err := sql.Open("sqlite", s.dbPath)
@@ -659,6 +659,21 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	}
 
 	s.db = db
+	return nil
+}
+
+// ensureStorageDirs 统一保证 session 存储相关目录存在，避免新会话写入时因父目录缺失失败。
+func (s *SQLiteStore) ensureStorageDirs() error {
+	dbDir := filepath.Dir(s.dbPath)
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		return fmt.Errorf("session: create db dir: %w", err)
+	}
+	if err := os.MkdirAll(s.projectDir, 0o755); err != nil {
+		return fmt.Errorf("session: create project dir: %w", err)
+	}
+	if err := os.MkdirAll(s.assetsDir, 0o755); err != nil {
+		return fmt.Errorf("session: create assets dir: %w", err)
+	}
 	return nil
 }
 
