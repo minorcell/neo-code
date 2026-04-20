@@ -1844,8 +1844,10 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		a.pendingCopyID = 0
 		return false
 	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
+		a.pendingCopyID = 0
 		return false
 	default:
 		return false
