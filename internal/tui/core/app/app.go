@@ -99,8 +99,6 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks          map[int]string
-	pendingCopyID           int
 	deferredEventCmd        tea.Cmd
 	deferredLogPersistCmd   tea.Cmd
 	nowFn                   func() time.Time
@@ -157,6 +155,7 @@ type providerAddFormState struct {
 	Name                  string
 	Driver                string
 	ModelSource           string
+	ChatAPIMode           string
 	BaseURL               string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
@@ -168,6 +167,7 @@ type providerAddFormState struct {
 	Submitting            bool
 	Drivers               []string // 可选的 Driver 列表
 	ModelSources          []string // 可选的模型来源列表
+	ChatAPIModes          []string // openaicompat 可选聊天协议模式
 }
 
 type providerAddFormStage int
@@ -308,13 +308,12 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			codeCopyBlocks: make(map[int]string),
-			nowFn:          time.Now,
-			focus:          panelInput,
-			todoFilter:     todoFilterAll,
-			layoutCached:   true,
-			cachedWidth:    128,
-			cachedHeight:   40,
+			nowFn:        time.Now,
+			focus:        panelInput,
+			todoFilter:   todoFilterAll,
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
 		},
 		width:  128,
 		height: 40,

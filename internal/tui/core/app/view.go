@@ -275,7 +275,9 @@ func (a App) renderProviderAddForm() string {
 
 	var sb strings.Builder
 	driver := provider.NormalizeProviderDriver(a.providerAddForm.Driver)
-	baseURLRequired := driver == provider.DriverAnthropic || (driver != provider.DriverOpenAICompat && driver != provider.DriverGemini)
+	baseURLRequired := driver != provider.DriverOpenAICompat &&
+		driver != provider.DriverGemini &&
+		driver != provider.DriverAnthropic
 	visible := providerAddVisibleFields(a.providerAddForm.Driver, a.providerAddForm.ModelSource)
 	clampProviderAddStep(a.providerAddForm)
 
@@ -300,9 +302,17 @@ func (a App) renderProviderAddForm() string {
 				required: true,
 				note:     note,
 			})
+		case providerAddFieldChatAPIMode:
+			note := "仅 openaicompat 生效；chat_completions 或 responses"
+			fields = append(fields, renderField{
+				label: "Chat API Mode",
+				value: a.providerAddForm.ChatAPIMode,
+				note:  note,
+			})
 		case providerAddFieldBaseURL:
 			note := ""
-			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" && (driver == provider.DriverOpenAICompat || driver == provider.DriverGemini) {
+			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" &&
+				(driver == provider.DriverOpenAICompat || driver == provider.DriverGemini || driver == provider.DriverAnthropic) {
 				note = "留空会自动填充默认地址"
 			}
 			fields = append(fields, renderField{
@@ -314,8 +324,10 @@ func (a App) renderProviderAddForm() string {
 		case providerAddFieldChatEndpointPath:
 			note := ""
 			trimmedPath := strings.TrimSpace(a.providerAddForm.ChatEndpointPath)
-			if trimmedPath == "" || trimmedPath == "/" {
-				note = "留空或\"/\" 使用直连 base_url"
+			if trimmedPath == "" {
+				note = "留空会按 Chat API Mode 自动回填默认端点"
+			} else if trimmedPath == "/" {
+				note = "\"/\" 使用直连 base_url"
 			} else {
 				note = "以 \"/\" 开头的端点路径"
 			}
@@ -411,7 +423,12 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
 }
 
-func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int) (string, []copyCodeButtonBinding) {
+func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int, showTag ...bool) (string, []copyCodeButtonBinding) {
+	includeTag := true
+	if len(showTag) > 0 {
+		includeTag = showTag[0]
+	}
+
 	switch message.Role {
 	case roleEvent:
 		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
@@ -457,6 +474,10 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	} else {
 		contentBlock, copyButtons = a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
 	}
+	if message.Role == roleAssistant && !includeTag {
+		return contentBlock, copyButtons
+	}
+
 	tagLine := tagStyle.Render(tag)
 	blockAlign := lipgloss.Left
 	if message.Role == roleUser {
@@ -510,11 +531,11 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	lines := []string{}
-	if errLine := a.footerErrorLine(width); errLine != "" {
-		lines = append(lines, errLine)
+	lines := []string{helpContent}
+	errorLine := a.footerErrorLine(width)
+	if strings.TrimSpace(errorLine) != "" {
+		lines = append([]string{errorLine}, lines...)
 	}
-	lines = append(lines, helpContent)
 	footerContent := strings.Join(lines, "\n")
 	// Keep help content stretched to full width to avoid clipping at borders.
 	return a.styles.footer.Width(width).Render(footerContent)
@@ -543,60 +564,12 @@ func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle l
 	if a.markdownRenderer == nil {
 		return bodyStyle.Render(emptyMessageText), nil
 	}
-
-	segments := splitMarkdownSegments(content)
-	if len(segments) == 1 && segments[0].Kind == markdownSegmentText {
-		rendered, err := a.markdownRenderer.Render(content, max(16, width-2))
-		if err != nil {
-			return bodyStyle.Render(emptyMessageText), nil
-		}
-		rendered = trimRenderedTrailingWhitespace(rendered)
-		return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))), nil
-	}
-
-	renderedParts := make([]string, 0, len(segments))
-	copyBindings := make([]copyCodeButtonBinding, 0, 2)
-	nextCopyID := startCopyID
-
-	for _, segment := range segments {
-		switch segment.Kind {
-		case markdownSegmentText:
-			if strings.TrimSpace(segment.Text) == "" {
-				continue
-			}
-			rendered, err := a.markdownRenderer.Render(segment.Text, max(16, width-2))
-			if err != nil {
-				continue
-			}
-			rendered = trimRenderedTrailingWhitespace(rendered)
-			renderedParts = append(renderedParts, bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))))
-		case markdownSegmentCode:
-			code := strings.TrimRight(segment.Code, "\n")
-			if code == "" {
-				continue
-			}
-			buttonText := fmt.Sprintf(copyCodeButton, nextCopyID)
-			button := a.styles.codeCopyButton.Render(buttonText)
-			renderedCode, err := a.markdownRenderer.Render(segment.Fenced, max(16, width-2))
-			if err != nil {
-				codeTextWidth := max(8, width-4)
-				renderedCode = a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(codeTextWidth).Render(wrapCodeBlock(code, codeTextWidth)))
-			}
-			codeBlock := lipgloss.JoinVertical(
-				lipgloss.Left,
-				button,
-				trimRenderedTrailingWhitespace(renderedCode),
-			)
-			renderedParts = append(renderedParts, codeBlock)
-			copyBindings = append(copyBindings, copyCodeButtonBinding{ID: nextCopyID, Code: code})
-			nextCopyID++
-		}
-	}
-
-	if len(renderedParts) == 0 {
+	rendered, err := a.markdownRenderer.Render(content, max(16, width-2))
+	if err != nil {
 		return bodyStyle.Render(emptyMessageText), nil
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, renderedParts...), copyBindings
+	rendered = trimRenderedTrailingWhitespace(rendered)
+	return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))), nil
 }
 
 func normalizeBlockRightEdge(content string, maxWidth int) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
 	"neo-code/internal/security"
@@ -157,7 +159,11 @@ func NewWithFactory(
 	contextBuilder agentcontext.Builder,
 ) *Service {
 	if providerFactory == nil {
-		providerFactory = provider.NewRegistry()
+		registry, err := builtin.NewRegistry()
+		if err != nil {
+			panic(fmt.Sprintf("runtime: init builtin provider registry: %v", err))
+		}
+		providerFactory = registry
 	}
 	if toolManager == nil {
 		toolManager = tools.NewRegistry()

@@ -336,21 +336,21 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	return app, runtime
 }
 
-func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
+func TestSubmitProviderAddFormRequiresCustomDriverBaseURL(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
 
-	app.providerAddForm.Name = "anthropic-gateway"
-	app.providerAddForm.Driver = provider.DriverAnthropic
-	app.providerAddForm.APIKeyEnv = "ANTHROPIC_GATEWAY_API_KEY"
+	app.providerAddForm.Name = "custom-gateway"
+	app.providerAddForm.Driver = "custom-driver"
+	app.providerAddForm.APIKeyEnv = "CUSTOM_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "test-key"
 	app.providerAddForm.BaseURL = ""
 
 	cmd := app.submitProviderAddForm()
 	if cmd != nil {
-		t.Fatalf("expected nil command for invalid anthropic form")
+		t.Fatalf("expected nil command for invalid custom driver form")
 	}
-	if !strings.Contains(app.providerAddForm.Error, "Base URL is required") {
+	if !strings.Contains(app.providerAddForm.Error, "Base URL is required for custom driver") {
 		t.Fatalf("expected base URL validation error, got %q", app.providerAddForm.Error)
 	}
 }
@@ -464,7 +464,7 @@ func TestSubmitProviderAddFormTransitionsToManualStageWhenModelSourceManual(t *t
 
 	app.providerAddForm.Name = "manual-stage-gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
-	app.providerAddForm.ModelSource = provider.ModelSourceManual
+	app.providerAddForm.ModelSource = config.ModelSourceManual
 	app.providerAddForm.APIKeyEnv = "MANUAL_STAGE_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "sk-manual-stage"
 
@@ -853,165 +853,6 @@ func TestRuntimeEventAgentDoneHandlerAppendsMessage(t *testing.T) {
 	}
 	if len(app.activeMessages) == 0 {
 		t.Fatalf("expected message appended")
-	}
-}
-
-func TestParseFenceOpenLine(t *testing.T) {
-	info, ok := parseFenceOpenLine("```go")
-	if !ok || info != "go" {
-		t.Fatalf("expected fence info, got %q ok=%v", info, ok)
-	}
-	info, ok = parseFenceOpenLine(" not a fence")
-	if ok || info != "" {
-		t.Fatalf("expected no fence")
-	}
-}
-
-func TestIsFenceCloseLine(t *testing.T) {
-	if !isFenceCloseLine("```") {
-		t.Fatalf("expected fence close")
-	}
-	if isFenceCloseLine("```go") {
-		t.Fatalf("expected not fence close")
-	}
-}
-
-func TestIsIndentedCodeLine(t *testing.T) {
-	if !isIndentedCodeLine("\tcode") {
-		t.Fatalf("expected tab-indented code")
-	}
-	if !isIndentedCodeLine("    code") {
-		t.Fatalf("expected space-indented code")
-	}
-	if isIndentedCodeLine("code") {
-		t.Fatalf("expected non-indented line")
-	}
-}
-
-func TestTrimCodeIndent(t *testing.T) {
-	if got := trimCodeIndent("\tcode"); got != "code" {
-		t.Fatalf("expected trimmed tab indent, got %q", got)
-	}
-	if got := trimCodeIndent("    code"); got != "code" {
-		t.Fatalf("expected trimmed space indent, got %q", got)
-	}
-	if got := trimCodeIndent("code"); got != "code" {
-		t.Fatalf("expected unchanged line, got %q", got)
-	}
-}
-
-func TestSplitMarkdownSegmentsFenced(t *testing.T) {
-	content := "hello\n```go\nfmt.Println(\"ok\")\n```\nworld"
-	segments := splitMarkdownSegments(content)
-	if len(segments) < 2 {
-		t.Fatalf("expected multiple segments, got %d", len(segments))
-	}
-	if segments[1].Kind != markdownSegmentCode || segments[1].Code == "" {
-		t.Fatalf("expected code segment")
-	}
-}
-
-func TestSplitMarkdownSegmentsIndented(t *testing.T) {
-	content := "hello\n    code line\nworld"
-	segments := splitMarkdownSegments(content)
-	if len(segments) < 2 {
-		t.Fatalf("expected multiple segments, got %d", len(segments))
-	}
-	foundCode := false
-	for _, seg := range segments {
-		if seg.Kind == markdownSegmentCode && seg.Code != "" {
-			foundCode = true
-		}
-	}
-	if !foundCode {
-		t.Fatalf("expected indented code segment")
-	}
-}
-
-func TestSplitIndentedCodeSegmentsDetectsCodeFeaturesInCodeMode(t *testing.T) {
-	content := "func main() {\nreturn 1\n}\nplain text"
-	segments := splitIndentedCodeSegments(content)
-	if len(segments) < 2 {
-		t.Fatalf("expected code and text segments, got %d", len(segments))
-	}
-	if segments[0].Kind != markdownSegmentCode {
-		t.Fatalf("expected first segment to be code")
-	}
-	if !strings.Contains(segments[0].Code, "return 1") {
-		t.Fatalf("expected code segment to include return statement, got %q", segments[0].Code)
-	}
-}
-
-func TestExtractFencedCodeBlocks(t *testing.T) {
-	content := "text\n```go\nfmt.Println(\"ok\")\n```\nend"
-	blocks := extractFencedCodeBlocks(content)
-	if len(blocks) != 1 || blocks[0] == "" {
-		t.Fatalf("expected one code block")
-	}
-}
-
-func TestParseCopyCodeButton(t *testing.T) {
-	id, start, end, ok := parseCopyCodeButton("[Copy code #12]")
-	if !ok || id != 12 || start >= end {
-		t.Fatalf("unexpected parse result: id=%d start=%d end=%d ok=%v", id, start, end, ok)
-	}
-	if _, _, _, ok := parseCopyCodeButton("no button"); ok {
-		t.Fatalf("expected no button parse")
-	}
-}
-
-func TestCopyCodeBlockByIDSuccess(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	var got string
-	originalClipboard := clipboardWriteAll
-	clipboardWriteAll = func(text string) error {
-		got = text
-		return nil
-	}
-	defer func() { clipboardWriteAll = originalClipboard }()
-
-	app.setCodeCopyBlocks([]copyCodeButtonBinding{{ID: 1, Code: "code"}})
-	ok := app.copyCodeBlockByID(1)
-	if !ok {
-		t.Fatalf("expected handled copy")
-	}
-	if got != "code" {
-		t.Fatalf("expected clipboard content, got %q", got)
-	}
-	if app.state.StatusText == "" {
-		t.Fatalf("expected status text to be set")
-	}
-}
-
-func TestCopyCodeBlockByIDMissing(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	ok := app.copyCodeBlockByID(99)
-	if !ok {
-		t.Fatalf("expected handled copy")
-	}
-	if app.state.StatusText != statusCodeCopyError {
-		t.Fatalf("expected error status, got %s", app.state.StatusText)
-	}
-}
-
-func TestCopyCodeBlockByIDClipboardError(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	originalClipboard := clipboardWriteAll
-	clipboardWriteAll = func(text string) error {
-		return errors.New("fail")
-	}
-	defer func() { clipboardWriteAll = originalClipboard }()
-
-	app.setCodeCopyBlocks([]copyCodeButtonBinding{{ID: 2, Code: "code"}})
-	ok := app.copyCodeBlockByID(2)
-	if !ok {
-		t.Fatalf("expected handled copy")
-	}
-	if app.state.StatusText != statusCodeCopyError {
-		t.Fatalf("expected error status, got %s", app.state.StatusText)
 	}
 }
 
@@ -1811,6 +1652,64 @@ func TestShouldHandleTabAsInput(t *testing.T) {
 	}
 }
 
+func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("/he")
+	app.state.InputText = "/he"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+	if !app.commandMenuHasSuggestions() {
+		t.Fatalf("expected slash suggestions before tab completion")
+	}
+	_, inputYBefore, _, _ := app.inputBounds()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	_, inputYAfterTab, _, _ := app.inputBounds()
+	if inputYAfterTab != inputYBefore {
+		t.Fatalf("expected input Y to stay stable after slash tab completion, before=%d after=%d", inputYBefore, inputYAfterTab)
+	}
+	if got := strings.TrimSpace(app.input.Value()); got != slashUsageHelp {
+		t.Fatalf("expected completed slash command %q, got %q", slashUsageHelp, got)
+	}
+	if app.commandMenuHasSuggestions() {
+		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+}
+
+func TestManualSlashCompletionDoesNotMoveInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("/hel")
+	app.state.InputText = "/hel"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+	if !app.commandMenuHasSuggestions() {
+		t.Fatalf("expected slash suggestions before manual completion")
+	}
+	_, inputYBefore, _, _ := app.inputBounds()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	app = model.(App)
+	_, inputYAfter, _, _ := app.inputBounds()
+	if inputYAfter != inputYBefore {
+		t.Fatalf("expected input Y to stay stable after manual slash completion, before=%d after=%d", inputYBefore, inputYAfter)
+	}
+	if got := strings.TrimSpace(app.input.Value()); got != slashUsageHelp {
+		t.Fatalf("expected input value %q, got %q", slashUsageHelp, got)
+	}
+	if app.commandMenuHasSuggestions() {
+		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+}
+
 func TestFocusNextPrev(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.focus = panelTranscript
@@ -2235,12 +2134,8 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected transcript bounds miss")
 	}
 
-	app.pendingCopyID = 9
 	if app.handleTranscriptMouse(tea.MouseMsg{X: tx - 1, Y: ty - 1, Action: tea.MouseActionRelease}) {
 		t.Fatalf("expected outside transcript release to return false")
-	}
-	if app.pendingCopyID != 0 {
-		t.Fatalf("expected pending copy id to reset after release outside transcript")
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
 		X: tx, Y: ty, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
@@ -2357,7 +2252,7 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
-	app.providerAddForm.Step = 6 // api key env
+	app.providerAddForm.Step = 7 // api key env
 	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for env key rune input")
@@ -2495,14 +2390,14 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "demo",
 			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: config.ModelSourceManual,
 		}); !strings.Contains(err, "API Key is required") {
 			t.Fatalf("expected missing key error, got %q", err)
 		}
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "demo",
 			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: config.ModelSourceManual,
 			APIKey:      "k",
 			APIKeyEnv:   "",
 		}); !strings.Contains(err, "API Key Env is required") {
@@ -2510,19 +2405,16 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("openai compat discover mode uses default discovery endpoint path", func(t *testing.T) {
-		req, err := buildProviderAddRequest(providerAddFormState{
+	t.Run("openai compat discover mode requires discovery endpoint path", func(t *testing.T) {
+		_, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceDiscover,
+			ModelSource: config.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "OPENAI_COMPAT_API_KEY",
 		})
-		if err != "" {
-			t.Fatalf("expected default discovery endpoint, got %q and req=%+v", err, req)
-		}
-		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
-			t.Fatalf("expected default discovery endpoint /models, got %+v", req)
+		if !strings.Contains(err, "requires discovery_endpoint_path") {
+			t.Fatalf("expected missing discovery endpoint error, got %q", err)
 		}
 	})
 
@@ -2530,7 +2422,8 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat-discover",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeResponses,
 			ChatEndpointPath:      "/chat/completions",
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
@@ -2539,7 +2432,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
 		}
-		if req.ModelSource != provider.ModelSourceDiscover {
+		if req.ModelSource != config.ModelSourceDiscover {
 			t.Fatalf("expected discover model source, got %q", req.ModelSource)
 		}
 		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
@@ -2548,15 +2441,58 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if req.ChatEndpointPath != "/chat/completions" {
 			t.Fatalf("expected default chat endpoint, got %q", req.ChatEndpointPath)
 		}
+		if req.ChatAPIMode != provider.ChatAPIModeResponses {
+			t.Fatalf("expected chat api mode responses, got %q", req.ChatAPIMode)
+		}
+	})
+
+	t.Run("openai compat defaults chat api mode to chat_completions", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-default-mode",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_DEFAULT_MODE_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeChatCompletions {
+			t.Fatalf("expected default chat api mode, got %q", req.ChatAPIMode)
+		}
+	})
+
+	t.Run("openai compat fills chat endpoint by chat api mode when empty", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-responses-endpoint",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeResponses,
+			ChatEndpointPath:      "",
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_RESPONSES_ENDPOINT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeResponses {
+			t.Fatalf("expected chat api mode responses, got %q", req.ChatAPIMode)
+		}
+		if req.ChatEndpointPath != "/responses" {
+			t.Fatalf("expected responses endpoint path, got %q", req.ChatEndpointPath)
+		}
 	})
 
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "openai-compat",
-			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceManual,
-			APIKey:      "k",
-			APIKeyEnv:   "\x00OPENAI_COMPAT_API_KEY",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "\x00OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2568,11 +2504,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("rejects protected env key", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "openai-compat",
-			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceManual,
-			APIKey:      "k",
-			APIKeyEnv:   "PATH",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "PATH",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		}); !strings.Contains(err, "protected") {
 			t.Fatalf("expected protected env key error, got %q", err)
 		}
@@ -2580,11 +2517,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("gemini applies default base url", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "gemini",
-			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
-			APIKey:      "k",
-			APIKeyEnv:   "GEMINI_GATEWAY_API_KEY",
+			Name:                  "gemini",
+			Driver:                provider.DriverGemini,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "GEMINI_GATEWAY_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2598,7 +2536,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceDiscover,
+			ModelSource:           config.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath: "https://api.example.com/models",
@@ -2609,32 +2547,23 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("rejects invalid chat endpoint path", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:             "openai-compat",
-			Driver:           provider.DriverOpenAICompat,
-			ModelSource:      provider.ModelSourceDiscover,
-			APIKey:           "k",
-			APIKeyEnv:        "OPENAI_COMPAT_API_KEY",
-			ChatEndpointPath: "https://api.example.com/chat/completions",
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+			ChatEndpointPath:      "https://api.example.com/chat/completions",
 		}); !strings.Contains(err, "relative path") {
 			t.Fatalf("expected invalid chat endpoint path error, got %q", err)
 		}
 	})
 
-	t.Run("anthropic/custom require base url", func(t *testing.T) {
-		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "anthropic",
-			Driver:      provider.DriverAnthropic,
-			ModelSource: provider.ModelSourceManual,
-			APIKey:      "k",
-			APIKeyEnv:   "ANTHROPIC_GATEWAY_API_KEY",
-		}); !strings.Contains(err, "Base URL is required") {
-			t.Fatalf("expected anthropic base url error, got %q", err)
-		}
-
+	t.Run("custom driver requires base url", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "custom",
 			Driver:      "custom-driver",
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: config.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "CUSTOM_DRIVER_API_KEY",
 			BaseURL:     "",
@@ -2647,10 +2576,11 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "manual",
 			Driver:                provider.DriverOpenAICompat,
-			ModelSource:           provider.ModelSourceManual,
+			ModelSource:           config.ModelSourceManual,
 			APIKey:                "k",
 			APIKeyEnv:             "MANUAL_GATEWAY_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+			ManualModelsJSON:      `[{"id":"manual-model","name":"Manual Model"}]`,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2659,6 +2589,20 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			t.Fatalf("expected manual mode to clear discovery settings, got %+v", req)
 		}
 	})
+}
+
+func TestParseProviderAddManualModelsJSONRejectsNonPositiveNumericFields(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","context_window":0}]`)
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected context_window validation error, got %v", err)
+	}
+
+	_, err = parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","max_output_tokens":0}]`)
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	}
 }
 
 func TestRefreshRuntimeSourceSnapshot(t *testing.T) {
@@ -3131,8 +3075,8 @@ func TestUpdateInputPanelTypingPathAndProviderAddFormExtraBranches(t *testing.T)
 	}
 
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = provider.DriverAnthropic
-	app.providerAddForm.Step = 4 // chat endpoint
+	app.providerAddForm.Driver = "unknown-driver"
+	app.providerAddForm.Step = 5 // chat endpoint
 	modelPtr, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2024-10-01")})
 	app = *modelPtr.(*App)
 	if app.providerAddForm.ChatEndpointPath == "" {
@@ -3378,26 +3322,31 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected /clear branch to update status")
 	}
 
-	fields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceDiscover)
+	fields := providerAddVisibleFields(provider.DriverOpenAICompat, config.ModelSourceDiscover)
 	if len(fields) == 0 || fields[0] != providerAddFieldName {
 		t.Fatalf("expected provider add visible fields to start from name field")
 	}
 	if !slices.Contains(fields, providerAddFieldDiscoveryEndpointPath) ||
-		!slices.Contains(fields, providerAddFieldChatEndpointPath) {
+		!slices.Contains(fields, providerAddFieldChatEndpointPath) ||
+		!slices.Contains(fields, providerAddFieldChatAPIMode) {
 		t.Fatalf("expected discover source to include discovery fields")
 	}
 
-	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceManual)
+	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, config.ModelSourceManual)
 	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
 		slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
 		t.Fatalf("expected manual source to exclude discovery fields")
+	}
+	geminiFields := providerAddVisibleFields(provider.DriverGemini, config.ModelSourceDiscover)
+	if slices.Contains(geminiFields, providerAddFieldChatAPIMode) {
+		t.Fatalf("expected non-openai driver to exclude chat api mode field")
 	}
 	clampProviderAddStep(nil)
 
 	if _, err := buildProviderAddRequest(providerAddFormState{
 		Name:                  "custom-provider",
 		Driver:                "custom-driver",
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           config.ModelSourceDiscover,
 		BaseURL:               "https://example.com",
 		DiscoveryEndpointPath: "/models",
 		APIKeyEnv:             "CUSTOM_PROVIDER_API_KEY",
@@ -3415,6 +3364,27 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 
 	app.providerAddForm = nil
 	app.handleProviderAddResultMsg(providerAddResultMsg{Name: "unused"})
+}
+
+func TestSyncProviderAddOpenAICompatModeDefaults(t *testing.T) {
+	t.Parallel()
+
+	form := &providerAddFormState{
+		Driver:           provider.DriverOpenAICompat,
+		ChatAPIMode:      provider.ChatAPIModeResponses,
+		ChatEndpointPath: "/chat/completions",
+	}
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeChatCompletions)
+	if form.ChatEndpointPath != "/responses" {
+		t.Fatalf("expected default endpoint to follow responses mode, got %q", form.ChatEndpointPath)
+	}
+
+	form.ChatAPIMode = provider.ChatAPIModeChatCompletions
+	form.ChatEndpointPath = "/custom/chat"
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeResponses)
+	if form.ChatEndpointPath != "/custom/chat" {
+		t.Fatalf("expected custom endpoint unchanged, got %q", form.ChatEndpointPath)
+	}
 }
 
 func TestRunProviderAddFlowDeadlineExceededBranch(t *testing.T) {
@@ -3509,6 +3479,45 @@ func TestSetTranscriptContentNormalizesTabStops(t *testing.T) {
 	}
 	if got := app.transcript.View(); !strings.Contains(got, "a    b") {
 		t.Fatalf("expected normalized tabs in viewport content, got %q", got)
+	}
+}
+
+func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first chunk")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second chunk")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("third chunk")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if count := strings.Count(plain, messageTagAgent); count != 1 {
+		t.Fatalf("expected one agent tag for consecutive assistant chunks, got %d in %q", count, plain)
+	}
+	if !strings.Contains(plain, "first chunk") || !strings.Contains(plain, "second chunk") || !strings.Contains(plain, "third chunk") {
+		t.Fatalf("expected all assistant chunks to be present, got %q", plain)
+	}
+}
+
+func TestRebuildTranscriptDoesNotCollapseAssistantAcrossToolBoundary(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before tool")}},
+		{Role: roleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool output")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if count := strings.Count(plain, messageTagAgent); count != 2 {
+		t.Fatalf("expected two agent tags across tool boundary, got %d in %q", count, plain)
 	}
 }
 
@@ -3985,7 +3994,6 @@ func TestHandleTranscriptMouseWheelAndClickFallback(t *testing.T) {
 		t.Fatalf("expected transcript wheel down to be handled")
 	}
 
-	app.pendingCopyID = 9
 	if app.handleTranscriptMouse(tea.MouseMsg{
 		X:      x + 1,
 		Y:      y + 1,
@@ -3993,9 +4001,6 @@ func TestHandleTranscriptMouseWheelAndClickFallback(t *testing.T) {
 		Action: tea.MouseActionPress,
 	}) {
 		t.Fatalf("expected plain left click without copy button hit to return false")
-	}
-	if app.pendingCopyID != 0 {
-		t.Fatalf("expected pendingCopyID reset when click does not hit copy button, got %d", app.pendingCopyID)
 	}
 }
 
