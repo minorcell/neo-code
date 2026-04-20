@@ -1,10 +1,12 @@
 package openaicompat
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -15,6 +17,11 @@ import (
 	"neo-code/internal/provider/openaicompat/chatcompletions"
 	"neo-code/internal/provider/openaicompat/responses"
 	providertypes "neo-code/internal/provider/types"
+)
+
+const (
+	maxStreamingErrorSummaryBytes int64 = 8 * 1024
+	streamProbeBytes                    = 512
 )
 
 // generateSDKChatCompletions 走 SDK chat/completions 发送请求，复用本地 wire 解析。
@@ -72,6 +79,13 @@ func (p *Provider) sendSDKStreamRequest(
 	)
 	if err != nil {
 		if resp != nil && resp.StatusCode >= http.StatusBadRequest {
+			if resp.Body != nil {
+				defer func(body io.ReadCloser) {
+					if closeErr := body.Close(); closeErr != nil {
+						log.Printf("%sclose response body: %v", errorPrefix, closeErr)
+					}
+				}(resp.Body)
+			}
 			return parseError(resp)
 		}
 		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
@@ -87,6 +101,9 @@ func (p *Provider) sendSDKStreamRequest(
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return parseError(resp)
+	}
+	if err := validateStreamingResponse(resp); err != nil {
+		return err
 	}
 	return consumeStream(ctx, resp.Body, events)
 }
@@ -104,4 +121,57 @@ func resolveChatEndpoint(cfg provider.RuntimeConfig) (string, error) {
 		return "", fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
 	}
 	return endpoint, nil
+}
+
+// validateStreamingResponse 校验流式响应协议，避免非 SSE 响应被误交给流解析器。
+func validateStreamingResponse(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return fmt.Errorf("%sstream response is empty", errorPrefix)
+	}
+
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	mediaType = strings.TrimSpace(strings.ToLower(mediaType))
+
+	if mediaType == "text/event-stream" {
+		return nil
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	originalBody := resp.Body
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: reader,
+		Closer: originalBody,
+	}
+
+	if mediaType == "" {
+		peek, _ := reader.Peek(streamProbeBytes)
+		if !looksLikeHTMLPayload(peek) {
+			return nil
+		}
+	}
+
+	summary := readHTTPErrorSummary(reader, maxStreamingErrorSummaryBytes)
+	if looksLikeHTMLPayload([]byte(summary)) {
+		summary = strings.TrimSpace(htmlTagPattern.ReplaceAllString(summary, " "))
+	}
+	message := "upstream did not return an SSE stream"
+	if mediaType == "" {
+		message += " (missing content-type)"
+	} else {
+		message += fmt.Sprintf(" (content-type=%s)", mediaType)
+	}
+	if summary != "" {
+		message += "; upstream body: " + summary
+	}
+	return provider.NewProviderErrorFromStatus(http.StatusBadGateway, message)
+}
+
+// looksLikeHTMLPayload 判断响应片段是否明显是 HTML 页面内容。
+func looksLikeHTMLPayload(payload []byte) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(string(payload)))
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
 }

@@ -2,6 +2,7 @@ package memo
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -215,6 +216,10 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
+		if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
+			a.logError("memo: auto extract skipped (protocol_mismatch): %v", err)
+			return
+		}
 		a.logError("memo: auto extract failed: %v", err)
 		return
 	}

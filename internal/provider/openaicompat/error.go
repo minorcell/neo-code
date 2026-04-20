@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"neo-code/internal/provider"
@@ -13,6 +15,8 @@ import (
 const (
 	maxErrorBodySize = 64 * 1024
 )
+
+var htmlTagPattern = regexp.MustCompile(`(?is)<[^>]+>`)
 
 type errorResponse struct {
 	Error struct {
@@ -36,14 +40,21 @@ func ParseError(resp *http.Response) error {
 		return provider.NewProviderErrorFromStatus(resp.StatusCode, parsed.Error.Message)
 	}
 
-	bodyText := strings.TrimSpace(string(data))
-	if bodyText == "" {
+	summary := summarizeErrorBody(data, truncated)
+	if summary == "" {
 		return provider.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
 	}
-	if truncated {
-		bodyText += " ...(truncated)"
+
+	if isHTMLResponse(resp.Header.Get("Content-Type"), data) {
+		summary = sanitizeHTMLSummary(data, truncated)
+		message := "upstream returned a non-JSON HTML error page"
+		if summary != "" {
+			message += ": " + summary
+		}
+		return provider.NewProviderErrorFromStatus(resp.StatusCode, message)
 	}
-	return provider.NewProviderErrorFromStatus(resp.StatusCode, bodyText)
+
+	return provider.NewProviderErrorFromStatus(resp.StatusCode, summary)
 }
 
 // readBoundedBody 读取受限响应体，超过上限时返回截断标记。
@@ -56,4 +67,37 @@ func readBoundedBody(body io.Reader, limit int64) ([]byte, bool, error) {
 		return data, false, nil
 	}
 	return data[:limit], true, nil
+}
+
+// summarizeErrorBody 清洗并脱敏错误响应内容，避免原始响应直接泄漏到上层。
+func summarizeErrorBody(payload []byte, truncated bool) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	summary := sanitizePrintableText(payload)
+	summary = redactSensitiveSummary(summary)
+	if summary == "" {
+		return ""
+	}
+	if truncated {
+		return summary + " ...(truncated)"
+	}
+	return summary
+}
+
+// isHTMLResponse 判断响应头或响应体是否表现为 HTML 错误页。
+func isHTMLResponse(contentType string, payload []byte) bool {
+	mediaType, _, _ := mime.ParseMediaType(strings.TrimSpace(contentType))
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+		return true
+	}
+	return looksLikeHTMLPayload(payload)
+}
+
+// sanitizeHTMLSummary 将 HTML 片段转换为可读摘要，避免标签污染错误信息。
+func sanitizeHTMLSummary(payload []byte, truncated bool) string {
+	sanitized := htmlTagPattern.ReplaceAllString(string(payload), " ")
+	return summarizeErrorBody([]byte(sanitized), truncated)
 }
