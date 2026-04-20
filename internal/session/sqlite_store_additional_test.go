@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -328,6 +329,87 @@ func TestSQLiteStoreCleanupExpiredSessionsRemovesExpiredSessionsAndAssets(t *tes
 	}
 	if _, err := os.Stat(freshAssetDir); err != nil {
 		t.Fatalf("expected fresh asset dir to remain, got %v", err)
+	}
+}
+
+func TestSQLiteStoreCleanupExpiredSessionsSkipsInvalidAssetPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	expiredAt := time.Now().UTC().Add(-DefaultSessionMaxAge - time.Hour).Truncate(time.Millisecond)
+	session, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:        "cleanup_escape_seed",
+		Title:     "escape seed",
+		CreatedAt: expiredAt,
+		UpdatedAt: expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	maliciousID := filepath.Join("..", "escaped-cleanup-target")
+	if _, err := db.ExecContext(ctx, `UPDATE sessions SET id = ? WHERE id = ?`, maliciousID, session.ID); err != nil {
+		t.Fatalf("UPDATE session id error = %v", err)
+	}
+
+	victimDir := filepath.Join(store.assetsDir, maliciousID)
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(victim) error = %v", err)
+	}
+	victimFile := filepath.Join(victimDir, "note.txt")
+	if err := os.WriteFile(victimFile, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("WriteFile(victim) error = %v", err)
+	}
+
+	removed, err := store.CleanupExpiredSessions(ctx, DefaultSessionMaxAge)
+	if err != nil {
+		t.Fatalf("CleanupExpiredSessions() error = %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupExpiredSessions() removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(victimFile); err != nil {
+		t.Fatalf("expected invalid-path victim file to remain, got %v", err)
+	}
+}
+
+func TestSQLiteStoreInitializeTightensExistingDirectoryPermissions(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("directory mode assertions are not reliable on Windows")
+	}
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewStore(baseDir, workspaceRoot)
+	t.Cleanup(func() { _ = store.Close() })
+
+	for _, dir := range []string{store.projectDir, store.assetsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatalf("Chmod(%q, 0755) error = %v", dir, err)
+		}
+	}
+
+	if _, err := store.ensureDB(context.Background()); err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+
+	for _, dir := range []string{store.projectDir, store.assetsDir} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("Stat(%q) error = %v", dir, err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("%s mode = %o, want 700", dir, got)
+		}
 	}
 }
 

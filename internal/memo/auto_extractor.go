@@ -2,6 +2,7 @@ package memo
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
 	"log"
 	"strings"
@@ -324,14 +325,21 @@ func (a *AutoExtractor) logError(format string, args ...any) {
 // computeMessageFingerprint 使用 FNV-1a 64bit 哈希计算消息窗口的内容指纹，用于增量提取检测。
 func computeMessageFingerprint(messages []providertypes.Message) uint64 {
 	h := fnv.New64a()
+	payload, err := json.Marshal(messages)
+	if err == nil {
+		_, _ = h.Write(payload)
+		return h.Sum64()
+	}
+
+	// 回退路径仅在意外序列化失败时使用，至少保留文本消息的增量检测能力。
 	for _, msg := range messages {
 		_, _ = h.Write([]byte(msg.Role))
 		_, _ = h.Write([]byte{0})
 		for _, part := range msg.Parts {
-			if part.Kind == providertypes.ContentPartText {
-				_, _ = h.Write([]byte(part.Text))
-				_, _ = h.Write([]byte{0})
-			}
+			_, _ = h.Write([]byte(part.Kind))
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(part.Text))
+			_, _ = h.Write([]byte{0})
 		}
 	}
 	return h.Sum64()

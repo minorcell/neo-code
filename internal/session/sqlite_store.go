@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,10 +125,7 @@ func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	}
 
 	// 清理附件目录
-	for _, id := range expiredIDs {
-		assetDir := filepath.Join(s.assetsDir, id)
-		_ = os.RemoveAll(assetDir)
-	}
+	s.cleanupExpiredSessionAssets(expiredIDs)
 
 	return int(affected), nil
 }
@@ -665,14 +663,7 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, sessionID string) error
 		return fmt.Errorf("session: delete session %s: %w", sessionID, err)
 	}
 
-	assetDir := filepath.Join(s.assetsDir, sessionID)
-	if err := ensurePathWithinBase(s.projectDir, assetDir); err != nil {
-		return fmt.Errorf("session: resolve assets dir path: %w", err)
-	}
-	if err := os.RemoveAll(assetDir); err != nil {
-		return fmt.Errorf("session: delete assets dir %s: %w", sessionID, err)
-	}
-	return nil
+	return s.removeSessionAssetsDir(sessionID)
 }
 
 // ensureDB 懒加载数据库并执行 schema 初始化。
@@ -693,9 +684,11 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	if err := os.MkdirAll(s.projectDir, 0o700); err != nil {
 		return fmt.Errorf("session: create project dir: %w", err)
 	}
+	_ = os.Chmod(s.projectDir, 0o700)
 	if err := os.MkdirAll(s.assetsDir, 0o700); err != nil {
 		return fmt.Errorf("session: create assets dir: %w", err)
 	}
+	_ = os.Chmod(s.assetsDir, 0o700)
 
 	db, err := sql.Open("sqlite", s.dbPath)
 	if err != nil {
@@ -1213,6 +1206,30 @@ func deleteSessionsByIDSetWithBatchSize(
 		totalAffected += int(affected)
 	}
 	return totalAffected, nil
+}
+
+// removeSessionAssetsDir 删除单个会话的附件目录，并校验目标路径始终位于 assets 根目录内。
+func (s *SQLiteStore) removeSessionAssetsDir(sessionID string) error {
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	assetDir := filepath.Join(s.assetsDir, sessionID)
+	if err := ensurePathWithinBase(s.assetsDir, assetDir); err != nil {
+		return fmt.Errorf("session: resolve assets dir path: %w", err)
+	}
+	if err := os.RemoveAll(assetDir); err != nil {
+		return fmt.Errorf("session: delete assets dir %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// cleanupExpiredSessionAssets 清理过期会话的附件目录；若遇到非法路径则仅记录告警并继续。
+func (s *SQLiteStore) cleanupExpiredSessionAssets(sessionIDs []string) {
+	for _, id := range sessionIDs {
+		if err := s.removeSessionAssetsDir(id); err != nil {
+			log.Printf("session cleanup warning: skip asset cleanup for %q: %v", id, err)
+		}
+	}
 }
 
 // insertMessage 在事务内插入单条消息记录。

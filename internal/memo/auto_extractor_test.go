@@ -408,6 +408,54 @@ func TestAutoExtractorScheduleWithExtractorUsesCallScopedExtractorAndSkipsSucces
 	}
 }
 
+func TestAutoExtractorFingerprintIncludesNonTextParts(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	firstExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "first-image", Content: "first-image", Source: SourceAutoExtract}}, nil
+		},
+	}
+	secondExtractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return []Entry{{Type: TypeProject, Title: "second-image", Content: "second-image", Source: SourceAutoExtract}}, nil
+		},
+	}
+
+	auto := NewAutoExtractor(nil, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	firstMessages := []providertypes.Message{{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("same text"),
+			providertypes.NewRemoteImagePart("https://example.com/first.png"),
+		},
+	}}
+	secondMessages := []providertypes.Message{{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("same text"),
+			providertypes.NewRemoteImagePart("https://example.com/second.png"),
+		},
+	}}
+
+	auto.ScheduleWithExtractor("session-1", firstMessages, firstExtractor)
+	waitFor(t, time.Second, func() bool { return firstExtractor.Calls() == 1 })
+
+	auto.ScheduleWithExtractor("session-1", secondMessages, secondExtractor)
+	waitFor(t, time.Second, func() bool { return secondExtractor.Calls() == 1 })
+
+	entries, err := svc.List(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

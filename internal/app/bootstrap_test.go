@@ -1004,7 +1004,7 @@ func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
 	t.Cleanup(func() { cleanupExpiredSessions = originalCleanupExpiredSessions })
 	cleanupExpiredSessions = func(
 		ctx context.Context,
-		store *agentsession.SQLiteStore,
+		store agentsession.Store,
 		maxAge time.Duration,
 	) (int, error) {
 		return 0, errors.New("cleanup failed")

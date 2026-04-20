@@ -40,7 +40,7 @@ var (
 	newTUIWithMemo           = tui.NewWithMemo
 	cleanupExpiredSessions   = func(
 		ctx context.Context,
-		store *agentsession.SQLiteStore,
+		store agentsession.Store,
 		maxAge time.Duration,
 	) (int, error) {
 		return store.CleanupExpiredSessions(ctx, maxAge)
