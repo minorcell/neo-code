@@ -122,6 +122,7 @@ func (p *Provider) newSDKClient() openai.Client {
 	return openai.NewClient(
 		option.WithHTTPClient(p.client),
 		option.WithAPIKey(strings.TrimSpace(p.cfg.APIKey)),
+		option.WithBaseURL(strings.TrimRight(strings.TrimSpace(p.cfg.BaseURL), "/")),
 	)
 }
 
