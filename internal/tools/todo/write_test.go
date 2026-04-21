@@ -110,6 +110,13 @@ func TestToolExecute(t *testing.T) {
 			want:        "action: set_status",
 		},
 		{
+			name:        "set status accepts numeric id and alias",
+			raw:         []byte(`{"action":"set_status","id":123,"status":"In-Progress"}`),
+			withMutator: true,
+			wantErr:     true,
+			want:        reasonTodoNotFound,
+		},
+		{
 			name:        "revision conflict",
 			raw:         []byte(`{"action":"set_status","id":"task","status":"in_progress","expected_revision":9}`),
 			withMutator: true,

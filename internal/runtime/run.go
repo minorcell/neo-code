@@ -193,28 +193,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 
 			state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence, currentSignature)
-			streak := state.progress.LastScore.NoProgressStreak
-			repeatStreak := state.progress.LastScore.RepeatCycleStreak
 			currentScore := state.progress.LastScore
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
-
-			repeatLimit := snapshot.config.Runtime.MaxRepeatCycleStreak
-			if repeatLimit <= 0 {
-				repeatLimit = config.DefaultMaxRepeatCycleStreak
-			}
-
-			if repeatStreak >= repeatLimit {
-				err = ErrRepeatCycleLimit
-				return err
-			}
-
-			limit := snapshot.noProgressStreakLimit
-			if streak >= limit {
-				err = ErrNoProgressStreakLimit
-				return err
-			}
 
 			break
 		}

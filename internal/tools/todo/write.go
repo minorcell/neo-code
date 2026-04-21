@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -29,6 +30,15 @@ func (t *Tool) Description() string {
 
 // Schema 返回 todo_write 工具参数 schema。
 func (t *Tool) Schema() map[string]any {
+	statusEnum := []string{
+		string(agentsession.TodoStatusPending),
+		string(agentsession.TodoStatusInProgress),
+		string(agentsession.TodoStatusBlocked),
+		string(agentsession.TodoStatusCompleted),
+		string(agentsession.TodoStatusFailed),
+		string(agentsession.TodoStatusCanceled),
+	}
+
 	todoItemSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -44,6 +54,7 @@ func (t *Tool) Schema() map[string]any {
 			},
 			"status": map[string]any{
 				"type": "string",
+				"enum": statusEnum,
 			},
 			"dependencies": map[string]any{
 				"type": "array",
@@ -136,6 +147,7 @@ func (t *Tool) Schema() map[string]any {
 					},
 					"status": map[string]any{
 						"type": "string",
+						"enum": statusEnum,
 					},
 					"dependencies": map[string]any{
 						"type": "array",
@@ -178,6 +190,7 @@ func (t *Tool) Schema() map[string]any {
 			},
 			"status": map[string]any{
 				"type": "string",
+				"enum": statusEnum,
 			},
 			"expected_revision": map[string]any{
 				"type": "integer",

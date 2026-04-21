@@ -19,7 +19,6 @@ import (
 
 const (
 	subAgentMaxStepTurnsDefault = 6
-	subAgentMaxStepTurnsLimit   = 12
 	// subAgentToolResultMaxRunes 定义子代理工具回灌给模型的更小文本上限，避免沿用全局 64KB。
 	subAgentToolResultMaxRunes = 4 * 1024
 	// subAgentMessageWindowMaxMessages 定义子代理单步内携带的最大消息条数窗口。
@@ -402,9 +401,6 @@ func resolveAllowedPaths(input subagent.StepInput) []string {
 func resolveSubAgentMaxTurns(maxSteps int) int {
 	if maxSteps <= 0 {
 		return subAgentMaxStepTurnsDefault
-	}
-	if maxSteps > subAgentMaxStepTurnsLimit {
-		return subAgentMaxStepTurnsLimit
 	}
 	return maxSteps
 }

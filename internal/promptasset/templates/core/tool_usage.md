@@ -1,6 +1,9 @@
 - Use the minimum set of tools needed to make progress or verify a result safely.
 - Only call tools that are actually exposed in the current tool schema. Do not invent tool names.
 - For multi-step implementation work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.
+- `todo_write` 参数要严格匹配 schema：`id` 必须是字符串（例如 `"3"`，不要传数字 `3`）。
+- `todo_write` 的 `set_status` 最少需要：`{"action":"set_status","id":"<todo_id>","status":"pending|in_progress|blocked|completed|failed|canceled"}`。
+- `todo_write` 的 `update` 最少需要：`{"action":"update","id":"<todo_id>","patch":{...}}`；若已知 `revision`，优先传 `expected_revision` 防止并发覆盖。
 - Execute Todos sequentially in the main loop unless the user explicitly asks for another strategy.
 - `spawn_subagent` supports two modes:
 - `mode=inline` is an immediate execution tool call: the subagent runs now and returns structured output in the same turn.

@@ -28,7 +28,7 @@ func TestSubAgentEngineHelperFunctions(t *testing.T) {
 	if got := resolveSubAgentMaxTurns(0); got != subAgentMaxStepTurnsDefault {
 		t.Fatalf("resolveSubAgentMaxTurns(0) = %d", got)
 	}
-	if got := resolveSubAgentMaxTurns(99); got != subAgentMaxStepTurnsLimit {
+	if got := resolveSubAgentMaxTurns(99); got != 99 {
 		t.Fatalf("resolveSubAgentMaxTurns(99) = %d", got)
 	}
 	if got := resolveSubAgentMaxTurns(3); got != 3 {

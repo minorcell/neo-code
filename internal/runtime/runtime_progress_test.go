@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -15,7 +14,7 @@ import (
 	"neo-code/internal/tools"
 )
 
-func TestProgressStreakStopsRun(t *testing.T) {
+func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -35,13 +34,20 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	}
 
 	var promptInjected bool
+	var providerCalls int32
 	var signatureSeq int32
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				call := atomic.AddInt32(&providerCalls, 1)
 				seq := atomic.AddInt32(&signatureSeq, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
 					promptInjected = true
+				}
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
 				}
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
@@ -71,22 +77,18 @@ func TestProgressStreakStopsRun(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger error loop")},
 	}
 
-	err := service.Run(context.Background(), input)
-	if err == nil {
-		t.Fatal("expected error from streak limit, got nil")
-	}
-
-	if !errors.Is(err, ErrNoProgressStreakLimit) {
-		t.Fatalf("expected ErrNoProgressStreakLimit, got %v", err)
+	if err := service.Run(context.Background(), input); err != nil {
+		t.Fatalf("expected run success without no-progress hard stop, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-
-	// Verify StopReason is error and specifies the streak limit
-	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrNoProgressStreakLimit.Error())
+	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
 
 	if !promptInjected {
-		t.Error("expected self-healing prompt to be injected before streak limit is reached, but it wasn't")
+		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
+	}
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 
@@ -165,7 +167,7 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
 }
 
-func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
+func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -194,9 +196,14 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
+				call := atomic.AddInt32(&providerCalls, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingRepeatReminder) {
 					promptInjected = true
+				}
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
 				}
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat", "tool_repeat")
 				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat", `{"path":"x"}`)
@@ -219,29 +226,25 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 		RunID: "run-repeat-streak",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
-	if err == nil {
-		t.Fatal("expected repeat cycle limit error, got nil")
-	}
-	if !errors.Is(err, ErrRepeatCycleLimit) {
-		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
+	if err != nil {
+		t.Fatalf("expected run success without repeat hard stop, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-
-	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrRepeatCycleLimit.Error())
+	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
 	}
-	if executeCalls != 3 {
-		t.Fatalf("expected break on the 3rd identical tool execution, got %d", executeCalls)
+	if executeCalls != 4 {
+		t.Fatalf("expected repeated tool executions to continue until model stops, got %d", executeCalls)
 	}
-	if providerCalls != 3 {
-		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 
-func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
+func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -269,7 +272,12 @@ func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
+				call := atomic.AddInt32(&providerCalls, 1)
+				if call >= 5 {
+					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+					return nil
+				}
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat_fail", "tool_repeat_fail")
 				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat_fail", `{"path":"x"}`)
 				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
@@ -291,14 +299,14 @@ func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
 		RunID: "run-repeat-fail-streak",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
-	if !errors.Is(err, ErrRepeatCycleLimit) {
-		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)
+	if err != nil {
+		t.Fatalf("expected run success without repeat hard stop, got %v", err)
 	}
-	if executeCalls != 3 {
-		t.Fatalf("expected failed repeated calls to break on the 3rd execution, got %d", executeCalls)
+	if executeCalls != 4 {
+		t.Fatalf("expected failed repeated calls to continue until model stops, got %d", executeCalls)
 	}
-	if providerCalls != 3 {
-		t.Fatalf("expected 3 provider turns before repeat breaker, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
 	}
 }
 

@@ -49,6 +49,48 @@ func TestParseInputAndLegacyCompatBranches(t *testing.T) {
 	}
 }
 
+func TestParseInputNormalizesNumericIDsAndStatusAliases(t *testing.T) {
+	t.Parallel()
+
+	input, err := parseInput([]byte(`{
+		"action":"set_status",
+		"id": 3,
+		"status":"In-Progress"
+	}`))
+	if err != nil {
+		t.Fatalf("parseInput(set_status numeric id) err = %v", err)
+	}
+	if input.ID != "3" {
+		t.Fatalf("normalized id = %q, want 3", input.ID)
+	}
+	if input.Status != agentsession.TodoStatusInProgress {
+		t.Fatalf("normalized status = %q, want %q", input.Status, agentsession.TodoStatusInProgress)
+	}
+
+	normalizedPlan, err := parseInput([]byte(`{
+		"action":"plan",
+		"items":[
+			{"id":1, "content":"A", "status":"done", "dependencies":[2, "3"]},
+			{"id":"2", "content":"B", "status":"cancelled"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parseInput(plan normalize) err = %v", err)
+	}
+	if len(normalizedPlan.Items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(normalizedPlan.Items))
+	}
+	if normalizedPlan.Items[0].ID != "1" || normalizedPlan.Items[0].Status != agentsession.TodoStatusCompleted {
+		t.Fatalf("item[0] = %+v", normalizedPlan.Items[0])
+	}
+	if got := normalizedPlan.Items[0].Dependencies; len(got) != 2 || got[0] != "2" || got[1] != "3" {
+		t.Fatalf("item[0].dependencies = %+v, want [2 3]", got)
+	}
+	if normalizedPlan.Items[1].Status != agentsession.TodoStatusCanceled {
+		t.Fatalf("item[1].status = %q, want %q", normalizedPlan.Items[1].Status, agentsession.TodoStatusCanceled)
+	}
+}
+
 func TestValidateInputLimitsAndPatchBranches(t *testing.T) {
 	t.Parallel()
 
