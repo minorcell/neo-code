@@ -3,6 +3,8 @@ package context
 import (
 	"path/filepath"
 	"strings"
+
+	"neo-code/internal/tools"
 )
 
 // defaultPinPatterns 列出关键产物文件的 basename glob 模式，匹配的工具结果不参与微压缩。
@@ -11,11 +13,16 @@ var defaultPinPatterns = []string{
 	"*.spec.*",
 	"*.schema.*",
 	"docker-compose*",
-	".env*",
 	"*migration*",
 	"Makefile",
 	"go.mod",
 	"package.json",
+}
+
+// defaultPinToolNames 约束默认 pin 仅对明确修改文件内容的工具生效，避免扩散到读取类或自定义工具。
+var defaultPinToolNames = map[string]struct{}{
+	tools.ToolNameFilesystemWriteFile: {},
+	tools.ToolNameFilesystemEdit:      {},
 }
 
 // pinChecker 基于文件路径 glob 模式判断工具结果是否应钉住。
@@ -31,6 +38,9 @@ func NewDefaultPinChecker() MicroCompactPinChecker {
 // ShouldPin 判断工具结果是否应钉住：从 metadata 中提取文件路径，对 basename 匹配 glob 模式。
 func (p *pinChecker) ShouldPin(toolName string, metadata map[string]string) bool {
 	if len(metadata) == 0 {
+		return false
+	}
+	if !toolSupportsPinnedRetention(toolName) {
 		return false
 	}
 
@@ -49,6 +59,12 @@ func (p *pinChecker) ShouldPin(toolName string, metadata map[string]string) bool
 		}
 	}
 	return false
+}
+
+// toolSupportsPinnedRetention 判断工具是否允许参与默认 pin 策略，避免非文件修改类工具扩大保留范围。
+func toolSupportsPinnedRetention(toolName string) bool {
+	_, ok := defaultPinToolNames[strings.TrimSpace(toolName)]
+	return ok
 }
 
 // noopPinChecker 不钉住任何结果，用于测试和禁用场景。
