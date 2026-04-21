@@ -181,20 +181,34 @@ go run ./cmd/neocode --runtime-mode gateway
 - 不提交明文密钥、个人配置或会话数据
 - 不提交无关改动与临时文件
 
-## 在仓库内直接创建 Issue（自动化）
+## 在仓库内直接创建 Issue（Skills + 自动化）
 
-仓库已提供脚本：`scripts/create_issue.sh`，支持按三类模板快速发起 issue：
+仓库提供三类同前缀 skill（位于 `.skills/`）：
 
-- `proposal`（提案）
-- `architecture`（架构）
-- `implementation`（实现）
+- `issue-rfc-proposal`（提案类，RFC 风格）
+- `issue-rfc-architecture`（架构类，RFC 风格）
+- `issue-rfc-implementation`（实现类，执行单风格）
 
-前置要求：
+先安装 skills 到仓库内常见 AI Coding 工具目录：
 
-- 已安装并登录 GitHub CLI：`gh auth login`
-- 在仓库根目录执行命令
+```bash
+make install-skills
+```
 
-示例：
+默认会安装到以下目录（均在仓库内）：
+
+- `.codex/skills`
+- `.claude/skills`
+- `.cursor/skills`
+- `.windsurf/skills`
+
+如需自定义安装目标，可设置环境变量 `SKILL_INSTALL_TARGETS`（冒号分隔目录）：
+
+```bash
+SKILL_INSTALL_TARGETS=".codex/skills:.claude/skills" make install-skills
+```
+
+Skill 内部调用脚本 `scripts/create_issue.sh` 创建 issue。你也可以直接执行脚本：
 
 ```bash
 ./scripts/create_issue.sh --type proposal --title "统一会话中断恢复语义"
@@ -202,7 +216,7 @@ go run ./cmd/neocode --runtime-mode gateway
 ./scripts/create_issue.sh --type implementation --title "补齐流式中断持久化" --labels "bug,priority-high"
 ```
 
-可选参数：
+脚本可选参数：
 
 - `--repo <owner/repo>`：指定目标仓库（默认自动识别当前仓库）
 - `--body-file <path>`：自定义 issue 正文文件（不传则使用内置模板）
