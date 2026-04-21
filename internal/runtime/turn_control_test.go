@@ -158,4 +158,11 @@ func TestHasSuccessfulVerificationResultRequiresExplicitVerificationCall(t *test
 	if hasSuccessfulVerificationResult([]providertypes.ToolCall{bashNonVerifyCall}, bashResults) {
 		t.Fatalf("expected non-verification bash command to not count as verify passed")
 	}
+
+	missingCallIDResults := []tools.ToolResult{
+		{Name: tools.ToolNameBash, Content: "ok"},
+	}
+	if hasSuccessfulVerificationResult([]providertypes.ToolCall{bashVerifyCall}, missingCallIDResults) {
+		t.Fatalf("expected missing tool call id result to not count as verify passed")
+	}
 }

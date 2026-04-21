@@ -351,6 +351,14 @@ func ensureResolvedPathWithinWorkspace(root string, candidate string, original s
 
 // canFallbackToCandidateOnPermission 在 EvalSymlinks 遇到权限错误时，逐段确认 root 到 candidate 的现存路径不含符号链接。
 func canFallbackToCandidateOnPermission(root string, candidate string) (bool, error) {
+	rootInfo, err := os.Lstat(filepath.Clean(root))
+	if err != nil {
+		return false, fmt.Errorf("security: inspect path %q: %w", root, err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return false, nil
+	}
+
 	relativePath, err := filepath.Rel(root, candidate)
 	if err != nil {
 		return false, fmt.Errorf("security: compare workspace target %q: %w", candidate, err)

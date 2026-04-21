@@ -768,6 +768,30 @@ func TestEnsureResolvedPathWithinWorkspacePermissionErrorRejectsSymlinkedPath(t 
 	}
 }
 
+func TestCanFallbackToCandidateOnPermissionRejectsSymlinkRoot(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+
+	symlinkRoot := filepath.Join(base, "root-link")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	candidate := filepath.Join(symlinkRoot, "notes.txt")
+	mustWriteWorkspaceFile(t, filepath.Join(realRoot, "notes.txt"), "hello")
+
+	allowed, err := canFallbackToCandidateOnPermission(symlinkRoot, candidate)
+	if err != nil {
+		t.Fatalf("canFallbackToCandidateOnPermission() error: %v", err)
+	}
+	if allowed {
+		t.Fatalf("expected symlink workspace root to reject permission fallback")
+	}
+}
+
 func TestWorkspaceExecutionPlanValidateForExecution(t *testing.T) {
 	t.Parallel()
 

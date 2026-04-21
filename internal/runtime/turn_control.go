@@ -220,22 +220,21 @@ func hasSuccessfulVerificationResult(calls []providertypes.ToolCall, results []t
 			continue
 		}
 		toolCallID := strings.TrimSpace(result.ToolCallID)
-		if toolCallID != "" {
-			successful[toolCallID] = result
+		if toolCallID == "" {
 			continue
 		}
-		key := "name:" + strings.ToLower(strings.TrimSpace(result.Name))
-		successful[key] = result
+		successful[toolCallID] = result
 	}
 
 	for _, call := range calls {
 		if !isExplicitVerificationCall(call) {
 			continue
 		}
-		if _, ok := successful[strings.TrimSpace(call.ID)]; ok {
-			return true
+		callID := strings.TrimSpace(call.ID)
+		if callID == "" {
+			continue
 		}
-		if _, ok := successful["name:"+strings.ToLower(strings.TrimSpace(call.Name))]; ok {
+		if _, ok := successful[callID]; ok {
 			return true
 		}
 	}
