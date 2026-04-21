@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -81,6 +82,45 @@ func TestEmitFromStreamSupportsLongDataLine(t *testing.T) {
 	}
 }
 
+func TestEmitFromStreamReturnsInterruptedWithoutCompletionMarker(t *testing.T) {
+	t.Parallel()
+
+	body := `data: {"type":"response.output_text.delta","delta":"hello"}`
+	events := make(chan providertypes.StreamEvent, 4)
+	err := EmitFromStream(context.Background(), strings.NewReader(body), events)
+	if !errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected ErrStreamInterrupted, got %v", err)
+	}
+}
+
+func TestEmitFromStreamReturnsAfterCompletedEventWithoutDoneMarker(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	events := make(chan providertypes.StreamEvent, 4)
+	result := make(chan error, 1)
+
+	go func() {
+		result <- EmitFromStream(context.Background(), reader, events)
+	}()
+
+	_, writeErr := io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	if writeErr != nil {
+		t.Fatalf("write stream payload failed: %v", writeErr)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("EmitFromStream() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("EmitFromStream should return after response.completed")
+	}
+
+	_ = writer.Close()
+}
+
 func drainResponseEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	out := make([]providertypes.StreamEvent, 0, len(events))
 	for {
@@ -99,6 +139,7 @@ func TestProcessEventAndToolCallMerge(t *testing.T) {
 	events := make(chan providertypes.StreamEvent, 8)
 	usage := providertypes.Usage{}
 	finishReason := ""
+	done := false
 	toolCalls := make(map[int]*providertypes.ToolCall)
 	itemToIndex := make(map[string]int)
 	slot := 0
@@ -112,7 +153,7 @@ func TestProcessEventAndToolCallMerge(t *testing.T) {
 			Name:      "read_file",
 			Arguments: `{"path":"README.md"}`,
 		},
-	}, &usage, &finishReason, toolCalls, itemToIndex, &slot)
+	}, &usage, &finishReason, &done, toolCalls, itemToIndex, &slot)
 	if err != nil {
 		t.Fatalf("processEvent(function_call) error = %v", err)
 	}
@@ -120,7 +161,7 @@ func TestProcessEventAndToolCallMerge(t *testing.T) {
 	err = processEvent(context.Background(), events, &streamEvent{
 		Type:     "response.completed",
 		Response: &streamResponse{Status: "completed", Usage: &streamUsage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}},
-	}, &usage, &finishReason, toolCalls, itemToIndex, &slot)
+	}, &usage, &finishReason, &done, toolCalls, itemToIndex, &slot)
 	if err != nil {
 		t.Fatalf("processEvent(completed) error = %v", err)
 	}
@@ -143,6 +184,9 @@ func TestProcessEventAndToolCallMerge(t *testing.T) {
 	if finishReason != "stop" {
 		t.Fatalf("expected finish reason stop, got %q", finishReason)
 	}
+	if !done {
+		t.Fatal("expected done flag to be true after response.completed")
+	}
 }
 
 func TestProcessEventErrorBranches(t *testing.T) {
@@ -154,6 +198,7 @@ func TestProcessEventErrorBranches(t *testing.T) {
 	toolCalls := make(map[int]*providertypes.ToolCall)
 	itemToIndex := make(map[string]int)
 	slot := 0
+	done := false
 
 	tests := []struct {
 		name    string
@@ -190,7 +235,7 @@ func TestProcessEventErrorBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := processEvent(context.Background(), events, tt.event, &usage, &finishReason, toolCalls, itemToIndex, &slot)
+			err := processEvent(context.Background(), events, tt.event, &usage, &finishReason, &done, toolCalls, itemToIndex, &slot)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 			}
