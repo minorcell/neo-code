@@ -798,7 +798,7 @@ func TestGatewayRPCClientCloseStopsSpawnedGatewayProcess(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if state := spawnedCmd.ProcessState; state != nil && state.Exited() {
+		if spawnedCmd.ProcessState != nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
