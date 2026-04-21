@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"path/filepath"
 	"strings"
@@ -196,6 +197,118 @@ func TestGatewayRPCClientUsesDefaultRetryCountWhenOptionIsZero(t *testing.T) {
 	}
 	if frame.Action != gateway.FrameActionPing {
 		t.Fatalf("unexpected frame: %#v", frame)
+	}
+}
+
+func TestGatewayRPCClientHeartbeatSendsPingAndStopsAfterClose(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	var pingCount int32
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress:     "test://gateway",
+		TokenFile:         tokenFile,
+		RequestTimeout:    200 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatTimeout:  120 * time.Millisecond,
+		Dial: func(_ string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				for {
+					var request protocol.JSONRPCRequest
+					if err := decoder.Decode(&request); err != nil {
+						if errors.Is(err, io.EOF) {
+							return
+						}
+						return
+					}
+					if request.Method != protocol.MethodGatewayPing {
+						t.Fatalf("unexpected method = %q", request.Method)
+					}
+					atomic.AddInt32(&pingCount, 1)
+					writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+						Type:   gateway.FrameTypeAck,
+						Action: gateway.FrameActionPing,
+					})
+				}
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+
+	var frame gateway.MessageFrame
+	if err := client.Call(context.Background(), protocol.MethodGatewayPing, map[string]any{}, &frame); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	time.Sleep(90 * time.Millisecond)
+	if got := atomic.LoadInt32(&pingCount); got < 2 {
+		t.Fatalf("ping count = %d, want at least 2 (manual + heartbeat)", got)
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	afterClose := atomic.LoadInt32(&pingCount)
+	time.Sleep(80 * time.Millisecond)
+	if got := atomic.LoadInt32(&pingCount); got != afterClose {
+		t.Fatalf("ping count changed after close: before=%d after=%d", afterClose, got)
+	}
+}
+
+func TestGatewayRPCClientHeartbeatDoesNotRedialAfterConnectionDrops(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	var dialCount int32
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress:     "test://gateway",
+		TokenFile:         tokenFile,
+		RequestTimeout:    200 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatTimeout:  120 * time.Millisecond,
+		Dial: func(_ string) (net.Conn, error) {
+			atomic.AddInt32(&dialCount, 1)
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				var request protocol.JSONRPCRequest
+				if err := decoder.Decode(&request); err != nil {
+					if errors.Is(err, io.EOF) {
+						return
+					}
+					return
+				}
+				if request.Method != protocol.MethodGatewayPing {
+					t.Fatalf("unexpected method = %q", request.Method)
+				}
+				writeRPCResultOrFail(t, encoder, request.ID, gateway.MessageFrame{
+					Type:   gateway.FrameTypeAck,
+					Action: gateway.FrameActionPing,
+				})
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	var frame gateway.MessageFrame
+	if err := client.Call(context.Background(), protocol.MethodGatewayPing, map[string]any{}, &frame); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt32(&dialCount); got != 1 {
+		t.Fatalf("dial count = %d, want %d (heartbeat should not redial after drop)", got, 1)
 	}
 }
 
