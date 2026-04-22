@@ -33,12 +33,17 @@ import (
 
 func TestNewProgram(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -57,6 +62,11 @@ func TestNewProgram(t *testing.T) {
 
 func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -73,7 +83,7 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -90,28 +100,6 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "current_model: "+config.OpenAIDefaultModel) {
 		t.Fatalf("expected startup normalization to rewrite current_model, got:\n%s", string(data))
-	}
-}
-
-func TestNewProgramInvalidRuntimeModeTriggersCleanupPath(t *testing.T) {
-	disableBuiltinProviderAPIKeys(t)
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: "invalid-mode"})
-	if err == nil {
-		if cleanup != nil {
-			_ = cleanup()
-		}
-		if program != nil {
-			t.Fatalf("expected nil program when runtime mode is invalid")
-		}
-		t.Fatalf("expected invalid runtime mode error")
-	}
-	if cleanup != nil {
-		t.Fatalf("expected cleanup to be nil on NewProgram failure")
 	}
 }
 
@@ -1055,8 +1043,13 @@ func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
 	}
 }
 
-func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
+func TestNewProgramSkipsLocalMCPStackWhenTUIBuildFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return &stubRemoteRuntimeForBootstrap{events: make(chan services.RuntimeEvent)}, nil
+	}
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1084,12 +1077,12 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	closed := false
+	registerCalled := false
 	originalRegister := registerMCPStdioServer
 	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
 	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
-		client := &closeableStubMCPServerClient{closed: &closed}
-		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+		registerCalled = true
+		return nil
 	}
 
 	originalNewTUIWithMemo := newTUIWithMemo
@@ -1104,15 +1097,15 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 		return tui.App{}, errors.New("tui init failed")
 	}
 
-	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if cleanup != nil {
 		t.Fatalf("expected nil cleanup on NewProgram failure")
 	}
 	if err == nil || !strings.Contains(err.Error(), "tui init failed") {
 		t.Fatalf("expected tui init error, got %v", err)
 	}
-	if !closed {
-		t.Fatalf("expected MCP resources to be closed when NewProgram fails")
+	if registerCalled {
+		t.Fatalf("expected TUI client deps not to initialize local MCP stack")
 	}
 }
 
@@ -1462,38 +1455,6 @@ func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
 	}
 }
 
-func TestResolveBootstrapRuntimeMode(t *testing.T) {
-	mode, err := resolveBootstrapRuntimeMode("")
-	if err != nil {
-		t.Fatalf("resolveBootstrapRuntimeMode() error = %v", err)
-	}
-	if mode != RuntimeModeGateway {
-		t.Fatalf("expected default mode %q, got %q", RuntimeModeGateway, mode)
-	}
-
-	mode, err = resolveBootstrapRuntimeMode(" GATEWAY ")
-	if err != nil {
-		t.Fatalf("resolveBootstrapRuntimeMode() error = %v", err)
-	}
-	if mode != RuntimeModeGateway {
-		t.Fatalf("expected gateway mode %q, got %q", RuntimeModeGateway, mode)
-	}
-
-	_, err = resolveBootstrapRuntimeMode("invalid")
-	if err == nil {
-		t.Fatalf("expected invalid runtime mode error")
-	}
-}
-
-func TestBuildRuntimeRejectsInvalidRuntimeMode(t *testing.T) {
-	t.Parallel()
-
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: "invalid"})
-	if err == nil {
-		t.Fatalf("expected invalid runtime mode error")
-	}
-}
-
 func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
 	_, err := defaultNewRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{
 		ListenAddress: "://invalid",
@@ -1503,7 +1464,7 @@ func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
 	}
 }
 
-func TestBuildTUIBundleForModeGatewaySkipsLocalRuntimeStack(t *testing.T) {
+func TestBuildTUIClientDepsSkipsLocalRuntimeStack(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
 	home := t.TempDir()
@@ -1519,21 +1480,19 @@ func TestBuildTUIBundleForModeGatewaySkipsLocalRuntimeStack(t *testing.T) {
 		return originalBuildToolManager(registry)
 	}
 
-	bundle, err := buildTUIBundleForMode(context.Background(), BootstrapOptions{
-		RuntimeMode: RuntimeModeGateway,
-	}, RuntimeModeGateway)
+	bundle, err := BuildTUIClientDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("buildTUIBundleForMode() error = %v", err)
+		t.Fatalf("BuildTUIClientDeps() error = %v", err)
 	}
-	if bundle.Runtime != nil {
-		t.Fatalf("expected gateway mode TUI bundle runtime to be nil")
+	if bundle.Runtime != nil || bundle.MemoService != nil {
+		t.Fatalf("expected TUI client deps not to build local runtime/memo stack")
 	}
 	if buildToolManagerCalled {
-		t.Fatalf("expected gateway mode TUI bundle not to build local tool manager/runtime stack")
+		t.Fatalf("expected TUI client deps not to build local tool manager/runtime stack")
 	}
 }
 
-func TestBuildTUIRuntimeForModeGatewayUsesRemoteAdapter(t *testing.T) {
+func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
 	originalFactory := newRemoteRuntimeAdapter
@@ -1546,13 +1505,12 @@ func TestBuildTUIRuntimeForModeGatewayUsesRemoteAdapter(t *testing.T) {
 		return stubRuntime, nil
 	}
 
-	localRuntime := &stubRuntimeForBootstrap{events: make(chan agentruntime.RuntimeEvent)}
-	runtimeSvc, cleanup, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeGateway, localRuntime)
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("buildTUIRuntimeForMode() error = %v", err)
+		t.Fatalf("NewProgram() error = %v", err)
 	}
-	if runtimeSvc != stubRuntime {
-		t.Fatalf("expected gateway runtime adapter to be wired")
+	if program == nil {
+		t.Fatalf("expected tea program")
 	}
 	if cleanup == nil {
 		t.Fatalf("expected non-nil close function")
@@ -1565,7 +1523,7 @@ func TestBuildTUIRuntimeForModeGatewayUsesRemoteAdapter(t *testing.T) {
 	}
 }
 
-func TestBuildTUIRuntimeForModeGatewayFailsFastWhenAdapterInitFails(t *testing.T) {
+func TestNewProgramFailsFastWhenRemoteAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
 	originalFactory := newRemoteRuntimeAdapter
@@ -1575,20 +1533,12 @@ func TestBuildTUIRuntimeForModeGatewayFailsFastWhenAdapterInitFails(t *testing.T
 		return nil, errors.New("gateway connect failed")
 	}
 
-	localRuntime := &stubRuntimeForBootstrap{events: make(chan agentruntime.RuntimeEvent)}
-	_, _, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeGateway, localRuntime)
+	_, _, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err == nil {
-		t.Fatalf("expected gateway mode fail-fast error")
+		t.Fatalf("expected fail-fast error")
 	}
 	if !strings.Contains(err.Error(), "gateway connect failed") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestBuildTUIRuntimeForModeLocalRejectsNilRuntime(t *testing.T) {
-	_, _, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeLocal, nil)
-	if err == nil || !strings.Contains(err.Error(), "local runtime is nil") {
-		t.Fatalf("expected nil local runtime error, got %v", err)
 	}
 }
 

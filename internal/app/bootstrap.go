@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log"
 	"path/filepath"
 	"strings"
@@ -35,13 +34,6 @@ import (
 
 const utf8CodePage = 65001
 
-const (
-	// RuntimeModeLocal 表示继续使用进程内 runtime 直连模式。
-	RuntimeModeLocal = "local"
-	// RuntimeModeGateway 表示通过 Gateway JSON-RPC 转发 runtime 调用。
-	RuntimeModeGateway = "gateway"
-)
-
 var (
 	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
@@ -59,8 +51,7 @@ var (
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir     string
-	RuntimeMode string
+	Workdir string
 }
 
 type memoExtractorScheduler interface {
@@ -134,9 +125,9 @@ func EnsureConsoleUTF8() {
 	_ = setConsoleInputCodePage(utf8CodePage)
 }
 
-// BuildRuntime 构建 CLI 与 TUI 共用的运行时依赖。
-func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	sharedDeps, providerRegistry, modelCatalogs, err := buildBootstrapSharedDeps(ctx, opts)
+// BuildGatewayServerDeps 构建 Gateway 服务端运行时依赖，包含 runtime/tool/session 全栈能力。
+func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	sharedDeps, providerRegistry, modelCatalogs, err := BuildSharedConfigDeps(ctx, opts)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -240,26 +231,26 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}, nil
 }
 
+// BuildRuntime 兼容旧入口，内部转发到 BuildGatewayServerDeps。
+func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	return BuildGatewayServerDeps(ctx, opts)
+}
+
 // NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
 func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func() error, error) {
-	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
+	bundle, err := BuildTUIClientDeps(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	bundle, err := buildTUIBundleForMode(ctx, opts, runtimeMode)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	tuiRuntime, tuiRuntimeClose, err := buildTUIRuntimeForMode(ctx, runtimeMode, bundle.Runtime)
+	tuiRuntime, err := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
 	if err != nil {
 		if bundle.Close != nil {
 			_ = bundle.Close()
 		}
 		return nil, nil, err
 	}
-	cleanup := combineRuntimeClosers(tuiRuntimeClose, bundle.Close)
+	cleanup := combineRuntimeClosers(tuiRuntime.Close, bundle.Close)
 
 	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, tuiRuntime, bundle.ProviderSelection, bundle.MemoService)
 	if err != nil {
@@ -275,15 +266,11 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 	), cleanup, nil
 }
 
-// buildBootstrapSharedDeps 统一构建启动阶段共享依赖：配置、Provider 注册与当前选择服务。
-func buildBootstrapSharedDeps(
+// BuildSharedConfigDeps 统一构建共享配置依赖：配置、Provider 注册与当前选择服务。
+func BuildSharedConfigDeps(
 	ctx context.Context,
 	opts BootstrapOptions,
 ) (bootstrapSharedBundle, agentruntime.ProviderFactory, *providercatalog.Service, error) {
-	if _, err := resolveBootstrapRuntimeMode(opts.RuntimeMode); err != nil {
-		return bootstrapSharedBundle{}, nil, nil, err
-	}
-
 	defaultCfg, err := bootstrapDefaultConfig(opts)
 	if err != nil {
 		return bootstrapSharedBundle{}, nil, nil, err
@@ -312,17 +299,9 @@ func buildBootstrapSharedDeps(
 	}, providerRegistry, modelCatalogs, nil
 }
 
-// buildTUIBundleForMode 根据模式构建 TUI 所需依赖；gateway 模式禁止初始化本地 runtime/tool 栈。
-func buildTUIBundleForMode(ctx context.Context, opts BootstrapOptions, runtimeMode string) (RuntimeBundle, error) {
-	if strings.EqualFold(strings.TrimSpace(runtimeMode), RuntimeModeGateway) {
-		return buildTUIClientBundle(ctx, opts)
-	}
-	return BuildRuntime(ctx, opts)
-}
-
-// buildTUIClientBundle 构建 TUI 客户端依赖，仅保留配置与 Provider 选择，不创建本地 runtime。
-func buildTUIClientBundle(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	sharedDeps, _, _, err := buildBootstrapSharedDeps(ctx, opts)
+// BuildTUIClientDeps 构建 TUI 客户端依赖，仅保留配置与 Provider 选择，不创建本地 runtime/tool 栈。
+func BuildTUIClientDeps(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	sharedDeps, _, _, err := BuildSharedConfigDeps(ctx, opts)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -354,20 +333,6 @@ func bootstrapDefaultConfig(opts BootstrapOptions) (*config.Config, error) {
 // resolveBootstrapWorkdir 将 CLI 传入的工作区解析为存在的绝对目录。
 func resolveBootstrapWorkdir(workdir string) (string, error) {
 	return agentsession.ResolveExistingDir(workdir)
-}
-
-// resolveBootstrapRuntimeMode 归一化并校验 runtime 运行模式。
-func resolveBootstrapRuntimeMode(mode string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(mode))
-	if normalized == "" {
-		return RuntimeModeGateway, nil
-	}
-	switch normalized {
-	case RuntimeModeLocal, RuntimeModeGateway:
-		return normalized, nil
-	default:
-		return "", errors.New("bootstrap: runtime mode must be local or gateway")
-	}
 }
 
 func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error) {
@@ -434,27 +399,6 @@ func defaultNewRemoteRuntimeAdapter(options services.RemoteRuntimeAdapterOptions
 		return nil, err
 	}
 	return adapter, nil
-}
-
-// buildTUIRuntimeForMode 根据运行模式为 TUI 构建契约化 runtime，并返回对应清理函数。
-func buildTUIRuntimeForMode(
-	ctx context.Context,
-	mode string,
-	localRuntime agentruntime.Runtime,
-) (services.Runtime, func() error, error) {
-	if strings.EqualFold(strings.TrimSpace(mode), RuntimeModeGateway) {
-		remoteRuntime, err := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
-		if err != nil {
-			return nil, nil, err
-		}
-		return remoteRuntime, remoteRuntime.Close, nil
-	}
-	_ = ctx
-	if localRuntime == nil {
-		return nil, nil, errors.New("bootstrap: local runtime is nil")
-	}
-	adapter := newRuntimeContractAdapter(localRuntime)
-	return adapter, adapter.Close, nil
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
