@@ -43,6 +43,11 @@ title_prefix() {
 	esac
 }
 
+# trim_label 用于去除标签参数的首尾空白字符，避免传递无效标签值。
+trim_label() {
+	printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
 create_body_file() {
 	type="$1"
 	out="$2"
@@ -221,7 +226,10 @@ if [ -n "$LABELS" ]; then
 	OLD_IFS=$IFS
 	IFS=','
 	for label in $LABELS; do
-		set -- "$@" --label "$label"
+		trimmed_label="$(trim_label "$label")"
+		if [ -n "$trimmed_label" ]; then
+			set -- "$@" --label "$trimmed_label"
+		fi
 	done
 	IFS=$OLD_IFS
 fi
