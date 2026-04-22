@@ -26,6 +26,9 @@ func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
 		{to: " plan ", wantValue: 0.3, wantLabel: "Planning"},
 		{to: "execute", wantValue: 0.6, wantLabel: "Running tools"},
 		{to: "VERIFY", wantValue: 0.82, wantLabel: "Verifying"},
+		{to: "compacting", wantValue: 0.9, wantLabel: "Compacting context"},
+		{to: " waiting_permission ", wantValue: 0.88, wantLabel: "Awaiting permission"},
+		{to: "stopped", wantValue: 1, wantLabel: "Stopped"},
 	}
 	for _, tc := range cases {
 		app.clearRunProgress()
@@ -60,7 +63,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 
 	handled := runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason(" success ")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason(" stop_completed ")},
 	})
 	if handled {
 		t.Fatalf("expected handler to return false")
@@ -81,7 +84,7 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = ""
 	app.state.StatusText = "not-ready"
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("STOP_COMPLETED")},
 	})
 	if app.state.StatusText != statusReady {
 		t.Fatalf("expected success with empty execution error to set ready status")
@@ -90,28 +93,28 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	app.state.ExecutionError = "boom"
 	app.state.StatusText = ""
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("success")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("STOP_COMPLETED")},
 	})
-	if app.state.StatusText == statusReady {
-		t.Fatalf("expected success branch to keep status unchanged when execution error exists")
+	if app.state.StatusText != statusReady || app.state.ExecutionError != "" {
+		t.Fatalf("expected completed state to clear error and set ready status, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("canceled")},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("STOP_USER_INTERRUPT")},
 	})
 	if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled state to clear error and set canceled status")
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("error"), Detail: "  "},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("STOP_FATAL_ERROR"), Detail: "  "},
 	})
 	if app.state.StatusText != "runtime stopped" || app.state.ExecutionError != "runtime stopped" {
 		t.Fatalf("expected default stop detail, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("error"), Detail: "explicit failure"},
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: controlplane.StopReason("STOP_FATAL_ERROR"), Detail: "explicit failure"},
 	})
 	if app.state.StatusText != "explicit failure" || app.state.ExecutionError != "explicit failure" {
 		t.Fatalf("expected explicit stop detail to be surfaced")
