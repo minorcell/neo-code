@@ -453,7 +453,7 @@ func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 
 	_, err = manager.Execute(context.Background(), input)
 	if err != nil {
-		t.Fatalf("expected remembered allow retry to pass, got %v", err)
+		t.Fatalf("expected remembered allow retry to execute, got %v", err)
 	}
 	if writeTool.callCount != 1 {
 		t.Fatalf("expected write tool to execute after remembered allow, got %d", writeTool.callCount)
