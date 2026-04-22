@@ -19,6 +19,8 @@ config-cover
 
 # Dependency directories
 # vendor/
+node_modules/
+.pnpm-store/
 
 # Go workspace file
 go.work
@@ -39,3 +41,7 @@ data/
 workspace.xml
 .vscode/
 .claude/
+
+# VitePress / frontend build artifacts
+www/.vitepress/cache/
+www/.vitepress/dist/
