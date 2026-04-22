@@ -235,7 +235,7 @@ func TestGatewayRPCClientCallWithClosedClientAndInvalidResult(t *testing.T) {
 				defer serverConn.Close()
 				dec := json.NewDecoder(serverConn)
 				enc := json.NewEncoder(serverConn)
-				req := readRPCRequestOrFail(t, dec)
+				req := readRPCRequestOrFail(dec)
 				response := protocol.JSONRPCResponse{JSONRPC: protocol.JSONRPCVersion, ID: req.ID, Result: json.RawMessage(`1`)}
 				if encodeErr := enc.Encode(response); encodeErr != nil {
 					t.Errorf("encode response: %v", encodeErr)
