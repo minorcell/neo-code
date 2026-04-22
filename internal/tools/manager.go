@@ -338,6 +338,8 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 				result := blockedToolResult(input, decision)
 				return result, permissionErrorFromDecision(decision)
 			}
+			m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
+			return m.executor.Execute(ctx, input)
 		}
 		result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
 		result.ToolCallID = input.ID
