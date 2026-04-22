@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -21,6 +22,32 @@ type layout struct {
 
 const headerBarHeight = 2
 const transcriptScrollbarWidth = 3
+
+const startupStandbyLabel = "Standby"
+const startupSubtitleText = "AI-Powered CLI Workspace"
+const startupTypingPlaceholder = "Ask NeoCode to inspect, edit, or build..."
+const startupBreathCycleTicks = 45
+
+const startupLogoASCII = `███╗   ██╗███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗
+████╗  ██║██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝
+██╔██╗ ██║█████╗  ██║   ██║██║     ██║   ██║██║  ██║█████╗  
+██║╚██╗██║██╔══╝  ██║   ██║██║     ██║   ██║██║  ██║██╔══╝  
+██║ ╚████║███████╗╚██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
+╚═╝  ╚═══╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
+
+type startupMenuItem struct {
+	Key    string
+	Action string
+}
+
+var startupMenuItems = []startupMenuItem{
+	{Key: "Enter", Action: "Send the Prompt to LLM"},
+	{Key: "Ctrl+J", Action: "Insert a New Line"},
+	{Key: "Ctrl+W", Action: "Cancel Current Run"},
+	{Key: "Ctrl+L", Action: "Open Log Viewer"},
+	{Key: "Ctrl+Q", Action: "Toggle Help Panel"},
+	{Key: "Ctrl+U", Action: "Exit NeoCode"},
+}
 
 const (
 	pickerPanelHorizontalInset = 8
@@ -42,6 +69,10 @@ type pickerLayoutSpec struct {
 }
 
 func (a App) View() string {
+	if a.startupVisible {
+		return strings.TrimRight(a.renderStartupView(max(0, a.width), max(0, a.height)), "\n")
+	}
+
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
 	if docWidth < 60 || docHeight < 20 {
@@ -61,6 +92,256 @@ func (a App) View() string {
 	parts = append(parts, helpView)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, content)), "\n")
+}
+
+// renderStartupView 负责组合启动页的 Header、Hero、Input、Footer 四段视图。
+func (a App) renderStartupView(width int, height int) string {
+	width = max(1, width)
+	height = max(1, height)
+
+	headerRaw := a.renderStartupHeader(width)
+	inputRaw := a.renderStartupInput(width)
+	footerRaw := a.renderStartupFooter(width)
+	header := a.startupPaintBlock(width, headerRaw)
+	input := a.startupPaintBlock(width, inputRaw)
+	footer := ""
+	footerHeight := 0
+	if strings.TrimSpace(footerRaw) != "" {
+		footer = a.startupPaintBlock(width, footerRaw)
+		footerHeight = lipgloss.Height(footer)
+	}
+	heroHeight := max(1, height-lipgloss.Height(header)-lipgloss.Height(input)-footerHeight)
+	hero := a.renderStartupHeroArea(width, heroHeight)
+	parts := []string{header, hero, input}
+	if footer != "" {
+		parts = append(parts, footer)
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return a.styles.startupRoot.Copy().Width(width).Height(height).Render(content)
+}
+
+// renderStartupHeader 渲染启动页顶部状态信息，保持品牌、模型和工作目录三段信息布局。
+func (a App) renderStartupHeader(width int) string {
+	model := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentModel), "unknown-model")
+	workdir := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentWorkdir), "-")
+	left := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		a.styles.startupBrand.Render("NeoCode"),
+		a.styles.startupSeparator.Render(" / "),
+		a.styles.startupHeaderMeta.Render(model),
+		a.styles.startupSeparator.Render(" / "),
+		a.styles.startupHeaderMeta.Render(startupStandbyLabel),
+	)
+
+	minGap := 2
+	availableRight := width - lipgloss.Width(left) - minGap
+	if availableRight <= 0 {
+		return left
+	}
+	right := a.styles.startupHeaderMeta.Render(
+		tuiutils.TrimMiddle("cwd: "+workdir, max(12, availableRight)),
+	)
+	return left + a.startupBlackSpaces(minGap) + right
+}
+
+// renderStartupHeroLines 构建启动页中心主视觉的文本行与统一对齐锚点宽度。
+func (a App) renderStartupHeroLines() ([]string, int) {
+	logoColor := a.startupLogoColor()
+	logo := a.styles.startupLogo.Copy().Foreground(lipgloss.Color(logoColor)).Render(startupLogoASCII)
+	logoLines := strings.Split(logo, "\n")
+	subtitle := a.styles.startupSubtitle.Render(strings.ToUpper(startupSubtitleText))
+	menuLines := a.renderStartupMenuLines()
+
+	anchorWidth := max(48, lipgloss.Width(subtitle))
+	for _, line := range logoLines {
+		anchorWidth = max(anchorWidth, lipgloss.Width(line))
+	}
+	for _, line := range menuLines {
+		anchorWidth = max(anchorWidth, lipgloss.Width(line))
+	}
+
+	lines := make([]string, 0, len(logoLines)+len(menuLines)+2)
+	for _, line := range logoLines {
+		lines = append(lines, a.startupCenterWithinAnchor(anchorWidth, line))
+	}
+	lines = append(lines, "")
+	lines = append(lines, a.startupCenterWithinAnchor(anchorWidth, subtitle))
+	lines = append(lines, "")
+	for _, line := range menuLines {
+		lines = append(lines, a.startupCenterWithinAnchor(anchorWidth, line))
+	}
+	return lines, anchorWidth
+}
+
+// renderStartupHeroArea 将 Hero 区块按垂直居中排布到固定高度，并把每一行补位刷成纯黑。
+func (a App) renderStartupHeroArea(width int, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	heroLines, anchorWidth := a.renderStartupHeroLines()
+	contentHeight := len(heroLines)
+	topPadding := max(0, (height-contentHeight)/2)
+	bottomPadding := max(0, height-topPadding-contentHeight)
+
+	lines := make([]string, 0, height)
+	for i := 0; i < topPadding; i++ {
+		lines = append(lines, a.startupBlackLine(width, ""))
+	}
+	for _, line := range heroLines {
+		lines = append(lines, a.startupBlackLine(width, a.startupCenterLine(width, line, anchorWidth)))
+	}
+	for i := 0; i < bottomPadding; i++ {
+		lines = append(lines, a.startupBlackLine(width, ""))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderStartupMenuLines 渲染启动页快捷操作列表行，按键胶囊与动作说明分离展示。
+func (a App) renderStartupMenuLines() []string {
+	if len(startupMenuItems) == 0 {
+		return nil
+	}
+
+	maxKeyWidth := 0
+	for _, item := range startupMenuItems {
+		maxKeyWidth = max(maxKeyWidth, lipgloss.Width(item.Key))
+	}
+	keyCapWidth := maxKeyWidth + a.styles.startupKeyCap.GetHorizontalFrameSize()
+
+	rows := make([]string, 0, len(startupMenuItems))
+	maxRowWidth := 0
+	for _, item := range startupMenuItems {
+		keyCap := a.styles.startupKeyCap.
+			Copy().
+			Width(keyCapWidth).
+			Align(lipgloss.Center).
+			Render(item.Key)
+		action := a.styles.startupMenuAction.Render(item.Action)
+		row := keyCap + a.startupBlackSpaces(2) + action
+		rows = append(rows, row)
+		maxRowWidth = max(maxRowWidth, lipgloss.Width(row))
+	}
+
+	for i := range rows {
+		rowWidth := lipgloss.Width(rows[i])
+		if rowWidth < maxRowWidth {
+			rows[i] += a.startupBlackSpaces(maxRowWidth - rowWidth)
+		}
+	}
+	return rows
+}
+
+// startupLogoColor 根据当前呼吸 phase 选择 Logo 颜色，模拟启动页呼吸灯效果。
+func (a App) startupLogoColor() string {
+	if startupBreathCycleTicks <= 0 {
+		return startupLogoBaseColor
+	}
+	intensity := (math.Sin(a.startupPulsePhase-math.Pi/2) + 1) / 2
+
+	r := startupBlendChannel(0x7a, 0xf0, intensity)
+	g := startupBlendChannel(0x80, 0xf2, intensity)
+	b := startupBlendChannel(0x88, 0xf4, intensity)
+	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
+}
+
+func startupBlendChannel(minValue int, maxValue int, t float64) int {
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	return minValue + int(math.Round(float64(maxValue-minValue)*t))
+}
+
+// renderStartupInput 渲染启动页底部输入区，包含弱分割线、打字机文本和闪烁光标。
+func (a App) renderStartupInput(width int) string {
+	line := strings.Repeat("─", max(1, width))
+	divider := a.styles.startupDivider.Render(line)
+	cursor := a.startupBlackSpaces(1)
+	if a.startupCursorOn {
+		cursor = a.styles.startupCursor.Render("█")
+	}
+	prompt := a.styles.startupPrompt.Render("❯")
+	typing := a.styles.startupTyping.Render(a.startupTypingText())
+	inputLine := prompt + a.startupBlackSpaces(2) + typing + cursor
+	return lipgloss.JoinVertical(lipgloss.Left, divider, inputLine)
+}
+
+// startupTypingText 根据打字机索引返回当前应显示的占位文本切片。
+func (a App) startupTypingText() string {
+	chars := []rune(startupTypingPlaceholder)
+	if len(chars) == 0 {
+		return ""
+	}
+	index := tuiutils.Clamp(a.startupTypingIndex, 0, len(chars))
+	return string(chars[:index])
+}
+
+// renderStartupFooter 预留启动页底部区域；当前按设计不显示额外提示，避免与 Logo 下方说明重复。
+func (a App) renderStartupFooter(width int) string {
+	_ = width
+	return ""
+}
+
+// startupPaintBlock 将多行文本补齐到固定宽度，避免上一帧遗留字符污染当前画面。
+func (a App) startupPaintBlock(width int, block string) string {
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		lines[i] = a.startupBlackLine(width, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// startupBlackLine 渲染固定宽度行，必要时在行尾追加空格补齐。
+func (a App) startupBlackLine(width int, text string) string {
+	if width <= 0 {
+		return ""
+	}
+	visibleWidth := lipgloss.Width(text)
+	if visibleWidth > width {
+		text = ansi.Cut(text, 0, width)
+		visibleWidth = width
+	}
+	if visibleWidth < width {
+		text += a.startupBlackSpaces(width - visibleWidth)
+	}
+	return text
+}
+
+// startupCenterLine 在不填充右侧空白文本的前提下进行居中偏移。
+func (a App) startupCenterLine(width int, text string, anchorWidth int) string {
+	if width <= 0 {
+		return text
+	}
+	if anchorWidth <= 0 {
+		anchorWidth = lipgloss.Width(text)
+	}
+	leftPad := max(0, (width-anchorWidth)/2)
+	return a.startupBlackSpaces(leftPad) + text
+}
+
+// startupCenterWithinAnchor 在 anchor 宽度内将文本做局部居中。
+func (a App) startupCenterWithinAnchor(anchorWidth int, text string) string {
+	if anchorWidth <= 0 {
+		return text
+	}
+	textWidth := lipgloss.Width(text)
+	if textWidth >= anchorWidth {
+		return text
+	}
+	totalPad := anchorWidth - textWidth
+	leftPad := totalPad / 2
+	rightPad := totalPad - leftPad
+	return a.startupBlackSpaces(leftPad) + text + a.startupBlackSpaces(rightPad)
+}
+
+// startupBlackSpaces 返回用于布局补位的空格串，不附带背景色以避免透明终端中的补丁感。
+func (a App) startupBlackSpaces(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return strings.Repeat(" ", count)
 }
 
 func (a App) renderHeader(width int) string {

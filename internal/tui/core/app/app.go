@@ -146,9 +146,14 @@ type appRuntimeState struct {
 		endCol    int
 	}
 
-	footerErrorLast  string
-	footerErrorText  string
-	footerErrorUntil time.Time
+	footerErrorLast    string
+	footerErrorText    string
+	footerErrorUntil   time.Time
+	startupVisible     bool
+	startupTick        int
+	startupTypingIndex int
+	startupCursorOn    bool
+	startupPulsePhase  float64
 }
 
 type pendingImageAttachment struct {
@@ -335,12 +340,15 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:        time.Now,
-			focus:        panelInput,
-			todoFilter:   todoFilterAll,
-			layoutCached: true,
-			cachedWidth:  128,
-			cachedHeight: 40,
+			nowFn:             time.Now,
+			focus:             panelInput,
+			todoFilter:        todoFilterAll,
+			layoutCached:      true,
+			cachedWidth:       128,
+			cachedHeight:      40,
+			startupVisible:    true,
+			startupCursorOn:   true,
+			startupPulsePhase: 0,
 		},
 		width:  128,
 		height: 40,
@@ -375,9 +383,7 @@ func (a App) Init() tea.Cmd {
 		ListenForRuntimeEvent(a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
-		tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-			return tickMsg(t)
-		}),
+		startupAnimationTickCmd(),
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)
