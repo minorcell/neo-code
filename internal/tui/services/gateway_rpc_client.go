@@ -23,6 +23,8 @@ import (
 const (
 	defaultGatewayRPCRequestTimeout          = 8 * time.Second
 	defaultGatewayRPCRetryCount              = 1
+	defaultGatewayAuthTokenRetryInterval     = 100 * time.Millisecond
+	defaultGatewayAuthTokenRetryAttempts     = 10
 	defaultGatewayRPCHeartbeatInterval       = 10 * time.Second
 	defaultGatewayRPCHeartbeatTimeout        = 5 * time.Second
 	defaultGatewayAutoSpawnProbeInterval     = 200 * time.Millisecond
@@ -119,6 +121,7 @@ type gatewayRPCResponse struct {
 // GatewayRPCClient 维护与 Gateway 的长连接、请求关联与通知分发。
 type GatewayRPCClient struct {
 	listenAddress     string
+	tokenFile         string
 	token             string
 	requestTimeout    time.Duration
 	retryCount        int
@@ -150,7 +153,7 @@ type GatewayRPCClient struct {
 	sequence                   uint64
 }
 
-// NewGatewayRPCClient 创建网关 RPC 客户端，并在启动时静默读取认证 Token。
+// NewGatewayRPCClient 创建网关 RPC 客户端，并在首次鉴权前按需加载认证 Token。
 func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, error) {
 	resolveListenAddressFn := options.ResolveListenAddress
 	if resolveListenAddressFn == nil {
@@ -159,11 +162,6 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 	listenAddress, err := resolveListenAddressFn(strings.TrimSpace(options.ListenAddress))
 	if err != nil {
 		return nil, fmt.Errorf("gateway rpc client: resolve listen address: %w", err)
-	}
-
-	token, err := loadGatewayAuthToken(options.TokenFile)
-	if err != nil {
-		return nil, err
 	}
 
 	requestTimeout := options.RequestTimeout
@@ -201,7 +199,7 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 
 	return &GatewayRPCClient{
 		listenAddress:              listenAddress,
-		token:                      token,
+		tokenFile:                  strings.TrimSpace(options.TokenFile),
 		requestTimeout:             requestTimeout,
 		retryCount:                 retryCount,
 		heartbeatInterval:          heartbeatInterval,
@@ -224,11 +222,19 @@ func (c *GatewayRPCClient) Notifications() <-chan gatewayRPCNotification {
 
 // Authenticate 显式调用 gateway.authenticate，建立连接级认证状态。
 func (c *GatewayRPCClient) Authenticate(ctx context.Context) error {
+	if _, err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+	token, err := c.ensureGatewayAuthToken(ctx)
+	if err != nil {
+		return err
+	}
+
 	var frame map[string]any
-	err := c.CallWithOptions(
+	err = c.CallWithOptions(
 		ctx,
 		protocol.MethodGatewayAuthenticate,
-		protocol.AuthenticateParams{Token: c.token},
+		protocol.AuthenticateParams{Token: token},
 		&frame,
 		GatewayRPCCallOptions{
 			Timeout: c.requestTimeout,
@@ -291,10 +297,7 @@ func (c *GatewayRPCClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		firstErr = c.forceCloseWithError(errors.New("gateway rpc client closed"))
-		spawnedCmd, spawnedCmdDone := c.detachSpawnedCmd()
-		if stopErr := stopSpawnedGatewayProcess(spawnedCmd, spawnedCmdDone); stopErr != nil && firstErr == nil {
-			firstErr = stopErr
-		}
+		c.detachSpawnedCmd()
 		c.heartbeatWG.Wait()
 		c.notificationWG.Wait()
 		close(c.notifications)
@@ -449,17 +452,12 @@ func (c *GatewayRPCClient) ensureConnected(ctx context.Context) (net.Conn, error
 			default:
 			}
 			if spawnedCmd != nil {
-				previousCmd := c.spawnedCmd
-				previousDone := c.spawnedCmdDone
 				done := make(chan struct{})
 				c.spawnedCmd = spawnedCmd
 				c.spawnedCmdDone = done
 				c.autoSpawnAttempt = true
 				go c.watchSpawnedGatewayProcess(spawnedCmd, done)
 				c.stateMu.Unlock()
-				if previousCmd != nil && previousCmd != spawnedCmd {
-					_ = stopSpawnedGatewayProcess(previousCmd, previousDone)
-				}
 			} else {
 				c.autoSpawnAttempt = false
 				c.stateMu.Unlock()
@@ -476,15 +474,12 @@ func (c *GatewayRPCClient) ensureConnected(ctx context.Context) (net.Conn, error
 	}
 }
 
-func (c *GatewayRPCClient) detachSpawnedCmd() (*exec.Cmd, <-chan struct{}) {
+func (c *GatewayRPCClient) detachSpawnedCmd() {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
-	spawnedCmd := c.spawnedCmd
-	spawnedCmdDone := c.spawnedCmdDone
 	c.spawnedCmd = nil
 	c.spawnedCmdDone = nil
 	c.autoSpawnAttempt = false
-	return spawnedCmd, spawnedCmdDone
 }
 
 // watchSpawnedGatewayProcess 监听自动拉起的网关子进程退出，并在退出后复位自动拉起状态。
@@ -907,11 +902,17 @@ func openGatewayAutoSpawnLogFile(logPath string) (*os.File, error) {
 	if err := os.MkdirAll(logDir, gatewayAutoSpawnLogDirPerm); err != nil {
 		return nil, fmt.Errorf("create gateway auto-spawn log dir: %w", err)
 	}
+	if err := ensureSafeGatewayAutoSpawnLogDirectory(logDir); err != nil {
+		return nil, err
+	}
 	if err := rotateGatewayAutoSpawnLog(logPath); err != nil {
 		return nil, err
 	}
+	if err := ensureSafeGatewayAutoSpawnLogFilePath(logPath, true); err != nil {
+		return nil, err
+	}
 
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, gatewayAutoSpawnLogFilePerm)
+	logFile, err := openGatewayAutoSpawnLogFileAtomically(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("open gateway auto-spawn log file: %w", err)
 	}
@@ -920,7 +921,10 @@ func openGatewayAutoSpawnLogFile(logPath string) (*os.File, error) {
 
 // rotateGatewayAutoSpawnLog 将上一轮日志移动到 .bak，覆盖旧备份，确保本轮启动使用全新日志文件。
 func rotateGatewayAutoSpawnLog(logPath string) error {
-	_, err := os.Stat(logPath)
+	if err := ensureSafeGatewayAutoSpawnLogFilePath(logPath, true); err != nil {
+		return err
+	}
+	_, err := os.Lstat(logPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -929,6 +933,9 @@ func rotateGatewayAutoSpawnLog(logPath string) error {
 	}
 
 	backupPath := logPath + ".bak"
+	if err := ensureSafeGatewayAutoSpawnLogFilePath(backupPath, true); err != nil {
+		return err
+	}
 	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove gateway auto-spawn backup log: %w", err)
 	}
@@ -1035,4 +1042,138 @@ func loadGatewayAuthToken(tokenFile string) (string, error) {
 		return "", errors.New("gateway rpc client: auth token is empty")
 	}
 	return token, nil
+}
+
+// ensureGatewayAuthToken 在自动拉起完成后按需读取认证 Token，并对落盘竞态执行短重试。
+func (c *GatewayRPCClient) ensureGatewayAuthToken(ctx context.Context) (string, error) {
+	c.stateMu.Lock()
+	token := strings.TrimSpace(c.token)
+	tokenFile := c.tokenFile
+	c.stateMu.Unlock()
+	if token != "" {
+		return token, nil
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < defaultGatewayAuthTokenRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+
+		token, err := loadGatewayAuthToken(tokenFile)
+		if err == nil {
+			c.stateMu.Lock()
+			if strings.TrimSpace(c.token) == "" {
+				c.token = token
+			}
+			resolved := strings.TrimSpace(c.token)
+			c.stateMu.Unlock()
+			if resolved == "" {
+				return "", errors.New("gateway rpc client: auth token is empty")
+			}
+			return resolved, nil
+		}
+		lastErr = err
+		if !isGatewayAuthTokenRetryableError(err) {
+			return "", err
+		}
+		if attempt == defaultGatewayAuthTokenRetryAttempts-1 {
+			break
+		}
+
+		timer := time.NewTimer(defaultGatewayAuthTokenRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("gateway rpc client: load auth token failed")
+	}
+	return "", lastErr
+}
+
+// isGatewayAuthTokenRetryableError 判断 token 加载失败是否属于“网关刚启动，文件尚未稳定可读”的可重试场景。
+func isGatewayAuthTokenRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "no such file") ||
+		strings.Contains(lower, "cannot find the file") ||
+		strings.Contains(lower, "token is empty") ||
+		strings.Contains(lower, "decode auth file")
+}
+
+// openGatewayAutoSpawnLogFileAtomically 以“临时文件 + 原子替换”方式创建日志文件，再返回追加写句柄。
+func openGatewayAutoSpawnLogFileAtomically(logPath string) (*os.File, error) {
+	logDir := filepath.Dir(logPath)
+	tempFile, err := os.CreateTemp(logDir, ".gateway_auto.log.tmp-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp gateway auto-spawn log file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := tempFile.Chmod(gatewayAutoSpawnLogFilePerm); err != nil {
+		_ = tempFile.Close()
+		return nil, fmt.Errorf("chmod temp gateway auto-spawn log file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return nil, fmt.Errorf("close temp gateway auto-spawn log file: %w", err)
+	}
+
+	if err := ensureSafeGatewayAutoSpawnLogFilePath(logPath, true); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tempPath, logPath); err != nil {
+		return nil, fmt.Errorf("replace gateway auto-spawn log file atomically: %w", err)
+	}
+	cleanupTemp = false
+
+	logFile, err := os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, gatewayAutoSpawnLogFilePerm)
+	if err != nil {
+		return nil, err
+	}
+	return logFile, nil
+}
+
+// ensureSafeGatewayAutoSpawnLogDirectory 校验日志目录不是符号链接，避免目录级劫持。
+func ensureSafeGatewayAutoSpawnLogDirectory(dir string) error {
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("inspect gateway auto-spawn log dir: %w", err)
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("gateway auto-spawn log dir is symbolic link")
+	}
+	return nil
+}
+
+// ensureSafeGatewayAutoSpawnLogFilePath 校验日志文件路径不为软链接/危险硬链接。
+func ensureSafeGatewayAutoSpawnLogFilePath(path string, allowNotExist bool) error {
+	fileInfo, err := os.Lstat(path)
+	if err != nil {
+		if allowNotExist && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("inspect gateway auto-spawn log file: %w", err)
+	}
+	if fileInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("gateway auto-spawn log file is symbolic link")
+	}
+	if isUnsafeGatewayAutoSpawnLogHardLink(fileInfo) {
+		return errors.New("gateway auto-spawn log file is hard link")
+	}
+	return nil
 }

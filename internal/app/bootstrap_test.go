@@ -1495,16 +1495,41 @@ func TestBuildRuntimeRejectsInvalidRuntimeMode(t *testing.T) {
 }
 
 func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
+	_, err := defaultNewRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{
+		ListenAddress: "://invalid",
+	})
+	if err == nil {
+		t.Fatalf("expected defaultNewRemoteRuntimeAdapter to fail when listen address is invalid")
+	}
+}
+
+func TestBuildTUIBundleForModeGatewaySkipsLocalRuntimeStack(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	_, err := defaultNewRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{
-		ListenAddress: "ipc://127.0.0.1",
-		TokenFile:     home + "/missing-token.json",
-	})
-	if err == nil {
-		t.Fatalf("expected defaultNewRemoteRuntimeAdapter to fail when token is missing")
+	originalBuildToolManager := buildToolManagerFunc
+	t.Cleanup(func() { buildToolManagerFunc = originalBuildToolManager })
+
+	buildToolManagerCalled := false
+	buildToolManagerFunc = func(registry *tools.Registry) (tools.Manager, error) {
+		buildToolManagerCalled = true
+		return originalBuildToolManager(registry)
+	}
+
+	bundle, err := buildTUIBundleForMode(context.Background(), BootstrapOptions{
+		RuntimeMode: RuntimeModeGateway,
+	}, RuntimeModeGateway)
+	if err != nil {
+		t.Fatalf("buildTUIBundleForMode() error = %v", err)
+	}
+	if bundle.Runtime != nil {
+		t.Fatalf("expected gateway mode TUI bundle runtime to be nil")
+	}
+	if buildToolManagerCalled {
+		t.Fatalf("expected gateway mode TUI bundle not to build local tool manager/runtime stack")
 	}
 }
 
@@ -1557,6 +1582,13 @@ func TestBuildTUIRuntimeForModeGatewayFailsFastWhenAdapterInitFails(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "gateway connect failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildTUIRuntimeForModeLocalRejectsNilRuntime(t *testing.T) {
+	_, _, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeLocal, nil)
+	if err == nil || !strings.Contains(err.Error(), "local runtime is nil") {
+		t.Fatalf("expected nil local runtime error, got %v", err)
 	}
 }
 

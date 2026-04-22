@@ -72,6 +72,12 @@ type runtimeWithClose interface {
 	Close() error
 }
 
+type bootstrapSharedBundle struct {
+	Config            config.Config
+	ConfigManager     *config.Manager
+	ProviderSelection *configstate.Service
+}
+
 func newMemoExtractorAdapter(
 	factory agentruntime.ProviderFactory,
 	cm *config.Manager,
@@ -130,32 +136,11 @@ func EnsureConsoleUTF8() {
 
 // BuildRuntime 构建 CLI 与 TUI 共用的运行时依赖。
 func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	if _, err := resolveBootstrapRuntimeMode(opts.RuntimeMode); err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	defaultCfg, err := bootstrapDefaultConfig(opts)
+	sharedDeps, providerRegistry, modelCatalogs, err := buildBootstrapSharedDeps(ctx, opts)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-
-	loader := config.NewLoader("", defaultCfg)
-	manager := config.NewManager(loader)
-	if _, err := manager.Load(ctx); err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	providerRegistry, err := builtin.NewRegistry()
-	if err != nil {
-		return RuntimeBundle{}, err
-	}
-	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
-	providerSelection := configstate.NewService(manager, providerRegistry, modelCatalogs)
-	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
-		return RuntimeBundle{}, err
-	}
-
-	cfg := manager.Get()
+	cfg := sharedDeps.Config
 
 	toolRegistry, toolsCleanup, err := buildToolRegistry(cfg)
 	if err != nil {
@@ -182,7 +167,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
-	sessionStore = agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
+	sessionStore = agentsession.NewStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 
 	// 启动时自动清理过期会话，避免数据库无限膨胀。
 	if _, err := cleanupExpiredSessions(ctx, sessionStore, agentsession.DefaultSessionMaxAge); err != nil {
@@ -195,7 +180,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	var contextBuilder agentcontext.Builder = agentcontext.NewBuilderWithToolPoliciesAndSummarizers(toolRegistry, toolRegistry)
 	var memoSvc *memo.Service
 	if cfg.Memo.Enabled {
-		memoStore := memo.NewFileStore(loader.BaseDir(), cfg.Workdir)
+		memoStore := memo.NewFileStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 		memoSource := memo.NewContextSource(memoStore)
 		var sourceInvl func()
 		if invalidator, ok := memoSource.(interface{ InvalidateCache() }); ok {
@@ -210,7 +195,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(
-		manager,
+		sharedDeps.ConfigManager,
 		toolManager,
 		sessionStore,
 		providerRegistry,
@@ -218,7 +203,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	)
 	runtimeSvc.SetSessionAssetStore(sessionStore)
 	runtimeSvc.SetUserInputPreparer(agentruntime.NewSessionInputPreparer(sessionStore, sessionStore))
-	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
+	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, sharedDeps.ConfigManager.BaseDir()))
 	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
 		func(ctx context.Context, cfg config.Config) (int, error) {
 			resolution, err := configstate.ResolveAutoCompactThreshold(ctx, cfg, modelCatalogs)
@@ -233,7 +218,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	if memoSvc != nil && cfg.Memo.AutoExtract {
 		runtimeSvc.SetMemoExtractor(newMemoExtractorAdapter(
 			providerRegistry,
-			manager,
+			sharedDeps.ConfigManager,
 			memo.NewAutoExtractor(nil, memoSvc, time.Duration(cfg.Memo.ExtractTimeoutSec)*time.Second),
 		))
 	}
@@ -247,9 +232,9 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	return RuntimeBundle{
 		Config:            cfg,
-		ConfigManager:     manager,
+		ConfigManager:     sharedDeps.ConfigManager,
 		Runtime:           runtimeImpl,
-		ProviderSelection: providerSelection,
+		ProviderSelection: sharedDeps.ProviderSelection,
 		MemoService:       memoSvc,
 		Close:             closeBundle,
 	}, nil
@@ -257,16 +242,13 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 // NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
 func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func() error, error) {
-	bundle, err := BuildRuntime(ctx, opts)
+	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
+	bundle, err := buildTUIBundleForMode(ctx, opts, runtimeMode)
 	if err != nil {
-		if bundle.Close != nil {
-			_ = bundle.Close()
-		}
 		return nil, nil, err
 	}
 
@@ -291,6 +273,66 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	), cleanup, nil
+}
+
+// buildBootstrapSharedDeps 统一构建启动阶段共享依赖：配置、Provider 注册与当前选择服务。
+func buildBootstrapSharedDeps(
+	ctx context.Context,
+	opts BootstrapOptions,
+) (bootstrapSharedBundle, agentruntime.ProviderFactory, *providercatalog.Service, error) {
+	if _, err := resolveBootstrapRuntimeMode(opts.RuntimeMode); err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	defaultCfg, err := bootstrapDefaultConfig(opts)
+	if err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	loader := config.NewLoader("", defaultCfg)
+	manager := config.NewManager(loader)
+	if _, err := manager.Load(ctx); err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	providerRegistry, err := builtin.NewRegistry()
+	if err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
+	providerSelection := configstate.NewService(manager, providerRegistry, modelCatalogs)
+	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
+		return bootstrapSharedBundle{}, nil, nil, err
+	}
+
+	return bootstrapSharedBundle{
+		Config:            manager.Get(),
+		ConfigManager:     manager,
+		ProviderSelection: providerSelection,
+	}, providerRegistry, modelCatalogs, nil
+}
+
+// buildTUIBundleForMode 根据模式构建 TUI 所需依赖；gateway 模式禁止初始化本地 runtime/tool 栈。
+func buildTUIBundleForMode(ctx context.Context, opts BootstrapOptions, runtimeMode string) (RuntimeBundle, error) {
+	if strings.EqualFold(strings.TrimSpace(runtimeMode), RuntimeModeGateway) {
+		return buildTUIClientBundle(ctx, opts)
+	}
+	return BuildRuntime(ctx, opts)
+}
+
+// buildTUIClientBundle 构建 TUI 客户端依赖，仅保留配置与 Provider 选择，不创建本地 runtime。
+func buildTUIClientBundle(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	sharedDeps, _, _, err := buildBootstrapSharedDeps(ctx, opts)
+	if err != nil {
+		return RuntimeBundle{}, err
+	}
+	return RuntimeBundle{
+		Config:            sharedDeps.Config,
+		ConfigManager:     sharedDeps.ConfigManager,
+		ProviderSelection: sharedDeps.ProviderSelection,
+		MemoService:       nil,
+		Close:             nil,
+	}, nil
 }
 
 // bootstrapDefaultConfig 负责计算本次启动应使用的默认配置快照。
@@ -408,6 +450,9 @@ func buildTUIRuntimeForMode(
 		return remoteRuntime, remoteRuntime.Close, nil
 	}
 	_ = ctx
+	if localRuntime == nil {
+		return nil, nil, errors.New("bootstrap: local runtime is nil")
+	}
 	adapter := newRuntimeContractAdapter(localRuntime)
 	return adapter, adapter.Close, nil
 }
