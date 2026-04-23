@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,16 +31,61 @@ func (r fakeRelease) GreaterThan(other string) bool {
 }
 
 type fakeClient struct {
-	release        releaseView
-	found          bool
-	detectErr      error
-	updateErr      error
-	updateCalls    int
-	lastUpdatePath string
+	release                 releaseView
+	found                   bool
+	detectErr               error
+	updateErr               error
+	updateCalls             int
+	lastUpdatePath          string
+	probeStatus             probeStatus
+	probeLatestVersion      string
+	probeExpectedPattern    string
+	probeAvailableAssetSize int
+	probeCandidates         []string
 }
 
-func (c *fakeClient) DetectLatest(context.Context, selfupdate.Repository) (releaseView, bool, error) {
-	return c.release, c.found, c.detectErr
+func (c *fakeClient) ProbeLatest(_ context.Context, _ selfupdate.Repository, target assetTarget) (probeResult, error) {
+	if c.detectErr != nil {
+		return probeResult{}, c.detectErr
+	}
+
+	expectedPattern := c.probeExpectedPattern
+	if strings.TrimSpace(expectedPattern) == "" {
+		expectedPattern = buildExpectedPattern(target)
+	}
+	latest := strings.TrimSpace(c.probeLatestVersion)
+	if latest == "" && c.release != nil {
+		latest = strings.TrimSpace(c.release.Version())
+	}
+
+	if c.probeStatus != 0 {
+		return probeResult{
+			Status:               c.probeStatus,
+			Release:              c.release,
+			LatestVersion:        latest,
+			ExpectedPattern:      expectedPattern,
+			AvailableAssetsCount: c.probeAvailableAssetSize,
+			CandidateAssets:      append([]string(nil), c.probeCandidates...),
+		}, nil
+	}
+	if !c.found || c.release == nil {
+		return probeResult{
+			Status:               probeStatusNoCandidate,
+			LatestVersion:        latest,
+			ExpectedPattern:      expectedPattern,
+			AvailableAssetsCount: c.probeAvailableAssetSize,
+			CandidateAssets:      append([]string(nil), c.probeCandidates...),
+		}, nil
+	}
+
+	return probeResult{
+		Status:               probeStatusMatched,
+		Release:              c.release,
+		LatestVersion:        latest,
+		ExpectedPattern:      expectedPattern,
+		AvailableAssetsCount: c.probeAvailableAssetSize,
+		CandidateAssets:      append([]string(nil), c.probeCandidates...),
+	}, nil
 }
 
 func (c *fakeClient) UpdateTo(_ context.Context, rel releaseView, cmdPath string) error {
@@ -110,28 +157,28 @@ func TestResolveAssetTarget(t *testing.T) {
 			name:      "linux amd64",
 			goos:      "linux",
 			goarch:    "amd64",
-			wantOS:    "Linux",
+			wantOS:    "linux",
 			wantArch:  "x86_64",
 			wantExt:   "tar.gz",
-			wantAsset: "neocode_Linux_x86_64.tar.gz",
+			wantAsset: "neocode_linux_x86_64.tar.gz",
 		},
 		{
 			name:      "darwin arm64",
 			goos:      "darwin",
 			goarch:    "arm64",
-			wantOS:    "Darwin",
+			wantOS:    "darwin",
 			wantArch:  "arm64",
 			wantExt:   "tar.gz",
-			wantAsset: "neocode_Darwin_arm64.tar.gz",
+			wantAsset: "neocode_darwin_arm64.tar.gz",
 		},
 		{
 			name:      "windows amd64",
 			goos:      "windows",
 			goarch:    "amd64",
-			wantOS:    "Windows",
+			wantOS:    "windows",
 			wantArch:  "x86_64",
 			wantExt:   "zip",
-			wantAsset: "neocode_Windows_x86_64.zip",
+			wantAsset: "neocode_windows_x86_64.zip",
 		},
 		{
 			name:         "unsupported os",
@@ -175,30 +222,22 @@ func TestResolveAssetTarget(t *testing.T) {
 	}
 }
 
-func TestBuildSelfupdateConfigUsesExactFilterAndChecksum(t *testing.T) {
+func TestBuildSelfupdateConfigUsesSemanticConfigAndChecksum(t *testing.T) {
 	target := assetTarget{
-		OSToken:   "Darwin",
+		OSToken:   "darwin",
 		ArchToken: "x86_64",
 		Ext:       "tar.gz",
-		AssetName: "neocode_Darwin_x86_64.tar.gz",
+		AssetName: "neocode_darwin_x86_64.tar.gz",
 	}
 	config := buildSelfupdateConfig(target, true)
-	if config.OS != "Darwin" || config.Arch != "x86_64" {
-		t.Fatalf("OS/Arch = %q/%q, want %q/%q", config.OS, config.Arch, "Darwin", "x86_64")
+	if config.OS != "darwin" || config.Arch != "x86_64" {
+		t.Fatalf("OS/Arch = %q/%q, want %q/%q", config.OS, config.Arch, "darwin", "x86_64")
 	}
 	if !config.Prerelease {
 		t.Fatal("expected prerelease to be enabled")
 	}
-	if len(config.Filters) != 1 {
-		t.Fatalf("len(Filters) = %d, want 1", len(config.Filters))
-	}
-	exactFilter := config.Filters[0]
-	re := regexp.MustCompile(exactFilter)
-	if !re.MatchString("neocode_Darwin_x86_64.tar.gz") {
-		t.Fatal("exact filter should match target asset")
-	}
-	if re.MatchString("neocode_Darwin_x86_64.tar.gz.sig") {
-		t.Fatal("exact filter should not match similar asset names")
+	if len(config.Filters) != 0 {
+		t.Fatalf("len(Filters) = %d, want 0", len(config.Filters))
 	}
 	validator, ok := config.Validator.(*selfupdate.ChecksumValidator)
 	if !ok {
@@ -444,8 +483,8 @@ func TestDoUpdateUsesUpdaterLibraryPathForWindows(t *testing.T) {
 	if client.lastUpdatePath != `C:\Tools\neocode.exe` {
 		t.Fatalf("last update path = %q, want %q", client.lastUpdatePath, `C:\Tools\neocode.exe`)
 	}
-	if capturedConfig.OS != "Windows" || capturedConfig.Arch != "x86_64" {
-		t.Fatalf("config OS/Arch = %q/%q, want %q/%q", capturedConfig.OS, capturedConfig.Arch, "Windows", "x86_64")
+	if capturedConfig.OS != "windows" || capturedConfig.Arch != "x86_64" {
+		t.Fatalf("config OS/Arch = %q/%q, want %q/%q", capturedConfig.OS, capturedConfig.Arch, "windows", "x86_64")
 	}
 }
 
@@ -605,6 +644,238 @@ func TestDoUpdateErrorAndEdgeBranches(t *testing.T) {
 		}
 		if client.updateCalls != 1 {
 			t.Fatalf("update calls = %d, want 1", client.updateCalls)
+		}
+	})
+}
+
+func TestDoUpdateReturnsDiagnosticWhenNoCandidate(t *testing.T) {
+	originalNewClient := newClient
+	originalGOOS := runtimeGOOS
+	originalGOARCH := runtimeGOARCH
+	t.Cleanup(func() {
+		newClient = originalNewClient
+		runtimeGOOS = originalGOOS
+		runtimeGOARCH = originalGOARCH
+	})
+	runtimeGOOS = "windows"
+	runtimeGOARCH = "amd64"
+
+	newClient = func(selfupdate.Config) (updateClient, error) {
+		return &fakeClient{
+			found:                   false,
+			probeLatestVersion:      "v1.4.0",
+			probeAvailableAssetSize: 3,
+			probeCandidates: []string{
+				"neocode_Windows_x86_64.zip",
+				"checksums.txt",
+				"neocode_Darwin_arm64.tar.gz",
+			},
+		}, nil
+	}
+
+	_, err := DoUpdate(context.Background(), UpdateOptions{CurrentVersion: "v1.3.0"})
+	if err == nil {
+		t.Fatal("expected diagnostic error")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "no release asset found for current platform") {
+		t.Fatalf("error = %v, want no release asset found", err)
+	}
+	if !strings.Contains(text, "os=windows") || !strings.Contains(text, "arch=x86_64") {
+		t.Fatalf("error = %v, want os/arch fields", err)
+	}
+	if !strings.Contains(text, "expected-pattern=") || !strings.Contains(text, "available-assets-count=3") {
+		t.Fatalf("error = %v, want diagnostic fields", err)
+	}
+	if !strings.Contains(text, "candidate-assets=[neocode_Windows_x86_64.zip checksums.txt") {
+		t.Fatalf("error = %v, want candidate assets", err)
+	}
+}
+
+func TestDoUpdateReturnsDiagnosticWhenAmbiguous(t *testing.T) {
+	originalNewClient := newClient
+	originalGOOS := runtimeGOOS
+	originalGOARCH := runtimeGOARCH
+	t.Cleanup(func() {
+		newClient = originalNewClient
+		runtimeGOOS = originalGOOS
+		runtimeGOARCH = originalGOARCH
+	})
+	runtimeGOOS = "linux"
+	runtimeGOARCH = "amd64"
+
+	newClient = func(selfupdate.Config) (updateClient, error) {
+		return &fakeClient{
+			release: fakeRelease{
+				version: "v1.4.0",
+			},
+			probeStatus:             probeStatusAmbiguous,
+			probeLatestVersion:      "v1.4.0",
+			probeAvailableAssetSize: 4,
+			probeCandidates: []string{
+				"neocode_linux_x86_64.tar.gz",
+				"neocode-linux-amd64.tgz",
+			},
+		}, nil
+	}
+
+	_, err := DoUpdate(context.Background(), UpdateOptions{CurrentVersion: "v1.3.0"})
+	if err == nil {
+		t.Fatal("expected diagnostic error")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "multiple release assets matched current platform") {
+		t.Fatalf("error = %v, want ambiguous message", err)
+	}
+	if !strings.Contains(text, "available-assets-count=4") {
+		t.Fatalf("error = %v, want available assets count", err)
+	}
+	if !strings.Contains(text, "candidate-assets=[neocode_linux_x86_64.tar.gz neocode-linux-amd64.tgz]") {
+		t.Fatalf("error = %v, want candidate assets", err)
+	}
+}
+
+func TestBuildExpectedPatternMatchesNamingVariants(t *testing.T) {
+	target := assetTarget{
+		OSToken:   "windows",
+		ArchToken: "x86_64",
+		Ext:       "zip",
+	}
+	matcher := regexp.MustCompile(buildExpectedPattern(target))
+	cases := []struct {
+		name  string
+		asset string
+		match bool
+	}{
+		{name: "underscore", asset: "neocode_Windows_x86_64.zip", match: true},
+		{name: "hyphen amd64", asset: "neocode-windows-amd64.zip", match: true},
+		{name: "extra suffix", asset: "neocode_win_x86-64_rc1.zip", match: true},
+		{name: "invalid arch", asset: "neocode_windows_arm64.zip", match: false},
+		{name: "invalid ext", asset: "neocode_windows_x86_64.tar.gz", match: false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matcher.MatchString(strings.ToLower(tt.asset))
+			if got != tt.match {
+				t.Fatalf("MatchString(%q) = %v, want %v", tt.asset, got, tt.match)
+			}
+		})
+	}
+}
+
+func TestSampleAssetsForDiagnosticTruncatesByCountAndLength(t *testing.T) {
+	longName := "neocode_windows_x86_64_" + strings.Repeat("a", 200) + ".zip"
+	input := make([]string, 0, 12)
+	input = append(input, longName)
+	for i := 0; i < 11; i++ {
+		input = append(input, fmt.Sprintf("asset-%02d", i))
+	}
+
+	sampled := sampleAssetsForDiagnostic(input)
+	if len(sampled) != maxDiagnosticCandidateAssets {
+		t.Fatalf("len(sampled) = %d, want %d", len(sampled), maxDiagnosticCandidateAssets)
+	}
+	if !strings.HasSuffix(sampled[0], "...") {
+		t.Fatalf("sampled[0] = %q, want truncated suffix", sampled[0])
+	}
+}
+
+func TestSelfupdateClientProbeLatestForNamingVariantsAndAmbiguity(t *testing.T) {
+	t.Run("match naming variant", func(t *testing.T) {
+		source := stubSource{
+			releases: []selfupdate.SourceRelease{
+				stubSourceRelease{
+					id:      1,
+					tagName: "v1.5.0",
+					assets: []selfupdate.SourceAsset{
+						stubSourceAsset{id: 1, name: "neocode-Windows-amd64.zip", size: 1},
+					},
+				},
+			},
+		}
+		updater, err := selfupdate.NewUpdater(selfupdate.Config{
+			Source: source,
+			OS:     "windows",
+			Arch:   "x86_64",
+		})
+		if err != nil {
+			t.Fatalf("NewUpdater() error = %v", err)
+		}
+
+		client := selfupdateClient{
+			updater: updater,
+			source:  source,
+			config: selfupdate.Config{
+				Source: source,
+				OS:     "windows",
+				Arch:   "x86_64",
+			},
+		}
+		target := assetTarget{
+			OSToken:   "windows",
+			ArchToken: "x86_64",
+			Ext:       "zip",
+		}
+		probe, err := client.ProbeLatest(context.Background(), selfupdate.NewRepositorySlug(repositoryOwner, repositoryName), target)
+		if err != nil {
+			t.Fatalf("ProbeLatest() error = %v", err)
+		}
+		if probe.Status != probeStatusMatched {
+			t.Fatalf("probe status = %v, want matched", probe.Status)
+		}
+		if probe.Release == nil {
+			t.Fatal("expected probe release")
+		}
+		if probe.LatestVersion == "" {
+			t.Fatal("expected latest version")
+		}
+	})
+
+	t.Run("ambiguous assets", func(t *testing.T) {
+		source := stubSource{
+			releases: []selfupdate.SourceRelease{
+				stubSourceRelease{
+					id:      1,
+					tagName: "v1.5.0",
+					assets: []selfupdate.SourceAsset{
+						stubSourceAsset{id: 1, name: "neocode_windows_x86_64.zip", size: 1},
+						stubSourceAsset{id: 2, name: "neocode-windows-amd64.zip", size: 1},
+					},
+				},
+			},
+		}
+		updater, err := selfupdate.NewUpdater(selfupdate.Config{
+			Source: source,
+			OS:     "windows",
+			Arch:   "x86_64",
+		})
+		if err != nil {
+			t.Fatalf("NewUpdater() error = %v", err)
+		}
+
+		client := selfupdateClient{
+			updater: updater,
+			source:  source,
+			config: selfupdate.Config{
+				Source: source,
+				OS:     "windows",
+				Arch:   "x86_64",
+			},
+		}
+		target := assetTarget{
+			OSToken:   "windows",
+			ArchToken: "x86_64",
+			Ext:       "zip",
+		}
+		probe, err := client.ProbeLatest(context.Background(), selfupdate.NewRepositorySlug(repositoryOwner, repositoryName), target)
+		if err != nil {
+			t.Fatalf("ProbeLatest() error = %v", err)
+		}
+		if probe.Status != probeStatusAmbiguous {
+			t.Fatalf("probe status = %v, want ambiguous", probe.Status)
+		}
+		if len(probe.CandidateAssets) != 2 {
+			t.Fatalf("len(candidate assets) = %d, want 2", len(probe.CandidateAssets))
 		}
 	})
 }

@@ -21,6 +21,7 @@ var launchRootProgram = defaultRootProgramLauncher
 var newRootProgram = app.NewProgram
 var runGlobalPreload = defaultGlobalPreload
 var runSilentUpdateCheck = defaultSilentUpdateCheck
+var runReleaseProbe = defaultReleaseProbe
 var readCurrentVersion = version.Current
 var checkLatestRelease = updater.CheckLatest
 
@@ -87,6 +88,7 @@ func NewRootCommand() *cobra.Command {
 		newGatewayCommand(),
 		newMigrateCommand(),
 		newURLDispatchCommand(),
+		newVersionCommand(),
 		newUpdateCommand(),
 	)
 
@@ -138,13 +140,7 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 	go func(parent context.Context, currentVersion string, done chan struct{}) {
 		defer close(done)
 
-		checkCtx, cancel := context.WithTimeout(parent, silentUpdateCheckTimeout)
-		defer cancel()
-
-		result, err := checkLatestRelease(checkCtx, updater.CheckOptions{
-			CurrentVersion:    currentVersion,
-			IncludePrerelease: false,
-		})
+		result, err := runReleaseProbe(parent, currentVersion, false, silentUpdateCheckTimeout)
 		if err != nil || !result.HasUpdate {
 			return
 		}
@@ -165,7 +161,7 @@ func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
 // shouldSkipSilentUpdateCheck 判断当前子命令是否跳过静默更新检查。
 func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	switch normalizedCommandName(cmd) {
-	case "url-dispatch", "update":
+	case "url-dispatch", "update", "version":
 		return true
 	default:
 		return commandAnnotationEnabled(cmd, commandAnnotationSkipSilentUpdateCheck)
