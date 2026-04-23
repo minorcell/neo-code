@@ -494,11 +494,11 @@ func (s *Service) applyCompactForState(
 		if compactErr != nil {
 			return compactErr
 		}
-		if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
-			state.compactCount++
-		}
 		state.session = session
 		if result.Applied {
+			if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
+				state.compactCount++
+			}
 			state.resetTokenTotals()
 			state.nextAttemptSeq++
 			applied = true
