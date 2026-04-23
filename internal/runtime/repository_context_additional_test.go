@@ -59,8 +59,8 @@ func TestBuildRepositoryContextEarlyReturnAndFatalPaths(t *testing.T) {
 					TotalCount:    1,
 				}, nil
 			},
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-				return nil, context.Canceled
+			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+				return repository.RetrievalResult{}, context.Canceled
 			},
 		},
 		events: make(chan RuntimeEvent, 8),
@@ -160,8 +160,8 @@ func TestRepositoryContextBranchFunctions(t *testing.T) {
 		}
 
 		repoService = &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-				return nil, errors.New("retrieve failed")
+			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+				return repository.RetrievalResult{}, errors.New("retrieve failed")
 			},
 		}
 		query, ok := autoRetrievalQueryFromUserText("请看 internal/runtime/run.go")
@@ -173,8 +173,8 @@ func TestRepositoryContextBranchFunctions(t *testing.T) {
 		}
 
 		repoService = &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-				return []repository.RetrievalHit{}, nil
+			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+				return repository.RetrievalResult{}, nil
 			},
 		}
 		section, err := service.buildRetrievalContextForQuery(context.Background(), repoService, workdir, query)

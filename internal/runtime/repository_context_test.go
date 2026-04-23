@@ -14,7 +14,7 @@ import (
 
 type stubRepositoryFactService struct {
 	changedFilesFn     func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error)
-	retrieveFn         func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error)
+	retrieveFn         func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error)
 	changedFilesCalls  int
 	retrieveCalls      int
 	lastChangedOptions repository.ChangedFilesOptions
@@ -38,13 +38,13 @@ func (s *stubRepositoryFactService) Retrieve(
 	ctx context.Context,
 	workdir string,
 	query repository.RetrievalQuery,
-) ([]repository.RetrievalHit, error) {
+) (repository.RetrievalResult, error) {
 	s.retrieveCalls++
 	s.lastRetrieveQuery = query
 	if s.retrieveFn != nil {
 		return s.retrieveFn(ctx, workdir, query)
 	}
-	return nil, nil
+	return repository.RetrievalResult{}, nil
 }
 
 // newRepositoryTestState 构造带单条用户消息的最小 runState，便于验证 repository 触发条件。
@@ -170,14 +170,14 @@ func TestBuildRepositoryContextUsesPathRetrievalWithHighestPriority(t *testing.T
 	t.Parallel()
 
 	repoService := &stubRepositoryFactService{
-		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-			return []repository.RetrievalHit{{
+		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+			return repository.RetrievalResult{Hits: []repository.RetrievalHit{{
 				Path:          "internal/runtime/run.go",
 				Kind:          string(query.Mode),
 				SymbolOrQuery: query.Value,
 				Snippet:       "func ...",
 				LineHint:      1,
-			}}, nil
+			}}, Truncated: true}, nil
 		},
 	}
 	state := newRepositoryTestState(t.TempDir(), "看看 internal/runtime/run.go 里 ExecuteSystemTool 是怎么处理的")
@@ -193,6 +193,9 @@ func TestBuildRepositoryContextUsesPathRetrievalWithHighestPriority(t *testing.T
 	if repoService.lastRetrieveQuery.Mode != repository.RetrievalModePath {
 		t.Fatalf("expected path retrieval, got %+v", repoService.lastRetrieveQuery)
 	}
+	if !repoContext.Retrieval.Truncated {
+		t.Fatalf("expected retrieval truncation to propagate")
+	}
 }
 
 func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
@@ -200,8 +203,8 @@ func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
 
 	t.Run("symbol anchor", func(t *testing.T) {
 		repoService := &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-				return []repository.RetrievalHit{{Path: "internal/runtime/system_tool.go", Kind: string(query.Mode), LineHint: 8}}, nil
+			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+				return repository.RetrievalResult{Hits: []repository.RetrievalHit{{Path: "internal/runtime/system_tool.go", Kind: string(query.Mode), LineHint: 8}}}, nil
 			},
 		}
 		state := newRepositoryTestState(t.TempDir(), "ExecuteSystemTool 在哪定义，帮我解释一下")
@@ -218,8 +221,8 @@ func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
 
 	t.Run("quoted text anchor", func(t *testing.T) {
 		repoService := &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-				return []repository.RetrievalHit{{Path: "internal/runtime/events.go", Kind: string(query.Mode), LineHint: 14}}, nil
+			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+				return repository.RetrievalResult{Hits: []repository.RetrievalHit{{Path: "internal/runtime/events.go", Kind: string(query.Mode), LineHint: 14}}}, nil
 			},
 		}
 		state := newRepositoryTestState(t.TempDir(), "找 `permission_requested` 在哪里处理")
@@ -314,8 +317,8 @@ func TestBuildRepositoryContextEmitsUnavailableEventForRetrievalFailure(t *testi
 	t.Parallel()
 
 	repoService := &stubRepositoryFactService{
-		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-			return nil, errors.New("read failed")
+		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
+			return repository.RetrievalResult{}, errors.New("read failed")
 		},
 	}
 	service := &Service{

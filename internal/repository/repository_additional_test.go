@@ -359,8 +359,11 @@ func TestPathAndRetrievalHelpers(t *testing.T) {
 		if normalizeLimit(0, 3, 10) != 3 || normalizeLimit(11, 3, 10) != 10 || normalizeLimit(4, 3, 10) != 4 {
 			t.Fatalf("normalizeLimit() mismatch")
 		}
-		if filepathSlashClean(" a/b ") != filepath.Clean(filepath.FromSlash("a/b")) {
+		if filepathSlashClean("a/b") != filepath.Clean(filepath.FromSlash("a/b")) {
 			t.Fatalf("filepathSlashClean() mismatch")
+		}
+		if filepathSlashClean("  spaced.go  ") != filepath.Clean(filepath.FromSlash("  spaced.go  ")) {
+			t.Fatalf("filepathSlashClean() should not trim spaces")
 		}
 		if minInt(1, 2) != 1 || minInt(3, 2) != 2 {
 			t.Fatalf("minInt() mismatch")
@@ -386,12 +389,12 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 			t.Fatalf("retrieveByPath canceled err = %v", err)
 		}
 
-		hits, err := service.retrieveByPath(context.Background(), workdir, RetrievalQuery{Mode: RetrievalModePath, Value: "pkg/missing.go"})
+		result, err := service.retrieveByPath(context.Background(), workdir, RetrievalQuery{Mode: RetrievalModePath, Value: "pkg/missing.go"})
 		if err != nil {
 			t.Fatalf("retrieveByPath missing err = %v", err)
 		}
-		if len(hits) != 0 {
-			t.Fatalf("expected empty hits for missing file, got %+v", hits)
+		if len(result.Hits) != 0 {
+			t.Fatalf("expected empty hits for missing file, got %+v", result)
 		}
 	})
 
@@ -407,46 +410,46 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 			t.Fatalf("expected invalid glob pattern error")
 		}
 
-		textHits, err := service.retrieveByText(context.Background(), workdir, workdir, RetrievalQuery{
+		textResult, err := service.retrieveByText(context.Background(), workdir, workdir, RetrievalQuery{
 			Mode:         RetrievalModeText,
 			Value:        "Widget",
 			Limit:        2,
 			ContextLines: 1,
 		}, false)
-		if err != nil || len(textHits) == 0 {
-			t.Fatalf("retrieveByText() = (%+v, %v), want hits", textHits, err)
+		if err != nil || len(textResult.Hits) == 0 {
+			t.Fatalf("retrieveByText() = (%+v, %v), want hits", textResult, err)
 		}
 
-		wordHits, err := service.retrieveByText(context.Background(), workdir, workdir, RetrievalQuery{
+		wordResult, err := service.retrieveByText(context.Background(), workdir, workdir, RetrievalQuery{
 			Mode:         RetrievalModeText,
 			Value:        "Widget",
 			Limit:        5,
 			ContextLines: 1,
 		}, true)
-		if err != nil || len(wordHits) == 0 {
-			t.Fatalf("retrieveByText wholeWord() = (%+v, %v), want hits", wordHits, err)
+		if err != nil || len(wordResult.Hits) == 0 {
+			t.Fatalf("retrieveByText wholeWord() = (%+v, %v), want hits", wordResult, err)
 		}
 
-		symbolHits, err := service.retrieveBySymbol(context.Background(), workdir, workdir, RetrievalQuery{
+		symbolResult, err := service.retrieveBySymbol(context.Background(), workdir, workdir, RetrievalQuery{
 			Mode:         RetrievalModeSymbol,
 			Value:        "BuildWidget",
 			Limit:        5,
 			ContextLines: 1,
 		})
-		if err != nil || len(symbolHits) == 0 {
-			t.Fatalf("retrieveBySymbol() = (%+v, %v), want symbol hits", symbolHits, err)
+		if err != nil || len(symbolResult.Hits) == 0 {
+			t.Fatalf("retrieveBySymbol() = (%+v, %v), want symbol hits", symbolResult, err)
 		}
 
-		fallbackHits, err := service.retrieveBySymbol(context.Background(), workdir, workdir, RetrievalQuery{
+		fallbackResult, err := service.retrieveBySymbol(context.Background(), workdir, workdir, RetrievalQuery{
 			Mode:         RetrievalModeSymbol,
 			Value:        "WidgetName",
 			Limit:        5,
 			ContextLines: 1,
 		})
-		if err != nil || len(fallbackHits) == 0 {
-			t.Fatalf("retrieveBySymbol fallback() = (%+v, %v), want hits", fallbackHits, err)
+		if err != nil || len(fallbackResult.Hits) == 0 {
+			t.Fatalf("retrieveBySymbol fallback() = (%+v, %v), want hits", fallbackResult, err)
 		}
-		for _, hit := range fallbackHits {
+		for _, hit := range fallbackResult.Hits {
 			if hit.Kind != string(RetrievalModeSymbol) {
 				t.Fatalf("expected fallback kind rewritten to symbol, got %+v", hit)
 			}
@@ -728,48 +731,46 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 			t.Fatalf("retrieveBySymbol(read err ignored) err = %v", err)
 		}
 
-		hits, err := svc.retrieveByGlob(context.Background(), root, root, RetrievalQuery{
+		globResult, err := svc.retrieveByGlob(context.Background(), root, root, RetrievalQuery{
 			Mode:         RetrievalModeGlob,
 			Value:        "pkg/*.txt",
 			Limit:        1,
 			ContextLines: 1,
 		})
-		if err != nil || len(hits) != 1 {
-			t.Fatalf("retrieveByGlob(limit=1) = (%+v, %v)", hits, err)
+		if err != nil || len(globResult.Hits) != 1 || globResult.Truncated {
+			t.Fatalf("retrieveByGlob(limit=1) = (%+v, %v)", globResult, err)
 		}
 
-		textHits, err := svc.retrieveByText(context.Background(), root, root, RetrievalQuery{
+		textResult, err := svc.retrieveByText(context.Background(), root, root, RetrievalQuery{
 			Mode:         RetrievalModeText,
 			Value:        "hit",
 			Limit:        1,
 			ContextLines: 1,
 		}, false)
-		if err != nil || len(textHits) != 1 {
-			t.Fatalf("retrieveByText(limit=1) = (%+v, %v)", textHits, err)
+		if err != nil || len(textResult.Hits) != 1 || !textResult.Truncated {
+			t.Fatalf("retrieveByText(limit=1) = (%+v, %v)", textResult, err)
 		}
 
-		symbolHits, err := svc.retrieveBySymbol(context.Background(), root, root, RetrievalQuery{
+		symbolResult, err := svc.retrieveBySymbol(context.Background(), root, root, RetrievalQuery{
 			Mode:         RetrievalModeSymbol,
 			Value:        "BuildWidget",
 			Limit:        1,
 			ContextLines: 1,
 		})
-		if err != nil || len(symbolHits) != 1 {
-			t.Fatalf("retrieveBySymbol(limit=1) = (%+v, %v)", symbolHits, err)
+		if err != nil || len(symbolResult.Hits) != 1 || !symbolResult.Truncated {
+			t.Fatalf("retrieveBySymbol(limit=1) = (%+v, %v)", symbolResult, err)
 		}
 
 		visitedCount := 0
 		limitRoot := t.TempDir()
-		mustWriteFile(t, filepath.Join(limitRoot, "a.txt"), "hit\n")
-		mustWriteFile(t, filepath.Join(limitRoot, "b.txt"), "hit\n")
-		mustWriteFile(t, filepath.Join(limitRoot, "c.txt"), "hit\n")
+		mustWriteFile(t, filepath.Join(limitRoot, "a.txt"), "hit\nhit\n")
 		limitSvc := &Service{
 			readFile: func(path string) ([]byte, error) {
 				visitedCount++
 				return readFile(path)
 			},
 		}
-		limitedHits, err := limitSvc.retrieveByText(context.Background(), limitRoot, limitRoot, RetrievalQuery{
+		limitedResult, err := limitSvc.retrieveByText(context.Background(), limitRoot, limitRoot, RetrievalQuery{
 			Mode:         RetrievalModeText,
 			Value:        "hit",
 			Limit:        1,
@@ -778,11 +779,26 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("retrieveByText(early stop) err = %v", err)
 		}
-		if len(limitedHits) != 1 {
-			t.Fatalf("expected one limited hit, got %+v", limitedHits)
+		if len(limitedResult.Hits) != 1 || !limitedResult.Truncated {
+			t.Fatalf("expected one limited hit with truncation, got %+v", limitedResult)
 		}
 		if visitedCount != 1 {
-			t.Fatalf("expected retrieval walk to stop after first hit, visited %d files", visitedCount)
+			t.Fatalf("expected retrieval walk to stop after first file, visited %d files", visitedCount)
+		}
+
+		exactLimitRoot := t.TempDir()
+		mustWriteFile(t, filepath.Join(exactLimitRoot, "only.txt"), "hit\n")
+		exactResult, err := svc.retrieveByText(context.Background(), exactLimitRoot, exactLimitRoot, RetrievalQuery{
+			Mode:         RetrievalModeText,
+			Value:        "hit",
+			Limit:        1,
+			ContextLines: 1,
+		}, false)
+		if err != nil {
+			t.Fatalf("retrieveByText(exact limit) err = %v", err)
+		}
+		if len(exactResult.Hits) != 1 || exactResult.Truncated {
+			t.Fatalf("expected one exact-limit hit without truncation, got %+v", exactResult)
 		}
 		_, err = svc.retrieveByText(context.Background(), root, filepath.Join(root, "missing"), RetrievalQuery{
 			Mode:  RetrievalModeText,

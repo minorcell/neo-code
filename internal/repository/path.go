@@ -149,7 +149,7 @@ func walkWorkspaceFiles(
 		if entry.IsDir() {
 			return nil
 		}
-		resolvedPath, resolveErr := security.ResolveWorkspacePathFromRoot(canonicalRoot, path)
+		resolvedPath, resolveErr := security.ResolveWorkspaceWalkPathFromRoot(canonicalRoot, path, entry)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -181,7 +181,10 @@ func normalizeLimit(value int, defaultValue int, maxValue int) int {
 
 // filepathSlashClean 统一清理 git 输出中的路径分隔符。
 func filepathSlashClean(path string) string {
-	return filepath.Clean(filepath.FromSlash(strings.TrimSpace(path)))
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(filepath.FromSlash(path))
 }
 
 func minInt(a int, b int) int {

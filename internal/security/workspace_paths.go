@@ -3,6 +3,7 @@ package security
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 )
@@ -39,6 +40,25 @@ func ResolveWorkspacePathFromRoot(root string, target string) (string, error) {
 	}
 	if !isWithinWorkspace(root, absoluteTarget) {
 		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+	}
+	if _, err := ensureNoSymlinkEscape(root, absoluteTarget, target); err != nil {
+		return "", err
+	}
+	return absoluteTarget, nil
+}
+
+// ResolveWorkspaceWalkPathFromRoot 在已知 canonical workspace root 的前提下，
+// 为遍历热路径做轻量校验：普通文件只做 containment，符号链接条目再回落到完整校验。
+func ResolveWorkspaceWalkPathFromRoot(root string, target string, entry fs.DirEntry) (string, error) {
+	absoluteTarget, err := absoluteWorkspaceTarget(root, target)
+	if err != nil {
+		return "", err
+	}
+	if !isWithinWorkspace(root, absoluteTarget) {
+		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+	}
+	if entry != nil && entry.Type().IsRegular() {
+		return absoluteTarget, nil
 	}
 	if _, err := ensureNoSymlinkEscape(root, absoluteTarget, target); err != nil {
 		return "", err

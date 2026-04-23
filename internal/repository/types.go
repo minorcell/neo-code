@@ -77,6 +77,12 @@ type RetrievalHit struct {
 	LineHint      int
 }
 
+// RetrievalResult 表示一次定向检索的结构化结果与截断状态。
+type RetrievalResult struct {
+	Hits      []RetrievalHit
+	Truncated bool
+}
+
 // Service 提供轻量仓库摘要、变更上下文与定向检索能力。
 type Service struct {
 	gitRunner gitCommandRunner
@@ -190,13 +196,13 @@ func (s *Service) ChangedFiles(ctx context.Context, workdir string, opts Changed
 }
 
 // Retrieve 根据模式返回受限且结构化的定向检索结果。
-func (s *Service) Retrieve(ctx context.Context, workdir string, query RetrievalQuery) ([]RetrievalHit, error) {
+func (s *Service) Retrieve(ctx context.Context, workdir string, query RetrievalQuery) (RetrievalResult, error) {
 	root, scope, normalized, err := normalizeRetrievalQuery(workdir, query)
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 
 	switch normalized.Mode {
@@ -209,6 +215,6 @@ func (s *Service) Retrieve(ctx context.Context, workdir string, query RetrievalQ
 	case RetrievalModeSymbol:
 		return s.retrieveBySymbol(ctx, root, scope, normalized)
 	default:
-		return nil, errInvalidMode
+		return RetrievalResult{}, errInvalidMode
 	}
 }

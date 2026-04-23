@@ -372,48 +372,48 @@ func TestRetrieveSupportsPathGlobTextAndSymbol(t *testing.T) {
 
 	service := NewService()
 
-	pathHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: "pkg/target.go",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path) error = %v", err)
 	}
-	if len(pathHits) != 1 || pathHits[0].Kind != string(RetrievalModePath) {
-		t.Fatalf("unexpected path hits: %+v", pathHits)
+	if len(pathResult.Hits) != 1 || pathResult.Hits[0].Kind != string(RetrievalModePath) || pathResult.Truncated {
+		t.Fatalf("unexpected path result: %+v", pathResult)
 	}
 
-	globHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	globResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeGlob,
 		Value: "*.go",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(glob) error = %v", err)
 	}
-	if len(globHits) == 0 {
+	if len(globResult.Hits) == 0 {
 		t.Fatalf("expected glob hits")
 	}
 
-	textHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	textResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeText,
 		Value: "Widget",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(text) error = %v", err)
 	}
-	if len(textHits) < 2 {
-		t.Fatalf("expected text hits across files, got %+v", textHits)
+	if len(textResult.Hits) < 2 {
+		t.Fatalf("expected text hits across files, got %+v", textResult)
 	}
 
-	symbolHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	symbolResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeSymbol,
 		Value: "BuildWidget",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(symbol) error = %v", err)
 	}
-	if len(symbolHits) != 1 || symbolHits[0].LineHint <= 0 {
-		t.Fatalf("unexpected symbol hits: %+v", symbolHits)
+	if len(symbolResult.Hits) != 1 || symbolResult.Hits[0].LineHint <= 0 {
+		t.Fatalf("unexpected symbol hits: %+v", symbolResult)
 	}
 }
 
@@ -461,15 +461,15 @@ func TestRetrieveSymbolFallsBackToWholeWordTextSearch(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.txt"), "searchWidget searchWidget\n")
 
 	service := NewService()
-	hits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	result, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeSymbol,
 		Value: "searchWidget",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(symbol fallback) error = %v", err)
 	}
-	if len(hits) != 1 {
-		t.Fatalf("expected fallback whole-word hit, got %+v", hits)
+	if len(result.Hits) != 1 {
+		t.Fatalf("expected fallback whole-word hit, got %+v", result)
 	}
 }
 
@@ -492,68 +492,68 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 
 	service := NewService()
 
-	pathHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: ".env",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path sensitive) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected sensitive path retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected sensitive path retrieval to be filtered, got %+v", pathResult)
 	}
-	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: ".npmrc",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path npmrc) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected .npmrc retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected .npmrc retrieval to be filtered, got %+v", pathResult)
 	}
-	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: ".aws/credentials",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path aws credentials) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected aws credentials retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected aws credentials retrieval to be filtered, got %+v", pathResult)
 	}
-	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: ".envrc",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path envrc) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected .envrc retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected .envrc retrieval to be filtered, got %+v", pathResult)
 	}
-	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: "config/secrets.yml",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path secrets) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected secrets.yml retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected secrets.yml retrieval to be filtered, got %+v", pathResult)
 	}
-	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModePath,
 		Value: "pkg/issuer.p8",
 	})
 	if err != nil {
 		t.Fatalf("Retrieve(path p8) error = %v", err)
 	}
-	if len(pathHits) != 0 {
-		t.Fatalf("expected .p8 retrieval to be filtered, got %+v", pathHits)
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected .p8 retrieval to be filtered, got %+v", pathResult)
 	}
 
-	textHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	textResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeText,
 		Value: "match",
 		Limit: 10,
@@ -561,11 +561,11 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Retrieve(text) error = %v", err)
 	}
-	if len(textHits) != 1 || textHits[0].Path != filepath.Clean("pkg/target.txt") {
-		t.Fatalf("expected only safe text hit, got %+v", textHits)
+	if len(textResult.Hits) != 1 || textResult.Hits[0].Path != filepath.Clean("pkg/target.txt") {
+		t.Fatalf("expected only safe text hit, got %+v", textResult)
 	}
 
-	globHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+	globResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeGlob,
 		Value: "pkg/*",
 		Limit: 10,
@@ -573,12 +573,12 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Retrieve(glob) error = %v", err)
 	}
-	for _, hit := range globHits {
+	for _, hit := range globResult.Hits {
 		if hit.Path == filepath.Clean("pkg/large.txt") ||
 			hit.Path == filepath.Clean("pkg/notes.key") ||
 			hit.Path == filepath.Clean("pkg/bin.dat") ||
 			hit.Path == filepath.Clean("pkg/issuer.p8") {
-			t.Fatalf("expected filtered file to be excluded, got %+v", globHits)
+			t.Fatalf("expected filtered file to be excluded, got %+v", globResult)
 		}
 	}
 }

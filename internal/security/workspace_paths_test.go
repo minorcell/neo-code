@@ -1,10 +1,21 @@
 package security
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type testDirEntry struct {
+	name string
+	mode fs.FileMode
+}
+
+func (d testDirEntry) Name() string               { return d.name }
+func (d testDirEntry) IsDir() bool                { return d.mode.IsDir() }
+func (d testDirEntry) Type() fs.FileMode          { return d.mode }
+func (d testDirEntry) Info() (fs.FileInfo, error) { return nil, fs.ErrInvalid }
 
 func TestResolveWorkspacePathResolvesInsideWorkspace(t *testing.T) {
 	t.Parallel()
@@ -46,6 +57,64 @@ func TestResolveWorkspacePathFromRootMatchesWorkspaceValidation(t *testing.T) {
 	}
 	if !samePathKey(resolvedTarget, targetDir) {
 		t.Fatalf("expected resolved target %q, got %q", targetDir, resolvedTarget)
+	}
+}
+
+func TestResolveWorkspaceWalkPathFromRootUsesFastPathForRegularFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetFile := filepath.Join(root, "pkg", "main.go")
+	if err := os.MkdirAll(filepath.Dir(targetFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(targetFile, []byte("package main"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	resolvedRoot, _, err := ResolveWorkspacePath(root, ".")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacePath(root, dot) error = %v", err)
+	}
+	entry, err := os.Stat(targetFile)
+	if err != nil {
+		t.Fatalf("os.Stat() error = %v", err)
+	}
+	resolvedTarget, err := ResolveWorkspaceWalkPathFromRoot(resolvedRoot, targetFile, fs.FileInfoToDirEntry(entry))
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceWalkPathFromRoot() error = %v", err)
+	}
+	if !samePathKey(resolvedTarget, targetFile) {
+		t.Fatalf("expected resolved target %q, got %q", targetFile, resolvedTarget)
+	}
+}
+
+func TestResolveWorkspaceWalkPathFromRootUnknownTypeStillChecksSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	linkDir := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	linkPath := filepath.Join(linkDir, "secret.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+
+	resolvedRoot, _, err := ResolveWorkspacePath(root, ".")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacePath(root, dot) error = %v", err)
+	}
+	unknownEntry := testDirEntry{name: filepath.Base(linkPath), mode: 0}
+	if _, err := ResolveWorkspaceWalkPathFromRoot(resolvedRoot, linkPath, unknownEntry); err == nil {
+		t.Fatalf("expected unknown-type walk path to keep symlink escape protection")
 	}
 }
 

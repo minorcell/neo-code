@@ -126,17 +126,17 @@ func (s *Service) buildRetrievalContextForQuery(
 	workdir string,
 	query repository.RetrievalQuery,
 ) (*agentcontext.RepositoryRetrievalSection, error) {
-	hits, err := repoService.Retrieve(ctx, workdir, query)
+	result, err := repoService.Retrieve(ctx, workdir, query)
 	if err != nil {
 		return nil, err
 	}
-	if len(hits) == 0 {
+	if len(result.Hits) == 0 {
 		return nil, nil
 	}
 
 	return &agentcontext.RepositoryRetrievalSection{
-		Hits:      append([]repository.RetrievalHit(nil), hits...),
-		Truncated: false,
+		Hits:      append([]repository.RetrievalHit(nil), result.Hits...),
+		Truncated: result.Truncated,
 		Mode:      string(query.Mode),
 		Query:     query.Value,
 	}, nil

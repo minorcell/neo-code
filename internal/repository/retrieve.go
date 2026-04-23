@@ -82,51 +82,53 @@ var blockedRepositorySnippetConfigKeywords = []string{
 var errRetrievalLimitReached = errors.New("repository: retrieval limit reached")
 
 // retrieveByPath 按路径读取目标文件的受限片段。
-func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) ([]RetrievalHit, error) {
+func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) (RetrievalResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 	_, target, err := resolveWorkspacePath(root, query.Value)
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 	allowed, gateErr := allowRepositorySnippetByPath(target)
 	if gateErr != nil {
-		return nil, gateErr
+		return RetrievalResult{}, gateErr
 	}
 	if !allowed {
-		return []RetrievalHit{}, nil
+		return RetrievalResult{}, nil
 	}
 	content, err := s.readFile(target)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []RetrievalHit{}, nil
+			return RetrievalResult{}, nil
 		}
-		return nil, err
+		return RetrievalResult{}, err
 	}
 	if isBinaryContent(content) {
-		return []RetrievalHit{}, nil
+		return RetrievalResult{}, nil
 	}
 
 	hit, err := buildRetrievalHit(root, target, RetrievalModePath, query.Value, string(content), 1, query.ContextLines)
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
-	return []RetrievalHit{hit}, nil
+	return RetrievalResult{Hits: []RetrievalHit{hit}}, nil
 }
 
 // retrieveByGlob 按 glob 模式在工作区内定位候选文件。
-func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string, query RetrievalQuery) ([]RetrievalHit, error) {
+func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string, query RetrievalQuery) (RetrievalResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 
-	hits := make([]RetrievalHit, 0, query.Limit)
+	effectiveLimit := query.Limit + 1
+	hits := make([]RetrievalHit, 0, effectiveLimit)
+	truncated := false
 	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if len(hits) >= query.Limit {
+		if len(hits) >= effectiveLimit {
 			return errRetrievalLimitReached
 		}
 		match, matchErr := filepath.Match(query.Value, filepath.Base(path))
@@ -155,7 +157,7 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 			return hitErr
 		}
 		hits = append(hits, hit)
-		if len(hits) >= query.Limit {
+		if len(hits) >= effectiveLimit {
 			return errRetrievalLimitReached
 		}
 		return nil
@@ -166,19 +168,23 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 		}
 	}
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
+	}
+	if len(hits) > query.Limit {
+		hits = hits[:query.Limit]
+		truncated = true
 	}
 
 	sort.Slice(hits, func(i int, j int) bool {
 		return hits[i].Path < hits[j].Path
 	})
-	return hits, nil
+	return RetrievalResult{Hits: hits, Truncated: truncated}, nil
 }
 
 // retrieveByText 扫描工作区文本文件并返回稳定排序的关键字命中。
-func (s *Service) retrieveByText(ctx context.Context, root string, scope string, query RetrievalQuery, wholeWord bool) ([]RetrievalHit, error) {
+func (s *Service) retrieveByText(ctx context.Context, root string, scope string, query RetrievalQuery, wholeWord bool) (RetrievalResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 
 	var matcher *regexp.Regexp
@@ -186,12 +192,14 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 		matcher = regexp.MustCompile(`\b` + regexp.QuoteMeta(query.Value) + `\b`)
 	}
 
-	hits := make([]RetrievalHit, 0, query.Limit)
+	effectiveLimit := query.Limit + 1
+	hits := make([]RetrievalHit, 0, effectiveLimit)
+	truncated := false
 	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if len(hits) >= query.Limit {
+		if len(hits) >= effectiveLimit {
 			return errRetrievalLimitReached
 		}
 		content, ok := s.readRetrievalText(path, entry)
@@ -203,7 +211,7 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if len(hits) >= query.Limit {
+			if len(hits) >= effectiveLimit {
 				break
 			}
 			matched := strings.Contains(line, query.Value)
@@ -219,7 +227,7 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 				return hitErr
 			}
 			hits = append(hits, hit)
-			if len(hits) >= query.Limit {
+			if len(hits) >= effectiveLimit {
 				return errRetrievalLimitReached
 			}
 		}
@@ -231,25 +239,31 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 		}
 	}
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
+	}
+	if len(hits) > query.Limit {
+		hits = hits[:query.Limit]
+		truncated = true
 	}
 
 	sortRetrievalHits(hits)
-	return hits, nil
+	return RetrievalResult{Hits: hits, Truncated: truncated}, nil
 }
 
 // retrieveBySymbol 先做 Go 定义检索，再在无定义命中时回退到 whole-word 文本检索。
-func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope string, query RetrievalQuery) ([]RetrievalHit, error) {
+func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope string, query RetrievalQuery) (RetrievalResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
 
-	hits := make([]RetrievalHit, 0, query.Limit)
+	effectiveLimit := query.Limit + 1
+	hits := make([]RetrievalHit, 0, effectiveLimit)
+	truncated := false
 	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if len(hits) >= query.Limit {
+		if len(hits) >= effectiveLimit {
 			return errRetrievalLimitReached
 		}
 		if filepath.Ext(path) != ".go" {
@@ -264,7 +278,7 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if len(hits) >= query.Limit {
+			if len(hits) >= effectiveLimit {
 				break
 			}
 			hit, hitErr := buildRetrievalHit(root, path, RetrievalModeSymbol, query.Value, content, lineNumber, query.ContextLines)
@@ -272,7 +286,7 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 				return hitErr
 			}
 			hits = append(hits, hit)
-			if len(hits) >= query.Limit {
+			if len(hits) >= effectiveLimit {
 				return errRetrievalLimitReached
 			}
 		}
@@ -284,21 +298,25 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 		}
 	}
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
+	}
+	if len(hits) > query.Limit {
+		hits = hits[:query.Limit]
+		truncated = true
 	}
 	if len(hits) > 0 {
 		sortRetrievalHits(hits)
-		return hits, nil
+		return RetrievalResult{Hits: hits, Truncated: truncated}, nil
 	}
 
-	textHits, err := s.retrieveByText(ctx, root, scope, query, true)
+	textResult, err := s.retrieveByText(ctx, root, scope, query, true)
 	if err != nil {
-		return nil, err
+		return RetrievalResult{}, err
 	}
-	for index := range textHits {
-		textHits[index].Kind = string(RetrievalModeSymbol)
+	for index := range textResult.Hits {
+		textResult.Hits[index].Kind = string(RetrievalModeSymbol)
 	}
-	return textHits, nil
+	return textResult, nil
 }
 
 // findGoSymbolDefinitions 以轻量正则匹配 Go 定义，不尝试跨文件语义解析。
@@ -420,7 +438,10 @@ func allowRepositorySnippetByPathAndSize(path string, size int64) bool {
 	if size < 0 || size > maxRepositorySnippetFileBytes {
 		return false
 	}
-	normalizedPath := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
+	if path == "" {
+		return false
+	}
+	normalizedPath := strings.ToLower(filepath.ToSlash(path))
 	if normalizedPath == "" {
 		return false
 	}
