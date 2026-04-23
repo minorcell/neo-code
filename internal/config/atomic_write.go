@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 )
 
@@ -66,6 +67,9 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 
 // fsyncDirectory 尝试同步目录元数据，确保 rename 后的目录项在支持的平台尽快落盘。
 func fsyncDirectory(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	handle, err := os.Open(dir)
 	if err != nil {
 		return err

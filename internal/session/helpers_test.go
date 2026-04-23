@@ -96,3 +96,49 @@ func TestStorageHelpers(t *testing.T) {
 		t.Fatalf("expected symlink path escape error")
 	}
 }
+
+func TestResolvePathForContainmentFallsBackOnPermissionWithoutSymlink(t *testing.T) {
+	baseDir := t.TempDir()
+	target := filepath.Join(baseDir, "inside.txt")
+	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+
+	original := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = original
+	}()
+
+	resolved, err := resolvePathForContainment(target)
+	if err != nil {
+		t.Fatalf("resolvePathForContainment() error = %v", err)
+	}
+	if resolved != target {
+		t.Fatalf("expected fallback absolute path %q, got %q", target, resolved)
+	}
+}
+
+func TestResolvePathForContainmentRejectsPermissionFallbackWhenSymlinkPresent(t *testing.T) {
+	baseDir := t.TempDir()
+	outsideDir := t.TempDir()
+	linkPath := filepath.Join(baseDir, "link")
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Skipf("symlink not supported in current environment: %v", err)
+	}
+
+	original := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = original
+	}()
+
+	_, err := resolvePathForContainment(filepath.Join(linkPath, "escape.txt"))
+	if err == nil || !strings.Contains(err.Error(), "eval symlinks") {
+		t.Fatalf("expected permission fallback rejection for symlink path, got %v", err)
+	}
+}
