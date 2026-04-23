@@ -367,10 +367,101 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	}
 
 	app, runtime := newTestAppWithProviderService(t, stubProviderService{providers: providers, models: models})
+	app.startupScreenLocked = false
 	app.layoutCached = true
 	app.cachedWidth = app.width
 	app.cachedHeight = app.height
 	return app, runtime
+}
+
+func TestStartupKeyEscFocusesInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Esc to keep startup screen locked")
+	}
+	if next.focus != panelInput {
+		t.Fatalf("expected Esc to focus input panel from startup")
+	}
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatalf("expected Esc not to quit from startup")
+		}
+	}
+}
+
+func TestStartupSlashTransitionsToComposer(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected startup to remain locked before first send")
+	}
+	if got := next.input.Value(); got != "/" {
+		t.Fatalf("expected composer input '/', got %q", got)
+	}
+	if got := next.state.InputText; got != "/" {
+		t.Fatalf("expected state input '/', got %q", got)
+	}
+	if len(next.commandMenu.Items()) == 0 {
+		t.Fatalf("expected slash suggestions to be visible")
+	}
+}
+
+func TestStartupRegularInputDismissesStartup(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected startup to remain locked before first send")
+	}
+	if got := next.input.Value(); got != "h" {
+		t.Fatalf("expected composer input to receive typed rune, got %q", got)
+	}
+}
+
+func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected opening workspace picker not to unlock startup")
+	}
+	if next.state.ActivePicker != pickerFile {
+		t.Fatalf("expected file picker active, got %v", next.state.ActivePicker)
+	}
+}
+
+func TestStartupCtrlNStartsDraftSession(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActiveSessionID = "session-1"
+	app.state.ActiveSessionTitle = "Old Session"
+	app.input.SetValue("old content")
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	next := model.(App)
+	if next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to unlock startup")
+	}
+	if next.state.ActiveSessionID != "" {
+		t.Fatalf("expected draft session id to be empty")
+	}
+	if next.state.ActiveSessionTitle != draftSessionTitle {
+		t.Fatalf("expected draft session title, got %q", next.state.ActiveSessionTitle)
+	}
+	if got := next.input.Value(); got != "" {
+		t.Fatalf("expected composer reset, got %q", got)
+	}
 }
 
 func TestSubmitProviderAddFormRequiresCustomDriverBaseURL(t *testing.T) {
@@ -605,7 +696,9 @@ func TestAppUpdateBasic(t *testing.T) {
 	}
 	app = model.(App)
 	if cmd != nil {
-		t.Error("Update returned non-nil cmd for runFinishedMsg with error")
+		if _, ok := cmd().(tickMsg); !ok {
+			t.Errorf("expected optional tick cmd for footer toast, got %T", cmd())
+		}
 	}
 
 	canceledMsg := runFinishedMsg{Err: context.Canceled}
@@ -615,7 +708,9 @@ func TestAppUpdateBasic(t *testing.T) {
 	}
 	app = model.(App)
 	if cmd != nil {
-		t.Error("Update returned non-nil cmd for runFinishedMsg with canceled error")
+		if _, ok := cmd().(tickMsg); !ok {
+			t.Errorf("expected optional tick cmd for footer toast, got %T", cmd())
+		}
 	}
 }
 
@@ -995,51 +1090,6 @@ func TestExtractFencedCodeBlocks(t *testing.T) {
 	}
 }
 
-func TestIsWorkspaceCommandInput(t *testing.T) {
-	if !isWorkspaceCommandInput("& ls -la") {
-		t.Fatalf("expected workspace command prefix to be detected")
-	}
-	if isWorkspaceCommandInput("ls -la") {
-		t.Fatalf("expected non-workspace command to be false")
-	}
-}
-
-func TestExtractWorkspaceCommand(t *testing.T) {
-	command, err := extractWorkspaceCommand("& git status")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if command != "git status" {
-		t.Fatalf("expected command to be extracted, got %q", command)
-	}
-
-	if _, err := extractWorkspaceCommand("&"); err == nil {
-		t.Fatalf("expected error for empty command")
-	}
-	if _, err := extractWorkspaceCommand("git status"); err == nil {
-		t.Fatalf("expected error for missing prefix")
-	}
-}
-
-func TestFormatWorkspaceCommandResult(t *testing.T) {
-	output := "clean\n"
-	got := formatWorkspaceCommandResult("git status", output, nil)
-	if !strings.Contains(got, "Command: & git status") {
-		t.Fatalf("expected success header, got %q", got)
-	}
-	if !strings.Contains(got, "clean") {
-		t.Fatalf("expected output to be included")
-	}
-
-	errResult := formatWorkspaceCommandResult("git status", "", errors.New("boom"))
-	if !strings.Contains(errResult, "Command Failed: & git status") {
-		t.Fatalf("expected failure header, got %q", errResult)
-	}
-	if !strings.Contains(errResult, "boom") {
-		t.Fatalf("expected error message in result")
-	}
-}
-
 func TestTokenRangeFirstToken(t *testing.T) {
 	start, end, token, ok := tokenRange("  /help now", tokenSelectorFirst)
 	if !ok {
@@ -1071,29 +1121,6 @@ func TestCollectFileSuggestionMatches(t *testing.T) {
 	matches := collectFileSuggestionMatches("read", candidates, 2)
 	if len(matches) == 0 {
 		t.Fatalf("expected matches for read")
-	}
-}
-
-func TestShellArgsAndPowerShellUTF8(t *testing.T) {
-	args := shellArgs("bash", "echo hi")
-	if len(args) == 0 {
-		t.Fatalf("expected shell args to be returned")
-	}
-	utf8 := powershellUTF8Command("echo hi")
-	if utf8 == "" {
-		t.Fatalf("expected powershell utf8 command")
-	}
-}
-
-func TestSanitizeAndDecodeWorkspaceOutput(t *testing.T) {
-	raw := []byte("hello\u0000world")
-	sanitized := sanitizeWorkspaceOutput(raw)
-	if sanitized == "" {
-		t.Fatalf("expected sanitized output")
-	}
-	decoded := decodeWorkspaceOutput(raw)
-	if decoded == "" {
-		t.Fatalf("expected decoded output")
 	}
 }
 
@@ -1243,6 +1270,17 @@ func TestNewWithBootstrapMissingDependencies(t *testing.T) {
 		ProviderService: stubProviderService{},
 	}); err == nil {
 		t.Fatalf("expected error for nil config manager")
+	}
+}
+
+func TestStartupScreenTickDoesNotAnimateLogo(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	model, cmd := app.Update(tickMsg(time.Unix(1_700_000_000, 0)))
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected no follow-up tick when only startup screen is visible")
 	}
 }
 
@@ -1486,6 +1524,28 @@ func TestUpdateSendWithImageAttachmentsUsesPreparePipeline(t *testing.T) {
 	}
 	if len(runtime.runInputs) != 1 {
 		t.Fatalf("expected one runtime run input, got %+v", runtime.runInputs)
+	}
+}
+
+func TestUpdateSendAmpersandInputAsPlainText(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.input.SetValue("& git status")
+	app.state.InputText = "& git status"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected ampersand-prefixed text to enter normal send flow")
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if runtime.prepareInputs[0].Text != "& git status" {
+		t.Fatalf("expected ampersand text to be forwarded unchanged, got %q", runtime.prepareInputs[0].Text)
 	}
 }
 
@@ -3059,24 +3119,6 @@ func TestUpdateLocalAndWorkspaceCommandResultBranches(t *testing.T) {
 	if app.state.StatusText != "ok" {
 		t.Fatalf("expected local command success notice")
 	}
-
-	model, _ = app.Update(workspaceCommandResultMsg{Command: "", Err: errors.New("workspace failed")})
-	app = model.(App)
-	if app.state.StatusText != "workspace failed" {
-		t.Fatalf("expected workspace empty command error status")
-	}
-
-	model, _ = app.Update(workspaceCommandResultMsg{Command: "git status", Err: errors.New("boom")})
-	app = model.(App)
-	if !strings.Contains(app.state.StatusText, "Command failed") {
-		t.Fatalf("expected workspace command failed status")
-	}
-
-	model, _ = app.Update(workspaceCommandResultMsg{Command: "git status", Output: "clean"})
-	app = model.(App)
-	if app.state.StatusText != statusCommandDone {
-		t.Fatalf("expected workspace success status, got %q", app.state.StatusText)
-	}
 }
 
 func TestUpdateLocalCommandProviderChangedRefreshErrors(t *testing.T) {
@@ -3193,26 +3235,6 @@ func TestUpdateInputPanelSlashAndWorkspaceBranches(t *testing.T) {
 		t.Fatalf("expected /provider add to open provider add form")
 	}
 
-	app.providerAddForm = nil
-	app.state.ActivePicker = pickerNone
-	app.input.SetValue("& echo hi")
-	app.state.InputText = "& echo hi"
-	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	app = model.(App)
-	if app.state.StatusText != statusRunningCommand {
-		t.Fatalf("expected workspace command running status, got %q", app.state.StatusText)
-	}
-	if cmd == nil {
-		t.Fatalf("expected workspace command to return async cmd")
-	}
-
-	app.input.SetValue("&")
-	app.state.InputText = "&"
-	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	app = model.(App)
-	if strings.TrimSpace(app.state.ExecutionError) == "" {
-		t.Fatalf("expected invalid workspace command error")
-	}
 }
 
 func TestNewWithMemoAndNewAppErrorBranches(t *testing.T) {
@@ -3775,6 +3797,38 @@ func TestSetTranscriptContentNormalizesTabStops(t *testing.T) {
 	}
 }
 
+func TestStartupScreenUnlocksAfterSend(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.startupScreenLocked = true
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.startupScreenLocked {
+		t.Fatalf("expected startup screen to unlock after sending first message")
+	}
+}
+
+func TestSetActiveSessionIDTogglesStartupScreenLock(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	app.setActiveSessionID("session-1")
+	if app.startupScreenLocked {
+		t.Fatalf("expected switching to session to unlock startup screen")
+	}
+
+	app.startupScreenLocked = false
+	app.setActiveSessionID("")
+	if app.startupScreenLocked {
+		t.Fatalf("expected returning to draft to keep startup unlocked")
+	}
+}
+
 func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
@@ -3887,6 +3941,9 @@ func TestFooterErrorToastSyncBranches(t *testing.T) {
 	if !app.footerErrorUntil.Equal(base.Add(footerErrorFlashDuration)) {
 		t.Fatalf("unexpected footer toast expiration: %v", app.footerErrorUntil)
 	}
+	if app.deferredFooterTick == nil {
+		t.Fatalf("expected footer toast to schedule tick command")
+	}
 
 	app.state.ExecutionError = "Runtime failed"
 	app.syncFooterErrorToast()
@@ -3906,6 +3963,26 @@ func TestFooterErrorToastSyncBranches(t *testing.T) {
 	app.syncFooterErrorToast()
 	if app.footerErrorLast != "" {
 		t.Fatalf("expected empty execution error to clear footerErrorLast")
+	}
+}
+
+func TestDeferredFooterTickDispatchedOnce(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.showFooterError("permission denied")
+	if app.deferredFooterTick == nil {
+		t.Fatal("expected deferred footer tick to be prepared")
+	}
+
+	model, cmd := app.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	app = model.(App)
+	if app.deferredFooterTick != nil {
+		t.Fatal("expected deferred footer tick to be cleared after dispatch")
+	}
+	if cmd == nil {
+		t.Fatal("expected update to include deferred footer tick command")
+	}
+	if _, ok := cmd().(tickMsg); !ok {
+		t.Fatalf("expected tick command, got %T", cmd())
 	}
 }
 
@@ -4199,6 +4276,11 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	app.width = 100
 	app.height = 24
 	app.applyComponentLayout(true)
+	app.startupScreenLocked = false
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("existing message")}},
+	}
+	app.rebuildTranscript()
 
 	app.focus = panelTranscript
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -4211,6 +4293,15 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	app = model.(App)
 	if len(runtime.listSessions) != 0 && strings.TrimSpace(app.state.ActiveSessionID) == "" {
 		t.Fatalf("expected Ctrl+N to create or activate draft session")
+	}
+	if app.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to keep startup unlocked")
+	}
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected Ctrl+N to clear transcript messages")
+	}
+	if view := app.renderWaterfall(100, 24); strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected main view after Ctrl+N, got startup content %q", view)
 	}
 
 	app.focus = panelTodo

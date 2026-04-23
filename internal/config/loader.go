@@ -173,9 +173,13 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 }
 
 func defaultBaseDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return dirName
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	if !filepath.IsAbs(home) {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil || !filepath.IsAbs(strings.TrimSpace(home)) {
+			return dirName
+		}
 	}
 	return filepath.Join(home, dirName)
 }
@@ -207,6 +211,9 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&file); err != nil {
+		if strings.Contains(err.Error(), "max_index_lines") {
+			return nil, fmt.Errorf("config: memo.max_index_lines has been removed, migrate to memo.max_entries: %w", err)
+		}
 		return nil, err
 	}
 	cfg := &Config{

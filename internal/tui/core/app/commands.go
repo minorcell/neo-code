@@ -86,8 +86,6 @@ const (
 	statusDraft                = "New draft"
 	statusRunning              = "Running"
 	statusApplyingCommand      = "Applying local command"
-	statusRunningCommand       = "Running command"
-	statusCommandDone          = "Command finished"
 	statusCompacting           = "Compacting context"
 	statusChooseProvider       = "Choose a provider"
 	statusChooseModel          = "Choose a model"
@@ -109,8 +107,8 @@ const (
 
 	maxActivityEntries = 64
 
-	messageTagUser  = "[ YOU ]"
-	messageTagAgent = "[ NEO ]"
+	messageTagUser  = "◇ YOU"
+	messageTagAgent = "◆ NEO"
 	messageTagTool  = "[ TOOL ]"
 
 	roleUser      = "user"
@@ -145,7 +143,7 @@ var builtinSlashCommands = []slashCommand{
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
-	delegate := list.NewDefaultDelegate()
+	delegate := newPickerSelectionDelegate()
 	picker := list.New(items, delegate, 0, 0)
 	picker.Title = ""
 	picker.SetShowHelp(false)
