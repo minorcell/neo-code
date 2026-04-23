@@ -6,7 +6,7 @@ hero:
   text: 在终端里运行的 AI 编码助手
   tagline: 安装即用，无需云端，代码留在本地。
   image:
-    src: /brand/neocode-mark.svg
+    src: /brand/neocode-mark.png
     alt: NeoCode
   actions:
     - theme: brand

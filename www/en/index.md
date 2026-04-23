@@ -6,7 +6,7 @@ hero:
   text: An AI coding agent that runs in your terminal
   tagline: Install and run locally. No cloud relay. Your code stays on your machine.
   image:
-    src: /brand/neocode-mark.svg
+    src: /brand/neocode-mark.png
     alt: NeoCode
   actions:
     - theme: brand

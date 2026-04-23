@@ -2,6 +2,8 @@ import { defineConfig } from "vitepress";
 
 const repoUrl = "https://github.com/1024XEngineer/neo-code";
 const docsBase = `${repoUrl}/blob/main/docs`;
+const siteUrl = "https://1024xengineer.github.io/neo-code/";
+const brandImageUrl = `${siteUrl}brand/neocode-mark.png`;
 
 export default defineConfig({
   title: "NeoCode",
@@ -11,7 +13,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   head: [
-    ["meta", { name: "theme-color", content: "#0f766e" }],
+    ["meta", { name: "theme-color", content: "#090B1A" }],
     ["meta", { property: "og:title", content: "NeoCode 用户指南" }],
     [
       "meta",
@@ -22,7 +24,15 @@ export default defineConfig({
       },
     ],
     ["meta", { property: "og:type", content: "website" }],
-    ["link", { rel: "icon", href: "/neo-code/brand/neocode-mark.svg" }],
+    [
+      "meta",
+      {
+        property: "og:image",
+        content: brandImageUrl,
+      },
+    ],
+    ["meta", { name: "twitter:card", content: "summary" }],
+    ["link", { rel: "icon", href: "/neo-code/brand/neocode-mark.png" }],
   ],
   markdown: {
     config(md) {
@@ -30,7 +40,7 @@ export default defineConfig({
     },
   },
   themeConfig: {
-    logo: "/brand/neocode-mark.svg",
+    logo: "/brand/neocode-mark.png",
     siteTitle: "NeoCode",
     search: {
       provider: "local",
@@ -177,7 +187,7 @@ export default defineConfig({
     },
   },
   sitemap: {
-    hostname: "https://1024xengineer.github.io/neo-code/",
+    hostname: siteUrl,
   },
   vite: {
     define: {
