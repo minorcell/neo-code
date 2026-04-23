@@ -1421,6 +1421,28 @@ func TestUpdateSendWithImageAttachmentsUsesPreparePipeline(t *testing.T) {
 	}
 }
 
+func TestUpdateSendAmpersandInputAsPlainText(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.input.SetValue("& git status")
+	app.state.InputText = "& git status"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected ampersand-prefixed text to enter normal send flow")
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if runtime.prepareInputs[0].Text != "& git status" {
+		t.Fatalf("expected ampersand text to be forwarded unchanged, got %q", runtime.prepareInputs[0].Text)
+	}
+}
+
 func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
 	app, runtime := newTestApp(t)
 	root := t.TempDir()

@@ -174,15 +174,12 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 
 func defaultBaseDir() string {
 	home := strings.TrimSpace(os.Getenv("HOME"))
-	if home == "" {
+	if !filepath.IsAbs(home) {
 		var err error
 		home, err = os.UserHomeDir()
-		if err != nil {
+		if err != nil || !filepath.IsAbs(strings.TrimSpace(home)) {
 			return dirName
 		}
-	}
-	if home == "" {
-		return dirName
 	}
 	return filepath.Join(home, dirName)
 }

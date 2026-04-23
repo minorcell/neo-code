@@ -142,3 +142,72 @@ func TestResolvePathForContainmentRejectsPermissionFallbackWhenSymlinkPresent(t 
 		t.Fatalf("expected permission fallback rejection for symlink path, got %v", err)
 	}
 }
+
+func TestResolvePathForContainmentFallsBackOnParentPermissionWithoutSymlink(t *testing.T) {
+	baseDir := t.TempDir()
+	target := filepath.Join(baseDir, "child", "inside.txt")
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		t.Fatalf("Abs(target) error = %v", err)
+	}
+	parent := filepath.Dir(absTarget)
+
+	original := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		switch path {
+		case absTarget:
+			return "", os.ErrNotExist
+		case parent:
+			return "", os.ErrPermission
+		default:
+			return filepath.Clean(path), nil
+		}
+	}
+	defer func() {
+		evalSymlinks = original
+	}()
+
+	resolved, err := resolvePathForContainment(target)
+	if err != nil {
+		t.Fatalf("resolvePathForContainment() error = %v", err)
+	}
+	if resolved != absTarget {
+		t.Fatalf("expected fallback absolute path %q, got %q", absTarget, resolved)
+	}
+}
+
+func TestResolvePathForContainmentRejectsParentPermissionFallbackWithSymlink(t *testing.T) {
+	baseDir := t.TempDir()
+	outsideDir := t.TempDir()
+	linkPath := filepath.Join(baseDir, "link")
+	if err := os.Symlink(outsideDir, linkPath); err != nil {
+		t.Skipf("symlink not supported in current environment: %v", err)
+	}
+
+	target := filepath.Join(linkPath, "inside.txt")
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		t.Fatalf("Abs(target) error = %v", err)
+	}
+	parent := filepath.Dir(absTarget)
+
+	original := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		switch path {
+		case absTarget:
+			return "", os.ErrNotExist
+		case parent:
+			return "", os.ErrPermission
+		default:
+			return filepath.Clean(path), nil
+		}
+	}
+	defer func() {
+		evalSymlinks = original
+	}()
+
+	_, err = resolvePathForContainment(target)
+	if err == nil || !strings.Contains(err.Error(), "eval parent symlinks") {
+		t.Fatalf("expected parent permission fallback rejection for symlink path, got %v", err)
+	}
+}
