@@ -235,27 +235,23 @@ body {
   text-underline-offset: 0.14em;
 }
 
-.VPDoc div[class*='language-'],
-.vp-code-group {
+:is(.VPDoc div[class*='language-'], .vp-code-group) {
   border: 1px solid rgba(253, 165, 128, 0.16);
   box-shadow: 0 16px 36px rgba(9, 11, 26, 0.1);
 }
 
-.VPDoc div[class*='language-'] .vp-copy-code-button,
-.vp-code-group .vp-copy-code-button {
+:is(.VPDoc div[class*='language-'], .vp-code-group) .vp-copy-code-button {
   border: none;
   border-radius: 999px;
   background-color: rgba(253, 165, 128, 0.9);
 }
 
-.dark .VPDoc div[class*='language-'],
-.dark .vp-code-group {
+.dark :is(.VPDoc div[class*='language-'], .vp-code-group) {
   border-color: rgba(253, 165, 128, 0.16);
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.28);
 }
 
-.dark .VPDoc div[class*='language-'] .vp-copy-code-button,
-.dark .vp-code-group .vp-copy-code-button {
+.dark :is(.VPDoc div[class*='language-'], .vp-code-group) .vp-copy-code-button {
   background-color: rgba(253, 165, 128, 0.24);
 }
 
@@ -321,13 +317,11 @@ body {
 }
 
 .quickstart-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
 }
 
-.info-grid > *,
-.doc-grid > *,
-.quickstart-grid > * {
+:is(.info-grid, .doc-grid, .quickstart-grid) > * {
   min-width: 0;
 }
 
@@ -342,8 +336,7 @@ body {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 16px 38px rgba(0, 0, 0, 0.2);
 }
 
-.info-card h3,
-.quickstart-card h3 {
+:is(.info-card, .quickstart-card) h3 {
   margin-top: 0;
   margin-bottom: 10px;
   color: #fff4ea;
@@ -402,9 +395,7 @@ body {
   font-size: 17px;
 }
 
-.doc-card code,
-.quickstart-card code,
-.info-card code {
+:is(.doc-card, .quickstart-card, .info-card) code {
   color: #ffd0ba;
   background: rgba(253, 165, 128, 0.12);
 }
@@ -503,7 +494,6 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .quickstart-grid .quickstart-card:last-child,
   .doc-grid .doc-card:last-child {
     grid-column: 1 / -1;
   }
@@ -529,7 +519,6 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .quickstart-grid .quickstart-card:last-child,
   .doc-grid .doc-card:last-child {
     grid-column: auto;
   }
