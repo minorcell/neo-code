@@ -70,6 +70,35 @@ bash ./scripts/install.sh --flavor gateway --dry-run
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
+Gateway 转发与自动拉起说明：
+
+- `neocode` 默认通过本地 Gateway（优先 IPC）转发 runtime 请求与事件流
+- 启动时会先探测本地网关；若未运行会自动后台拉起并等待就绪（无感）
+- 若自动拉起后仍不可达或握手失败，会直接报错退出（Fail Fast）
+
+### 常用命令
+
+- `/help`：查看命令帮助
+- `/provider`：打开 provider 选择器
+- `/model`：打开 model 选择器
+- `/compact`：压缩当前会话上下文
+- `/status`：查看当前会话与运行状态
+- `/cwd [path]`：查看或设置当前会话工作区
+- `/memo`：查看记忆索引
+- `/remember <text>`：保存记忆
+- `/forget <keyword>`：按关键词删除记忆
+- `/skills`：查看当前可用 skills（含当前会话激活标记）
+- `/skill use <id>`：在当前会话启用 skill
+- `/skill off <id>`：在当前会话停用 skill
+- `/skill active`：查看当前会话已激活 skills
+
+示例输入：
+
+```text
+请先阅读当前项目目录结构并给出模块职责摘要
+帮我在 internal/runtime 下定位与 tool result 回灌相关逻辑
+```
+
 可选 flavor 与 dry-run：
 
 ```powershell
@@ -99,7 +128,43 @@ irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/instal
 - [Gateway 错误字典](docs/gateway-error-catalog.md)
 - [Gateway 兼容性策略](docs/gateway-compatibility.md)
 - [配置指南](docs/guides/configuration.md)
+- [扩展 Provider](docs/guides/adding-providers.md)
+- [Runtime/Provider 事件流](docs/runtime-provider-event-flow.md)
+- [Session 持久化设计](docs/session-persistence-design.md)
+- [Context Compact 说明](docs/context-compact.md)
+- [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
+- [Skills 设计与使用](docs/skills-system-design.md)
+- [MCP 配置指南](docs/guides/mcp-configuration.md)
 - [更新指南](docs/guides/update.md)
+
+## 如何参与
+
+欢迎通过 Issue 和 PR 参与共建。
+
+1. 在 [Issues](https://github.com/1024XEngineer/neo-code/issues) 先沟通问题或需求。
+2. Fork 仓库并创建功能分支。
+3. 完成开发并确保改动聚焦、边界清晰。
+4. 本地自检：
+   ```bash
+   make docs-gateway-check
+   gofmt -w ./cmd ./internal
+   go test ./...
+   go build ./...
+   ```
+5. 提交 PR 到主仓库并说明变更目的、影响范围和验证方式。
+
+提交前请确认：
+
+- 不提交明文密钥、个人配置或会话数据
+- 不提交无关改动与临时文件
+
+## 在仓库内直接创建 Issue（Skills + 自动化）
+
+仓库提供三类同前缀 skill（位于 `.agents/skills/`）：
+
+- `issue-rfc-proposal`（提案类，RFC 风格）
+- `issue-rfc-architecture`（架构类，RFC 风格）
+- `issue-rfc-implementation`（实现类，执行单风格）
 
 ## 开发与验证
 
