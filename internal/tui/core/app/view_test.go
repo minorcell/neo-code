@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
+	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	tuistate "neo-code/internal/tui/state"
@@ -98,6 +99,18 @@ func TestRenderPickerProviderAndFileMode(t *testing.T) {
 	providerAddView := app.renderPicker(48, 14)
 	if !strings.Contains(providerAddView, providerAddTitle) {
 		t.Fatalf("expected provider add title")
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "test-token",
+	}
+	app.state.ActivePicker = pickerModelScope
+	modelScopeView := app.renderPicker(48, 14)
+	if !strings.Contains(modelScopeView, modelScopeGuideTitle) {
+		t.Fatalf("expected modelscope guide title")
 	}
 }
 

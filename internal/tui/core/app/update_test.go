@@ -3049,6 +3049,176 @@ func TestUpdatePickerProviderAndModelEnter(t *testing.T) {
 	}
 }
 
+func TestUpdatePickerProviderEnterStartsModelScopeGuide(t *testing.T) {
+	app, _ := newTestApp(t)
+	t.Setenv(config.ModelScopeDefaultAPIKeyEnv, "")
+
+	prevLookup := lookupProviderUserEnvVar
+	lookupProviderUserEnvVar = func(key string) (string, bool, error) {
+		return "", false, nil
+	}
+	t.Cleanup(func() {
+		lookupProviderUserEnvVar = prevLookup
+	})
+
+	var openedTarget string
+	prevOpen := openExternalResource
+	openExternalResource = func(target string) error {
+		openedTarget = target
+		return nil
+	}
+	t.Cleanup(func() {
+		openExternalResource = prevOpen
+	})
+
+	app.providerPicker.SetItems([]list.Item{
+		selectionItem{id: config.ModelScopeName, name: config.ModelScopeName, description: "modelscope"},
+	})
+	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, config.ModelScopeName)
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected modelscope guide open command")
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerModelScope {
+		t.Fatalf("expected modelscope guide picker, got %v", app.state.ActivePicker)
+	}
+	if app.modelScopeGuide == nil {
+		t.Fatalf("expected modelscope guide state initialized")
+	}
+
+	openMsg, ok := cmd().(modelScopeGuideOpenResultMsg)
+	if !ok {
+		t.Fatalf("expected modelscope open result msg, got %T", cmd())
+	}
+	if openMsg.Error != "" {
+		t.Fatalf("expected open success, got error %q", openMsg.Error)
+	}
+	if openedTarget != modelScopeLoginURL {
+		t.Fatalf("expected fallback login url %q, got %q", modelScopeLoginURL, openedTarget)
+	}
+}
+
+func TestUpdatePickerProviderEnterSkipsModelScopeGuideWhenTokenExists(t *testing.T) {
+	app, _ := newTestApp(t)
+	t.Setenv(config.ModelScopeDefaultAPIKeyEnv, "exists-token")
+
+	app.providerPicker.SetItems([]list.Item{
+		selectionItem{id: config.ModelScopeName, name: config.ModelScopeName, description: "modelscope"},
+	})
+	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, config.ModelScopeName)
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected provider selection command")
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close")
+	}
+	if app.modelScopeGuide != nil {
+		t.Fatalf("expected modelscope guide not to start when token exists")
+	}
+}
+
+func TestHandleModelScopeGuideInputSubmitSuccess(t *testing.T) {
+	app, _ := newTestAppWithProviderService(t, stubProviderService{
+		models: []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+	})
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  "MODELSCOPE_TEST_TOKEN",
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "token-value",
+	}
+	app.state.ActivePicker = pickerModelScope
+
+	prevPersist := persistProviderUserEnvVar
+	persistProviderUserEnvVar = func(key string, value string) error { return nil }
+	t.Cleanup(func() {
+		persistProviderUserEnvVar = prevPersist
+	})
+
+	model, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected token submit command")
+	}
+	appPtr, ok := model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *appPtr
+	if !app.modelScopeGuide.Submitting {
+		t.Fatalf("expected guide submitting state")
+	}
+
+	msg, ok := cmd().(modelScopeGuideSubmitResultMsg)
+	if !ok {
+		t.Fatalf("expected submit result msg, got %T", cmd())
+	}
+	if msg.Error != "" {
+		t.Fatalf("expected submit success, got error %q", msg.Error)
+	}
+
+	nextCmd := app.handleModelScopeGuideSubmitResultMsg(msg)
+	if app.modelScopeGuide != nil {
+		t.Fatalf("expected guide to close after success")
+	}
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker none after success")
+	}
+	if !strings.EqualFold(app.state.CurrentProvider, config.ModelScopeName) {
+		t.Fatalf("expected current provider modelscope, got %q", app.state.CurrentProvider)
+	}
+	if nextCmd == nil {
+		t.Fatalf("expected model catalog refresh command")
+	}
+}
+
+func TestHandleModelScopeGuideSubmitResultMsgAuthFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  "MODELSCOPE_TEST_TOKEN",
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "bad-token",
+	}
+	app.state.ActivePicker = pickerModelScope
+
+	var openedTarget string
+	prevOpen := openExternalResource
+	openExternalResource = func(target string) error {
+		openedTarget = target
+		return nil
+	}
+	t.Cleanup(func() {
+		openExternalResource = prevOpen
+	})
+
+	cmd := app.handleModelScopeGuideSubmitResultMsg(modelScopeGuideSubmitResultMsg{
+		Error: "verify token: request failed with 401 unauthorized",
+	})
+	if cmd == nil {
+		t.Fatalf("expected fallback auth open command")
+	}
+	if app.modelScopeGuide == nil {
+		t.Fatalf("expected guide to stay open on error")
+	}
+	if app.modelScopeGuide.Step != modelScopeGuideStepToken {
+		t.Fatalf("expected guide step rollback to token page, got %v", app.modelScopeGuide.Step)
+	}
+
+	openMsg, ok := cmd().(modelScopeGuideOpenResultMsg)
+	if !ok {
+		t.Fatalf("expected open result msg, got %T", cmd())
+	}
+	if openMsg.Error != "" {
+		t.Fatalf("expected auth page open success, got %q", openMsg.Error)
+	}
+	if openedTarget != modelScopeAuthURL {
+		t.Fatalf("expected auth url %q, got %q", modelScopeAuthURL, openedTarget)
+	}
+}
+
 func TestUpdatePickerRoutesToProviderAddFormHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
