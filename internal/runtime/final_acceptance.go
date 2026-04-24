@@ -6,7 +6,6 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
-	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
 	agentsession "neo-code/internal/session"
 )
@@ -27,13 +26,8 @@ func (s *Service) beforeAcceptFinal(
 
 	verificationCfg := snapshot.Config.Runtime.Verification.Clone()
 	if !verificationCfg.FinalInterceptValue() {
-		return acceptance.AcceptanceDecision{
-			Status:             acceptance.AcceptanceAccepted,
-			StopReason:         controlplane.StopReasonCompatibilityFallback,
-			UserVisibleSummary: "已通过兼容路径接受 final（final_intercept 关闭）。",
-			InternalSummary:    "verification final intercept disabled, compatibility fallback accepted",
-			HasProgress:        true,
-		}, nil
+		// final_intercept 关闭时仅绕过 verifier，不得绕过 completion gate。
+		verificationCfg.Enabled = boolPtrRuntime(false)
 	}
 
 	policy := acceptance.DefaultPolicy{
@@ -44,6 +38,15 @@ func (s *Service) beforeAcceptFinal(
 	maxNoProgress := verificationCfg.MaxNoProgress
 	if maxNoProgress <= 0 {
 		maxNoProgress = 3
+	}
+	maxTurnsLimit := state.maxTurnsLimit
+	maxTurnsReached := state.maxTurnsReached
+	if !maxTurnsReached {
+		resolvedMaxTurns := resolveRuntimeMaxTurns(snapshot.Config.Runtime)
+		if resolvedMaxTurns > 0 && state.turn+1 >= resolvedMaxTurns {
+			maxTurnsReached = true
+			maxTurnsLimit = resolvedMaxTurns
+		}
 	}
 	input := acceptance.FinalAcceptanceInput{
 		CompletionGate: acceptance.CompletionGateDecision{
@@ -62,7 +65,7 @@ func (s *Service) beforeAcceptFinal(
 			RuntimeState: verify.RuntimeStateSnapshot{
 				Turn:                 state.turn,
 				MaxTurns:             resolveRuntimeMaxTurns(snapshot.Config.Runtime),
-				MaxTurnsReached:      state.maxTurnsReached,
+				MaxTurnsReached:      maxTurnsReached,
 				FinalInterceptStreak: state.finalInterceptStreak,
 			},
 			Metadata: map[string]any{
@@ -71,8 +74,8 @@ func (s *Service) beforeAcceptFinal(
 			VerificationConfig: verificationCfg,
 		},
 		NoProgressExceeded: state.finalInterceptStreak >= maxNoProgress,
-		MaxTurnsReached:    state.maxTurnsReached,
-		MaxTurnsLimit:      state.maxTurnsLimit,
+		MaxTurnsReached:    maxTurnsReached,
+		MaxTurnsLimit:      maxTurnsLimit,
 	}
 
 	return engine.EvaluateFinal(ctx, input)
@@ -151,21 +154,39 @@ func inferTaskType(state *runState) string {
 		state.taskID + " " + state.session.TaskState.Goal + " " + state.session.TaskState.NextStep,
 	))
 	switch {
-	case strings.Contains(corpus, "fix bug"), strings.Contains(corpus, "bugfix"):
+	case containsAny(corpus,
+		"fix bug", "bugfix", "修 bug", "修bug", "修复", "排查", "故障", "报错",
+	):
 		return "fix_bug"
-	case strings.Contains(corpus, "refactor"):
+	case containsAny(corpus, "refactor", "重构", "代码整理", "结构优化"):
 		return "refactor"
-	case strings.Contains(corpus, "edit code"), strings.Contains(corpus, "modify code"), strings.Contains(corpus, "patch"):
+	case containsAny(corpus, "edit code", "modify code", "patch", "修改代码", "改代码", "代码调整", "打补丁"):
 		return "edit_code"
-	case strings.Contains(corpus, "create file"), strings.Contains(corpus, "scaffold"):
+	case containsAny(corpus, "create file", "scaffold", "创建文件", "新建文件", "新增文件", "脚手架"):
 		return "create_file"
-	case strings.Contains(corpus, "docs"), strings.Contains(corpus, "documentation"):
+	case containsAny(corpus, "docs", "documentation", "文档", "readme", "说明文档"):
 		return "docs"
-	case strings.Contains(corpus, "config"), strings.Contains(corpus, "yaml"), strings.Contains(corpus, "json"):
+	case containsAny(corpus, "config", "yaml", "json", "toml", "配置", "yml", "环境变量"):
 		return "config"
 	default:
 		return "unknown"
 	}
+}
+
+// containsAny 判断语料中是否包含任一关键字。
+func containsAny(corpus string, keywords ...string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(corpus, strings.TrimSpace(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+// boolPtrRuntime 返回 bool 指针，便于在运行期快速构造配置快照字段。
+func boolPtrRuntime(value bool) *bool {
+	v := value
+	return &v
 }
 
 // applyAcceptanceResultProgress 根据 acceptance 输出更新 final 拦截熔断计数器。

@@ -140,6 +140,13 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompatibilityFallback},
+	})
+	if app.state.ExecutionError != "" || app.state.StatusText != "Completed via compatibility fallback" {
+		t.Fatalf("expected compatibility fallback to be non-error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	}
+
+	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("STOP_UNKNOWN")},
 	})
 	if !strings.Contains(app.state.ExecutionError, "unknown stop reason") {
@@ -170,6 +177,24 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillMissing]; !ok {
 		t.Fatalf("expected skill_missing handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStarted]; !ok {
+		t.Fatalf("expected verification_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStageFinished]; !ok {
+		t.Fatalf("expected verification_stage_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFinished]; !ok {
+		t.Fatalf("expected verification_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationCompleted]; !ok {
+		t.Fatalf("expected verification_completed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFailed]; !ok {
+		t.Fatalf("expected verification_failed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventAcceptanceDecided]; !ok {
+		t.Fatalf("expected acceptance_decided handler to be registered")
 	}
 }
 

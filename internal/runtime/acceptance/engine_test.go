@@ -164,6 +164,61 @@ func TestEngineEvaluateFinalCompletionGateAndRetry(t *testing.T) {
 	})
 }
 
+func TestEngineEvaluateFinalHookFailurePolicy(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(staticPolicy{
+		verifiers: []verify.FinalVerifier{
+			staticVerifier{name: "todo", result: verify.VerificationResult{Name: "todo", Status: verify.VerificationPass}},
+		},
+	})
+
+	t.Run("fail_closed returns failed decision", func(t *testing.T) {
+		t.Parallel()
+		cfg := verifyEnabledConfig()
+		cfg.Hooks.BeforeCompletionDecision.Enabled = true
+		cfg.Hooks.BeforeCompletionDecision.FailurePolicy = "fail_closed"
+		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate: CompletionGateDecision{Passed: true},
+			VerificationInput: verify.FinalVerifyInput{
+				VerificationConfig: cfg,
+			},
+			MaxTurnsReached: true,
+			MaxTurnsLimit:   0,
+		})
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceFailed {
+			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
+		}
+		if decision.StopReason != controlplane.StopReasonVerificationExecutionError {
+			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonVerificationExecutionError)
+		}
+	})
+
+	t.Run("fail_open ignores hook error", func(t *testing.T) {
+		t.Parallel()
+		cfg := verifyEnabledConfig()
+		cfg.Hooks.BeforeCompletionDecision.Enabled = true
+		cfg.Hooks.BeforeCompletionDecision.FailurePolicy = "fail_open"
+		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate: CompletionGateDecision{Passed: true},
+			VerificationInput: verify.FinalVerifyInput{
+				VerificationConfig: cfg,
+			},
+			MaxTurnsReached: true,
+			MaxTurnsLimit:   0,
+		})
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceAccepted {
+			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceAccepted)
+		}
+	})
+}
+
 func verifyEnabledConfig() (cfg config.VerificationConfig) {
 	cfg = config.StaticDefaults().Runtime.Verification
 	cfg.Enabled = boolPtr(true)

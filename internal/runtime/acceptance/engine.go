@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"neo-code/internal/config"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
 )
@@ -34,24 +35,56 @@ func (e *Engine) EvaluateFinal(ctx context.Context, input FinalAcceptanceInput) 
 		}, nil
 	}
 
-	if !input.VerificationInput.VerificationConfig.EnabledValue() {
-		return AcceptanceDecision{
+	verificationCfg := input.VerificationInput.VerificationConfig
+	hookCfg := verificationCfg.Hooks
+	verifierEnabled := verificationCfg.EnabledValue()
+
+	var decision AcceptanceDecision
+	if verifierEnabled {
+		verifiers := e.policy.ResolveVerifiers(input.VerificationInput)
+		if hookDecision, failed := runHookStage(
+			ctx,
+			hookCfg.BeforeVerification,
+			hookStageBeforeVerification,
+			beforeVerificationHooks(len(verifiers)),
+			input,
+		); failed {
+			return hookDecision, nil
+		}
+
+		orch := verify.Orchestrator{Verifiers: verifiers}
+		gateDecision, err := orch.RunFinalVerification(ctx, input.VerificationInput)
+		if err != nil {
+			return AcceptanceDecision{}, err
+		}
+		if hookDecision, failed := runHookStage(
+			ctx,
+			hookCfg.AfterVerification,
+			hookStageAfterVerification,
+			afterVerificationHooks(len(gateDecision.Results)),
+			input,
+		); failed {
+			return hookDecision, nil
+		}
+		decision = aggregateVerificationDecision(gateDecision)
+	} else {
+		decision = AcceptanceDecision{
 			Status:             AcceptanceAccepted,
 			StopReason:         controlplane.StopReasonCompatibilityFallback,
 			UserVisibleSummary: "已通过兼容路径接受 final（验证引擎关闭）。",
 			InternalSummary:    "verification disabled, compatibility fallback accepted",
 			HasProgress:        true,
-		}, nil
+		}
 	}
-
-	verifiers := e.policy.ResolveVerifiers(input.VerificationInput)
-	orch := verify.Orchestrator{Verifiers: verifiers}
-	gateDecision, err := orch.RunFinalVerification(ctx, input.VerificationInput)
-	if err != nil {
-		return AcceptanceDecision{}, err
+	if hookDecision, failed := runHookStage(
+		ctx,
+		hookCfg.BeforeCompletionDecision,
+		hookStageBeforeCompletionDecision,
+		beforeCompletionDecisionHooks(),
+		input,
+	); failed {
+		return hookDecision, nil
 	}
-
-	decision := aggregateVerificationDecision(gateDecision)
 	if input.NoProgressExceeded && decision.Status == AcceptanceContinue {
 		decision.Status = AcceptanceIncomplete
 		decision.StopReason = controlplane.StopReasonNoProgressAfterFinalIntercept
@@ -78,6 +111,31 @@ func (e *Engine) EvaluateFinal(ctx context.Context, input FinalAcceptanceInput) 
 	}
 
 	return decision, nil
+}
+
+const (
+	hookStageBeforeVerification       = "before_verification"
+	hookStageAfterVerification        = "after_verification"
+	hookStageBeforeCompletionDecision = "before_completion_decision"
+	hookFailurePolicyFailOpen         = "fail_open"
+)
+
+// runHookStage 在指定阶段执行内置 hook，并根据 failure policy 决定是否终止验收。
+func runHookStage(
+	ctx context.Context,
+	spec config.HookSpec,
+	stage string,
+	hooks []prioritizedHook,
+	input FinalAcceptanceInput,
+) (AcceptanceDecision, bool) {
+	err := runConfiguredHooks(ctx, spec, stage, hooks, input)
+	if err == nil {
+		return AcceptanceDecision{}, false
+	}
+	if isFailOpenPolicy(spec.FailurePolicy) {
+		return AcceptanceDecision{}, false
+	}
+	return hookFailureDecision(stage, err), true
 }
 
 // aggregateVerificationDecision 按 fail -> hard_block -> soft_block -> pass 规则聚合结果。
