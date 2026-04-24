@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"neo-code/internal/security"
 )
 
 const (
@@ -95,13 +96,9 @@ func (s *Service) retrieveByPath(ctx context.Context, root string, query Retriev
 	if err := ctx.Err(); err != nil {
 		return RetrievalResult{}, err
 	}
-	_, target, err := resolveWorkspacePath(root, query.Value)
+	target, _, allowed, err := resolveRepositorySnippetFileFromRoot(root, query.Value)
 	if err != nil {
 		return RetrievalResult{}, err
-	}
-	allowed, gateErr := allowRepositorySnippetByPath(target)
-	if gateErr != nil {
-		return RetrievalResult{}, gateErr
 	}
 	if !allowed {
 		return RetrievalResult{}, nil
@@ -133,7 +130,7 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 	effectiveLimit := query.Limit + 1
 	hits := make([]RetrievalHit, 0, effectiveLimit)
 	truncated := false
-	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -157,7 +154,7 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 		if !match {
 			return nil
 		}
-		content, ok := s.readRetrievalText(path, entry)
+		content, ok := s.readRetrievalText(root, path)
 		if !ok {
 			return nil
 		}
@@ -204,14 +201,14 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 	effectiveLimit := query.Limit + 1
 	hits := make([]RetrievalHit, 0, effectiveLimit)
 	truncated := false
-	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if len(hits) >= effectiveLimit {
 			return errRetrievalLimitReached
 		}
-		content, ok := s.readRetrievalText(path, entry)
+		content, ok := s.readRetrievalText(root, path)
 		if !ok {
 			return nil
 		}
@@ -268,7 +265,7 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 	effectiveLimit := query.Limit + 1
 	hits := make([]RetrievalHit, 0, effectiveLimit)
 	truncated := false
-	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -278,7 +275,7 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 		if filepath.Ext(path) != ".go" {
 			return nil
 		}
-		content, ok := s.readRetrievalText(path, entry)
+		content, ok := s.readRetrievalText(root, path)
 		if !ok {
 			return nil
 		}
@@ -379,11 +376,12 @@ func sortRetrievalHits(hits []RetrievalHit) {
 }
 
 // readRetrievalText 读取并过滤检索候选文件，失败时按“无命中”处理。
-func (s *Service) readRetrievalText(path string, entry fs.DirEntry) (string, bool) {
-	if !allowRepositorySnippetByEntry(path, entry) {
+func (s *Service) readRetrievalText(root string, path string) (string, bool) {
+	target, _, allowed, err := resolveRepositorySnippetFileFromRoot(root, path)
+	if err != nil || !allowed {
 		return "", false
 	}
-	content, err := s.readFile(path)
+	content, err := s.readFile(target)
 	if err != nil || isBinaryContent(content) {
 		return "", false
 	}
@@ -419,27 +417,54 @@ func readFile(path string) ([]byte, error) {
 }
 
 // allowRepositorySnippetByPath 基于路径检查文件是否允许进入 repository 片段。
-func allowRepositorySnippetByPath(path string) (bool, error) {
-	info, err := os.Stat(path)
+func resolveRepositorySnippetFile(workdir string, path string) (string, os.FileInfo, bool, error) {
+	root, _, err := security.ResolveWorkspacePath(workdir, ".")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+		return "", nil, false, err
 	}
-	if info.IsDir() {
-		return false, nil
-	}
-	return allowRepositorySnippetByPathAndSize(path, info.Size()), nil
+	return resolveRepositorySnippetFileFromRoot(root, path)
 }
 
-// allowRepositorySnippetByEntry 基于遍历条目检查文件是否允许进入 repository 片段。
-func allowRepositorySnippetByEntry(path string, entry fs.DirEntry) bool {
-	info, err := entry.Info()
-	if err != nil || info.IsDir() {
-		return false
+func resolveRepositorySnippetFileFromRoot(root string, path string) (string, os.FileInfo, bool, error) {
+	target, err := security.ResolveWorkspacePathFromRoot(root, path)
+	if err != nil {
+		return "", nil, false, err
 	}
-	return allowRepositorySnippetByPathAndSize(path, info.Size())
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, false, nil
+		}
+		return "", nil, false, err
+	}
+	resolvedTarget := target
+	if info.Mode()&os.ModeSymlink != 0 {
+		resolvedTarget, err = filepath.EvalSymlinks(target)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", nil, false, nil
+			}
+			return "", nil, false, err
+		}
+		resolvedTarget, err = security.ResolveWorkspacePathFromRoot(root, resolvedTarget)
+		if err != nil {
+			return "", nil, false, err
+		}
+		info, err = os.Stat(resolvedTarget)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", nil, false, nil
+			}
+			return "", nil, false, err
+		}
+	}
+	if info.IsDir() {
+		return "", nil, false, nil
+	}
+	if !allowRepositorySnippetByPathAndSize(resolvedTarget, info.Size()) {
+		return resolvedTarget, info, false, nil
+	}
+	return target, info, true, nil
 }
 
 // allowRepositorySnippetByPathAndSize 基于路径与大小过滤敏感文件和高成本文件。

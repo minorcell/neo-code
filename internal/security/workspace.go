@@ -285,7 +285,6 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 	if trimmedTarget == "" {
 		trimmedTarget = "."
 	}
-	trimmedTarget = filepath.FromSlash(strings.ReplaceAll(trimmedTarget, "\\", "/"))
 	if !filepath.IsAbs(trimmedTarget) {
 		trimmedTarget = filepath.Join(root, trimmedTarget)
 	}

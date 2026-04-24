@@ -221,7 +221,11 @@ func (s *Service) changedFilesFromSnapshot(
 		if includeSnippets {
 			snippet, snippetErr := s.changedFileSnippet(ctx, workdir, entry)
 			if snippetErr != nil {
-				return ChangedFilesContext{}, snippetErr
+				if isContextError(snippetErr) {
+					return ChangedFilesContext{}, snippetErr
+				}
+				files = append(files, file)
+				continue
 			}
 			if snippet.truncated {
 				truncated = true

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,8 +95,6 @@ func TestChangedFileSnippetBranches(t *testing.T) {
 				return gitCommandOutput{text: "@@ -1,1 +1,1 @@\n-func Old(){}\n+func New(){}\n"}, nil
 			case "diff --unified=3 HEAD -- pkg/renamed.go":
 				return gitCommandOutput{text: "@@ -1,1 +1,1 @@\n-old\n+new\n"}, nil
-			case "diff --unified=3 HEAD -- pkg/added.go":
-				return gitCommandOutput{}, nil
 			case "diff --unified=3 HEAD -- pkg/error.go":
 				return gitCommandOutput{}, context.Canceled
 			default:
@@ -117,9 +114,9 @@ func TestChangedFileSnippetBranches(t *testing.T) {
 		{name: "conflicted", entry: gitChangedEntry{Path: "pkg/conflicted.go", Status: StatusConflicted}},
 		{name: "modified", entry: gitChangedEntry{Path: "pkg/modified.go", Status: StatusModified}, wantSnippet: "func New"},
 		{name: "renamed", entry: gitChangedEntry{Path: "pkg/renamed.go", Status: StatusRenamed}, wantSnippet: "+new"},
-		{name: "added fallback to file", entry: gitChangedEntry{Path: "pkg/added.go", Status: StatusAdded}, wantSnippet: "func Added"},
+		{name: "added reads file head", entry: gitChangedEntry{Path: "pkg/added.go", Status: StatusAdded}, wantSnippet: "func Added"},
 		{name: "untracked file head", entry: gitChangedEntry{Path: "pkg/untracked.go", Status: StatusUntracked}, wantSnippet: "func NewFile"},
-		{name: "context error", entry: gitChangedEntry{Path: "pkg/error.go", Status: StatusAdded}, wantErr: context.Canceled},
+		{name: "context error", entry: gitChangedEntry{Path: "pkg/error.go", Status: StatusModified}, wantErr: context.Canceled},
 		{name: "unknown status", entry: gitChangedEntry{Path: "pkg/unknown.go", Status: ChangedFileStatus("other")}},
 	}
 
@@ -139,6 +136,94 @@ func TestChangedFileSnippetBranches(t *testing.T) {
 				t.Fatalf("snippet %q does not contain %q", snippet.text, tt.wantSnippet)
 			}
 		})
+	}
+}
+
+func TestInspectPreservesSummaryWhenSingleSnippetReadFails(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "changed.go"), "package pkg\n")
+	service := &Service{
+		gitRunner: func(ctx context.Context, dir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			switch strings.Join(args, " ") {
+			case "status --porcelain=v1 -z --branch --untracked-files=normal":
+				return gitCommandOutput{text: nulJoin("## main", " M pkg/changed.go")}, nil
+			case "diff --unified=3 HEAD -- pkg/changed.go":
+				return gitCommandOutput{}, errors.New("diff failed")
+			default:
+				return gitCommandOutput{}, nil
+			}
+		},
+		readFile: readFile,
+	}
+
+	result, err := service.Inspect(context.Background(), workdir, InspectOptions{
+		ChangedFilesLimit:          10,
+		IncludeChangedFileSnippets: true,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if !result.Summary.InGitRepo || result.Summary.Branch != "main" {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if len(result.ChangedFiles.Files) != 1 {
+		t.Fatalf("unexpected changed-files context: %+v", result.ChangedFiles)
+	}
+	if result.ChangedFiles.Files[0].Snippet != "" {
+		t.Fatalf("expected failed snippet to be dropped, got %q", result.ChangedFiles.Files[0].Snippet)
+	}
+}
+
+func TestRetrieveUsesResolvedTargetForSnippetGate(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, ".env"), "SECRET=1\n")
+	hugeContent := strings.Repeat("A", maxRepositorySnippetFileBytes+1)
+	mustWriteFile(t, filepath.Join(workdir, "huge.txt"), hugeContent)
+
+	if err := os.Symlink(filepath.Join(workdir, ".env"), filepath.Join(workdir, "safe.txt")); err != nil {
+		t.Skipf("symlink unsupported in test environment: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(workdir, "huge.txt"), filepath.Join(workdir, "safe_link.txt")); err != nil {
+		t.Skipf("symlink unsupported in test environment: %v", err)
+	}
+
+	service := &Service{readFile: readFile}
+
+	pathResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: "safe.txt",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path) error = %v", err)
+	}
+	if len(pathResult.Hits) != 0 {
+		t.Fatalf("expected safe.txt alias to be gated, got %+v", pathResult.Hits)
+	}
+
+	textResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModeText,
+		Value: "SECRET",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(text) error = %v", err)
+	}
+	if len(textResult.Hits) != 0 {
+		t.Fatalf("expected .env alias to be excluded from text retrieval, got %+v", textResult.Hits)
+	}
+
+	largeResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: "safe_link.txt",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path large) error = %v", err)
+	}
+	if len(largeResult.Hits) != 0 {
+		t.Fatalf("expected symlinked large file to be gated, got %+v", largeResult.Hits)
 	}
 }
 
@@ -380,7 +465,7 @@ func TestPathAndRetrievalHelpers(t *testing.T) {
 		}
 
 		visited := make([]string, 0, 2)
-		err := walkWorkspaceFiles(context.Background(), workdir, workdir, func(path string, entry fs.DirEntry) error {
+		err := walkWorkspaceFiles(context.Background(), workdir, workdir, func(path string) error {
 			visited = append(visited, filepath.Base(path))
 			return nil
 		})
@@ -390,7 +475,7 @@ func TestPathAndRetrievalHelpers(t *testing.T) {
 		if slices.Contains(visited, "ignored.txt") {
 			t.Fatalf("expected node_modules file to be skipped, got %v", visited)
 		}
-		err = walkWorkspaceFiles(context.Background(), workdir, filepath.Join(workdir, "missing"), func(path string, entry fs.DirEntry) error {
+		err = walkWorkspaceFiles(context.Background(), workdir, filepath.Join(workdir, "missing"), func(path string) error {
 			return nil
 		})
 		if err == nil {
@@ -546,7 +631,7 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 			gitRunner: func(ctx context.Context, dir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
 				switch strings.Join(args, " ") {
 				case "status --porcelain=v1 -z --branch --untracked-files=normal":
-					return gitCommandOutput{text: nulJoin("## main", "A  pkg/new.go")}, nil
+					return gitCommandOutput{text: nulJoin("## main", " M pkg/new.go")}, nil
 				case "diff --unified=3 HEAD -- pkg/new.go":
 					return gitCommandOutput{}, context.DeadlineExceeded
 				default:
@@ -673,7 +758,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		root := t.TempDir()
 		mustWriteFile(t, filepath.Join(root, "a.txt"), "a")
 		expectedErr := errors.New("stop")
-		err := walkWorkspaceFiles(context.Background(), root, root, func(path string, entry fs.DirEntry) error {
+		err := walkWorkspaceFiles(context.Background(), root, root, func(path string) error {
 			return expectedErr
 		})
 		if !errors.Is(err, expectedErr) {
@@ -687,7 +772,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		}
 		linkPath := filepath.Join(root, "escape.txt")
 		if err := os.Symlink(outsideFile, linkPath); err == nil {
-			err = walkWorkspaceFiles(context.Background(), root, root, func(path string, entry fs.DirEntry) error {
+			err = walkWorkspaceFiles(context.Background(), root, root, func(path string) error {
 				return nil
 			})
 			if err == nil {
@@ -697,7 +782,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err = walkWorkspaceFiles(canceledCtx, root, root, func(path string, entry fs.DirEntry) error {
+		err = walkWorkspaceFiles(canceledCtx, root, root, func(path string) error {
 			return nil
 		})
 		if !errors.Is(err, context.Canceled) {

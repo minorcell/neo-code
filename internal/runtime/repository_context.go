@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -292,13 +291,13 @@ func autoPathRetrievalQuery(workdir string, userText string) (repository.Retriev
 	if strings.TrimSpace(match) == "" {
 		return repository.RetrievalQuery{}, false
 	}
-	normalized := filepath.ToSlash(strings.Trim(match, "`\"'"))
-	if !workspacePathAnchorExists(workdir, normalized) {
+	candidate := strings.Trim(match, "`\"'")
+	if !workspacePathAnchorExists(workdir, candidate) {
 		return repository.RetrievalQuery{}, false
 	}
 	return repository.RetrievalQuery{
 		Mode:         repository.RetrievalModePath,
-		Value:        normalized,
+		Value:        candidate,
 		Limit:        defaultAutoPathRetrievalLimit,
 		ContextLines: defaultAutoRetrievalContextLines,
 	}, true
@@ -308,7 +307,7 @@ func workspacePathAnchorExists(workdir string, path string) bool {
 	if strings.TrimSpace(workdir) == "" || strings.TrimSpace(path) == "" {
 		return false
 	}
-	_, target, err := security.ResolveWorkspacePath(workdir, filepath.ToSlash(path))
+	_, target, err := security.ResolveWorkspacePath(workdir, path)
 	if err != nil {
 		return false
 	}
@@ -331,16 +330,22 @@ func autoSymbolRetrievalQuery(userText string) (repository.RetrievalQuery, bool)
 		return repository.RetrievalQuery{}, false
 	}
 
-	symbol := symbolAnchorPattern.FindString(userText)
-	if strings.TrimSpace(symbol) == "" {
-		return repository.RetrievalQuery{}, false
+	matches := quotedTextPattern.FindAllStringSubmatch(userText, -1)
+	for _, match := range matches {
+		for _, group := range match[1:] {
+			candidate := strings.TrimSpace(group)
+			if candidate == "" || !symbolAnchorPattern.MatchString(candidate) || candidate != symbolAnchorPattern.FindString(candidate) {
+				continue
+			}
+			return repository.RetrievalQuery{
+				Mode:         repository.RetrievalModeSymbol,
+				Value:        candidate,
+				Limit:        defaultAutoSymbolRetrievalLimit,
+				ContextLines: defaultAutoRetrievalContextLines,
+			}, true
+		}
 	}
-	return repository.RetrievalQuery{
-		Mode:         repository.RetrievalModeSymbol,
-		Value:        symbol,
-		Limit:        defaultAutoSymbolRetrievalLimit,
-		ContextLines: defaultAutoRetrievalContextLines,
-	}, true
+	return repository.RetrievalQuery{}, false
 }
 
 // autoTextRetrievalQuery 只对显式包裹的关键字做一次有限文本检索，避免宽泛问题误触发。
@@ -354,7 +359,7 @@ func autoTextRetrievalQuery(userText string) (repository.RetrievalQuery, bool) {
 				break
 			}
 		}
-		if candidate == "" || strings.Contains(candidate, "/") || strings.Contains(candidate, "\\") {
+		if candidate == "" || len([]rune(candidate)) < 3 || strings.Contains(candidate, "/") || strings.Contains(candidate, "\\") {
 			continue
 		}
 		return repository.RetrievalQuery{

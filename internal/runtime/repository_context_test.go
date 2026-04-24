@@ -254,7 +254,7 @@ func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
 				return repository.RetrievalResult{Hits: []repository.RetrievalHit{{Path: "internal/runtime/system_tool.go", Kind: string(query.Mode), LineHint: 8}}}, nil
 			},
 		}
-		state := newRepositoryTestState(t.TempDir(), "ExecuteSystemTool 在哪定义，帮我解释一下")
+		state := newRepositoryTestState(t.TempDir(), "where is `ExecuteSystemTool`")
 		service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 		_, repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)

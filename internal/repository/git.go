@@ -79,13 +79,6 @@ func (s *Service) changedFileSnippet(ctx context.Context, workdir string, entry 
 	case StatusModified, StatusRenamed, StatusCopied:
 		return s.readDiffSnippet(ctx, workdir, entry.Path)
 	case StatusAdded:
-		snippet, err := s.readDiffSnippet(ctx, workdir, entry.Path)
-		if err != nil {
-			return snippetResult{}, err
-		}
-		if snippet.text != "" {
-			return snippet, nil
-		}
 		return s.readFileHeadSnippet(workdir, entry.Path)
 	case StatusUntracked:
 		return s.readFileHeadSnippet(workdir, entry.Path)
@@ -99,11 +92,7 @@ func (s *Service) readDiffSnippet(ctx context.Context, workdir string, path stri
 	if s == nil || s.gitRunner == nil {
 		return snippetResult{}, nil
 	}
-	_, target, err := resolveWorkspacePath(workdir, path)
-	if err != nil {
-		return snippetResult{}, err
-	}
-	allowed, err := allowRepositorySnippetByPath(target)
+	_, _, allowed, err := resolveRepositorySnippetFile(workdir, path)
 	if err != nil {
 		return snippetResult{}, err
 	}
@@ -129,11 +118,7 @@ func (s *Service) readFileHeadSnippet(workdir string, relativePath string) (snip
 	if s == nil || s.readFile == nil {
 		return snippetResult{}, nil
 	}
-	_, target, err := resolveWorkspacePath(workdir, relativePath)
-	if err != nil {
-		return snippetResult{}, err
-	}
-	allowed, err := allowRepositorySnippetByPath(target)
+	target, _, allowed, err := resolveRepositorySnippetFile(workdir, relativePath)
 	if err != nil {
 		return snippetResult{}, err
 	}

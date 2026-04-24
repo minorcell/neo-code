@@ -149,7 +149,7 @@ func walkWorkspaceFiles(
 	ctx context.Context,
 	root string,
 	scope string,
-	visit func(path string, entry fs.DirEntry) error,
+	visit func(path string) error,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -175,7 +175,7 @@ func walkWorkspaceFiles(
 		if resolveErr != nil {
 			return resolveErr
 		}
-		return visit(resolvedPath, entry)
+		return visit(resolvedPath)
 	})
 }
 

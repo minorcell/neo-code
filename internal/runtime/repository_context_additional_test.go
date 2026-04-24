@@ -137,12 +137,18 @@ func TestRepositoryContextHelpers(t *testing.T) {
 	if _, ok := autoSymbolRetrievalQuery("BuildWidget 在吗"); ok {
 		t.Fatalf("expected symbol query to require intent words")
 	}
-	if query, ok := autoSymbolRetrievalQuery("where is BuildWidget"); !ok || query.Value != "BuildWidget" {
+	if _, ok := autoSymbolRetrievalQuery("where is BuildWidget"); ok {
+		t.Fatalf("expected bare capitalized word to not trigger symbol retrieval")
+	}
+	if query, ok := autoSymbolRetrievalQuery("where is `BuildWidget`"); !ok || query.Value != "BuildWidget" {
 		t.Fatalf("autoSymbolRetrievalQuery() = (%+v, %t)", query, ok)
 	}
 
 	if _, ok := autoTextRetrievalQuery("find `internal/runtime/run.go`"); ok {
 		t.Fatalf("expected path-like quoted text to be ignored")
+	}
+	if _, ok := autoTextRetrievalQuery("find `go`"); ok {
+		t.Fatalf("expected short quoted text to be ignored")
 	}
 	if query, ok := autoTextRetrievalQuery("find `permission_requested`"); !ok || query.Value != "permission_requested" {
 		t.Fatalf("autoTextRetrievalQuery() = (%+v, %t)", query, ok)
