@@ -252,6 +252,78 @@ func TestRenderWaterfallKeepsStartupScreenWhileTypingUntilUnlocked(t *testing.T)
 	}
 }
 
+func TestStartupWidthsClampToAvailableSpace(t *testing.T) {
+	widths := []int{24, 32, 48, 64, 96}
+	for _, width := range widths {
+		maxContent := max(1, width-4)
+		if got := startupContentWidth(width); got > maxContent {
+			t.Fatalf("expected startup content width <= %d for viewport %d, got %d", maxContent, width, got)
+		}
+
+		maxPrompt := max(1, width-2)
+		if got := startupPromptWidth(width); got > maxPrompt {
+			t.Fatalf("expected startup prompt width <= %d for viewport %d, got %d", maxPrompt, width, got)
+		}
+	}
+}
+
+func TestRenderStartupScreenFitsNarrowViewport(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	const viewportWidth = 64
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderWaterfall(viewportWidth, 24), "")
+	if !strings.Contains(view, "Quick Actions") {
+		t.Fatalf("expected startup quick actions in narrow viewport")
+	}
+
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > viewportWidth {
+			t.Fatalf("expected line width <= %d, got %d in line %q", viewportWidth, got, line)
+		}
+	}
+}
+
+func TestRenderPromptUsesAvailableWidthOnStartup(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	const viewportWidth = 112
+	prompt := copyCodeANSIPattern.ReplaceAllString(app.renderPrompt(viewportWidth), "")
+	if got := lipgloss.Height(prompt); got > 4 {
+		t.Fatalf("expected startup prompt to stay on one content row, got height %d: %q", got, prompt)
+	}
+	for _, line := range strings.Split(prompt, "\n") {
+		if got := lipgloss.Width(line); got > viewportWidth {
+			t.Fatalf("expected prompt line width <= %d, got %d in line %q", viewportWidth, got, line)
+		}
+	}
+}
+
+func TestRenderStartupScreenQuickActionsHasNoBorderBox(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(100, 20), "")
+	if strings.ContainsRune(view, '\u256d') ||
+		strings.ContainsRune(view, '\u256e') ||
+		strings.ContainsRune(view, '\u2570') ||
+		strings.ContainsRune(view, '\u256f') ||
+		strings.ContainsRune(view, '\u2502') ||
+		strings.ContainsRune(view, '\u2500') {
+		t.Fatalf("expected quick actions section without box border, got %q", view)
+	}
+}
+
 func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 100
@@ -831,7 +903,7 @@ func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
 	app.transcript.SetYOffset(3)
 	if got := app.renderTranscriptScrollbar(2, 5); got == "" {
 		t.Fatalf("expected non-empty scrollbar when transcript is scrollable")
-	} else if !strings.Contains(got, "█") {
+	} else if !strings.ContainsRune(got, '\u2588') {
 		t.Fatalf("expected scrollbar thumb to use solid block glyph, got %q", got)
 	}
 }
