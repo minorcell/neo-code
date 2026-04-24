@@ -13,7 +13,22 @@
 
 ## 快速开始
 
-### 1) 从源码运行
+### 能力概览
+
+- 终端原生 TUI 交互体验（Bubble Tea）
+- Agent 可调用内置工具完成文件与命令相关任务
+- 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`、`modelscope`）
+- 支持上下文压缩（`/compact`），帮助长会话保持可用
+- 支持工作区隔离（`--workdir`、`/cwd`）
+- 会话持久化与恢复，降低重复沟通成本
+- 支持持久记忆查看、显式写入与后台自动提取，保留跨会话偏好与项目事实
+
+### 1) 环境要求
+
+- Go `1.25+`
+- 可用的 API Key（如 OpenAI、Gemini、OpenLL、Qiniu、ModelScope）
+
+### 2) 从源码运行
 
 ```bash
 git clone https://github.com/1024XEngineer/neo-code.git
@@ -21,7 +36,7 @@ cd neo-code
 go run ./cmd/neocode
 ```
 
-### 2) 启动网关（两种等价方式）
+### 3) 启动网关（两种等价方式）
 
 ```bash
 go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
@@ -31,7 +46,7 @@ go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
 go run ./cmd/neocode-gateway --http-listen 127.0.0.1:8080
 ```
 
-### 3) URL 唤醒分发
+### 4) URL 唤醒分发
 
 ```bash
 go run ./cmd/neocode url-dispatch --url "neocode://review?path=README.md"
@@ -58,16 +73,44 @@ bash ./scripts/install.sh --flavor full
 bash ./scripts/install.sh --flavor gateway
 ```
 
-Dry-run（仅输出资产 URL / checksum URL）：
+Dry-run（仅输出资产 URL / checksum URL，不执行下载与安装）：
 
 ```bash
 bash ./scripts/install.sh --flavor gateway --dry-run
+```
+
+Provider API Key 示例（按使用 provider 选择）：
+
+```bash
+export OPENAI_API_KEY="your_key_here"
+export GEMINI_API_KEY="your_key_here"
+export AI_API_KEY="your_key_here"
+export QINIU_API_KEY="your_key_here"
+export MODELSCOPE_API_KEY="your_key_here"
 ```
 
 ### Windows PowerShell
 
 ```powershell
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
+```
+
+可选 flavor 与 dry-run：
+
+```powershell
+.\scripts\install.ps1 -Flavor full
+.\scripts\install.ps1 -Flavor gateway
+.\scripts\install.ps1 -Flavor gateway -DryRun
+```
+
+Provider API Key 示例（按使用 provider 选择）：
+
+```powershell
+$env:OPENAI_API_KEY = "your_key_here"
+$env:GEMINI_API_KEY = "your_key_here"
+$env:AI_API_KEY = "your_key_here"
+$env:QINIU_API_KEY = "your_key_here"
+$env:MODELSCOPE_API_KEY = "your_key_here"
 ```
 
 Gateway 转发与自动拉起说明：
@@ -99,14 +142,6 @@ Gateway 转发与自动拉起说明：
 帮我在 internal/runtime 下定位与 tool result 回灌相关逻辑
 ```
 
-可选 flavor 与 dry-run：
-
-```powershell
-.\scripts\install.ps1 -Flavor full
-.\scripts\install.ps1 -Flavor gateway
-.\scripts\install.ps1 -Flavor gateway -DryRun
-```
-
 ## 部署拓扑建议
 
 1. 本地内嵌（默认）：`neocode` 进程内通过 `gateway` 子命令管理网关。
@@ -120,6 +155,14 @@ Gateway 转发与自动拉起说明：
 2. 再验证 `/rpc` 最小请求（含未鉴权失败路径）。
 3. 如异常，回滚到上一个已验证版本的二进制与配置。
 
+## 内部结构补充
+
+- `internal/context`：负责消费仓库/运行时事实并组装主会话 system prompt、动态上下文注入与消息裁剪。
+- `internal/repository`：负责仓库级事实发现与裁剪，统一提供 repo summary、changed-files context 与 targeted retrieval。
+- `internal/runtime`：负责 ReAct 主循环、tool 调用编排、compact 触发与 reminder 注入时机。
+- `internal/subagent`：负责子代理角色策略、执行约束与输出契约。
+- `internal/promptasset`：负责受版本管理的静态 prompt 模板资产，使用 `go:embed` 编译进程序，供 `context`、`runtime`、`subagent` 读取。
+
 ## 文档索引
 
 - [Gateway 详细设计 RFC](docs/gateway-detailed-design.md)
@@ -132,10 +175,12 @@ Gateway 转发与自动拉起说明：
 - [Runtime/Provider 事件流](docs/runtime-provider-event-flow.md)
 - [Session 持久化设计](docs/session-persistence-design.md)
 - [Context Compact 说明](docs/context-compact.md)
+- [Repository 模块设计](docs/repository-design.md)
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
 - [Skills 设计与使用](docs/skills-system-design.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)
-- [更新指南](docs/guides/update.md)
+- [ModelScope 半引导配置](docs/guides/modelscope-provider-setup.md)
+- [更新指南（更新与升级）](docs/guides/update.md)
 
 ## 如何参与
 
