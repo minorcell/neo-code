@@ -1339,6 +1339,9 @@ func TestShouldSkipSilentUpdateCheck(t *testing.T) {
 	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "update"}) {
 		t.Fatal("update should skip silent update check")
 	}
+	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "version"}) {
+		t.Fatal("version should skip silent update check")
+	}
 	if shouldSkipSilentUpdateCheck(&cobra.Command{Use: "gateway"}) {
 		t.Fatal("gateway should not skip silent update check")
 	}
@@ -1432,6 +1435,34 @@ func TestUpdateCommandSkipsSilentUpdateCheck(t *testing.T) {
 	}
 }
 
+func TestVersionCommandSkipsSilentUpdateCheck(t *testing.T) {
+	originalSilentCheck := runSilentUpdateCheck
+	originalRunner := runVersionCommand
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+	t.Cleanup(func() { runVersionCommand = originalRunner })
+
+	var called bool
+	runSilentUpdateCheck = func(context.Context) {
+		called = true
+	}
+	runVersionCommand = func(context.Context, versionCommandOptions) (versionCommandResult, error) {
+		return versionCommandResult{
+			CurrentVersion: "v1.0.0",
+			LatestVersion:  "v1.0.0",
+			Comparable:     true,
+		}, nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"version"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected silent update check to be skipped for version command")
+	}
+}
+
 func TestSanitizeVersionForTerminal(t *testing.T) {
 	dirty := "\x1b[31mv0.2.1\x1b[0m\t\n\r\x00"
 	if got := sanitizeVersionForTerminal(dirty); got != "v0.2.1" {
@@ -1472,9 +1503,10 @@ func TestDefaultSilentUpdateCheckSetsSanitizedNotice(t *testing.T) {
 	checkLatestRelease = func(context.Context, updater.CheckOptions) (updater.CheckResult, error) {
 		close(done)
 		return updater.CheckResult{
-			CurrentVersion: "v0.1.0",
-			LatestVersion:  "\x1b[31mv0.2.1\x1b[0m\t\n\r",
-			HasUpdate:      true,
+			CurrentVersion:     "v0.1.0",
+			LatestVersion:      "\x1b[31mv9.9.9\x1b[0m\t\n\r",
+			InstallableVersion: "\x1b[31mv0.2.1\x1b[0m\t\n\r",
+			HasUpdate:          true,
 		}, nil
 	}
 

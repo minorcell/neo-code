@@ -142,6 +142,14 @@ Gateway 转发与自动拉起说明：
 帮我在 internal/runtime 下定位与 tool result 回灌相关逻辑
 ```
 
+## 版本与升级命令
+
+- `neocode version`：输出当前版本并检查最新稳定版。
+- `neocode version --prerelease`：检查时包含预发布版本。
+- `neocode update`：执行升级到当前通道的最新版本。
+- `neocode update --prerelease`：执行升级并允许预发布版本。
+- 当远端“语义最新版本”在当前平台不可安装时，`version` 会同时给出“可安装的最高版本”升级提示，并提示远端资产异常状态。
+
 ## 配置入口
 
 - 主配置文件：`~/.neocode/config.yaml`
