@@ -171,3 +171,47 @@ func TestRuntimeAssetsConfigZeroValuesResolveToDefaults(t *testing.T) {
 		)
 	}
 }
+
+func TestRuntimeConfigVerificationDefaultsApplied(t *testing.T) {
+	t.Parallel()
+
+	defaults := defaultRuntimeConfig()
+	cfg := RuntimeConfig{}
+	cfg.ApplyDefaults(defaults)
+	if !cfg.Verification.EnabledValue() {
+		t.Fatalf("expected verification enabled by default")
+	}
+	if !cfg.Verification.FinalInterceptValue() {
+		t.Fatalf("expected verification final intercept enabled by default")
+	}
+	if cfg.Verification.MaxNoProgress <= 0 {
+		t.Fatalf("expected max_no_progress > 0, got %d", cfg.Verification.MaxNoProgress)
+	}
+	if len(cfg.Verification.Verifiers) == 0 {
+		t.Fatal("expected default verifiers to be populated")
+	}
+}
+
+func TestRuntimeConfigVerificationExplicitFalsePreserved(t *testing.T) {
+	t.Parallel()
+
+	defaults := defaultRuntimeConfig()
+	cfg := RuntimeConfig{
+		Verification: VerificationConfig{
+			Enabled:        boolPtrTest(false),
+			FinalIntercept: boolPtrTest(false),
+		},
+	}
+	cfg.ApplyDefaults(defaults)
+	if cfg.Verification.EnabledValue() {
+		t.Fatalf("expected explicit verification.enabled=false to be preserved")
+	}
+	if cfg.Verification.FinalInterceptValue() {
+		t.Fatalf("expected explicit verification.final_intercept=false to be preserved")
+	}
+}
+
+func boolPtrTest(value bool) *bool {
+	v := value
+	return &v
+}

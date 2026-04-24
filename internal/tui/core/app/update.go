@@ -1506,14 +1506,49 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 
 	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
 	switch reason {
+	case "stop_completed":
+		reason = strings.ToLower(string(tuiservices.StopReasonAccepted))
+	case "stop_user_interrupt":
+		reason = strings.ToLower(string(tuiservices.StopReasonUserInterrupt))
+	case "stop_fatal_error":
+		reason = strings.ToLower(string(tuiservices.StopReasonFatalError))
+	case "stop_max_turns_reached":
+		reason = strings.ToLower(string(tuiservices.StopReasonMaxTurnExceeded))
+	case "stop_budget_exceeded":
+		reason = strings.ToLower(string(tuiservices.StopReasonBudgetExceeded))
+	}
+	switch reason {
 	case strings.ToLower(string(tuiservices.StopReasonCompleted)):
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
 			a.state.StatusText = statusReady
 		}
+	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
+		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
+		strings.ToLower(string(tuiservices.StopReasonNoProgressAfterFinalIntercept)),
+		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
+		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Task is incomplete"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = detail
+		a.appendActivity("run", "Run incomplete", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonUserInterrupt)):
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
+	case strings.ToLower(string(tuiservices.StopReasonRetryExhausted)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Verification failed"
+		}
+		a.state.ExecutionError = detail
+		a.state.StatusText = detail
+		a.appendActivity("run", "Verification failed", detail, true)
 	case strings.ToLower(string(tuiservices.StopReasonBudgetExceeded)):
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {
