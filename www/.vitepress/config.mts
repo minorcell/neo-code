@@ -2,10 +2,8 @@ import { defineConfig } from "vitepress";
 
 // --- 环境变量检测逻辑 ---
 const isVercel = process.env.VERCEL === "1";
-// 新增：检测是否为 Cloudflare Pages 构建
 const isCFPages = process.env.CF_PAGES === "1"; 
 
-// 只要是 Vercel 或 Cloudflare，都部署在根目录
 const isRootDeploy = isVercel || isCFPages;
 
 const repoUrl = "https://github.com/1024XEngineer/neo-code";
@@ -14,15 +12,21 @@ const docsBase = `${repoUrl}/blob/main/docs`;
 // 核心修改 1：动态基础路径
 const base = isRootDeploy ? "/" : "/neo-code/";
 
+// 👇👇👇 新增这段调试日志 👇👇👇
+console.log("====== VitePress Build Info ======");
+console.log("VERCEL Env:", process.env.VERCEL);
+console.log("CF_PAGES Env:", process.env.CF_PAGES);
+console.log("Final Base Path:", base);
+console.log("==================================");
+
 // 核心修改 2：动态站点 URL
 let siteUrl = "https://1024xengineer.github.io/neo-code/";
 if (isVercel) {
   siteUrl = `https://${process.env.VERCEL_URL || 'neocode-docs.vercel.app'}/`;
 } else if (isCFPages) {
-  siteUrl = "https://neocode-docs.pages.dev/"; // 这里对应你在 CF 上创建的空壳项目名
+  siteUrl = "https://neocode-docs.pages.dev/"; 
 }
 
-// 核心修改 3：确保图片路径在不同 base 下都能访问
 const brandImageUrl = `${siteUrl}brand/neocode-mark.png`;
 
 export default defineConfig({
