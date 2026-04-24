@@ -3327,6 +3327,439 @@ func TestRunModelScopeGuideSubmitRollsBackSelectionWhenPersistFails(t *testing.T
 	}
 }
 
+func TestMaybeStartModelScopeGuideFromProviderGuardBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if cmd, started := app.maybeStartModelScopeGuideFromProvider("openai"); started || cmd != nil {
+		t.Fatalf("expected non-modelscope provider not to start guide")
+	}
+
+	t.Setenv(config.ModelScopeDefaultAPIKeyEnv, "exists-token")
+	if cmd, started := app.maybeStartModelScopeGuideFromProvider(config.ModelScopeName); started || cmd != nil {
+		t.Fatalf("expected guide not to start when process env token exists")
+	}
+}
+
+func TestMaybeStartModelScopeGuideFromProviderSkipsWhenUserEnvExists(t *testing.T) {
+	app, _ := newTestApp(t)
+	t.Setenv(config.ModelScopeDefaultAPIKeyEnv, "")
+
+	prevLookup := lookupProviderUserEnvVar
+	lookupProviderUserEnvVar = func(key string) (string, bool, error) {
+		return "persisted-token", true, nil
+	}
+	t.Cleanup(func() {
+		lookupProviderUserEnvVar = prevLookup
+	})
+
+	if cmd, started := app.maybeStartModelScopeGuideFromProvider(config.ModelScopeName); started || cmd != nil {
+		t.Fatalf("expected guide not to start when user env token exists")
+	}
+}
+
+func TestMaybeStartModelScopeGuideFromProviderUsesGuideHTMLFile(t *testing.T) {
+	app, _ := newTestApp(t)
+	t.Setenv(config.ModelScopeDefaultAPIKeyEnv, "")
+
+	prevLookup := lookupProviderUserEnvVar
+	lookupProviderUserEnvVar = func(key string) (string, bool, error) {
+		return "", false, nil
+	}
+	t.Cleanup(func() {
+		lookupProviderUserEnvVar = prevLookup
+	})
+
+	guidePath := filepath.Join(app.configManager.BaseDir(), "modelscope-guide.html")
+	if err := os.MkdirAll(filepath.Dir(guidePath), 0o755); err != nil {
+		t.Fatalf("mkdir guide dir: %v", err)
+	}
+	if err := os.WriteFile(guidePath, []byte("<html></html>"), 0o644); err != nil {
+		t.Fatalf("write guide html: %v", err)
+	}
+
+	var opened string
+	prevOpen := openExternalResource
+	openExternalResource = func(target string) error {
+		opened = target
+		return nil
+	}
+	t.Cleanup(func() {
+		openExternalResource = prevOpen
+	})
+
+	cmd, started := app.maybeStartModelScopeGuideFromProvider(config.ModelScopeName)
+	if !started || cmd == nil {
+		t.Fatalf("expected modelscope guide to start with local guide html")
+	}
+	if app.modelScopeGuide == nil || app.modelScopeGuide.GuidePath != guidePath {
+		t.Fatalf("expected guide path %q, got %+v", guidePath, app.modelScopeGuide)
+	}
+
+	if _, ok := cmd().(modelScopeGuideOpenResultMsg); !ok {
+		t.Fatalf("expected open result msg from guide open command")
+	}
+	if opened != guidePath {
+		t.Fatalf("expected guide html opened first, got %q", opened)
+	}
+}
+
+func TestMaybeStartModelScopeGuideFromProviderSkipsWhenProviderConfigMissing(t *testing.T) {
+	cfg := newDefaultAppConfig()
+	cfg.Workdir = t.TempDir()
+	filtered := make([]config.ProviderConfig, 0, len(cfg.Providers))
+	for _, providerCfg := range cfg.Providers {
+		if !strings.EqualFold(providerCfg.Name, config.ModelScopeName) {
+			filtered = append(filtered, providerCfg)
+		}
+	}
+	cfg.Providers = filtered
+	if len(cfg.Providers) == 0 {
+		t.Fatalf("expected at least one provider after filtering modelscope")
+	}
+	cfg.SelectedProvider = cfg.Providers[0].Name
+	cfg.CurrentModel = cfg.Providers[0].Model
+
+	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runtime := newStubRuntime()
+	app, err := newApp(tuibootstrap.Container{
+		Config:        *cfg,
+		ConfigManager: manager,
+		Runtime:       runtime,
+		ProviderService: stubProviderService{
+			providers: []configstate.ProviderOption{
+				{
+					ID:   cfg.Providers[0].Name,
+					Name: cfg.Providers[0].Name,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("newApp() error = %v", err)
+	}
+
+	if cmd, started := app.maybeStartModelScopeGuideFromProvider(config.ModelScopeName); started || cmd != nil {
+		t.Fatalf("expected guide not to start when modelscope provider config is missing")
+	}
+}
+
+func TestResolveModelScopeGuidePathRejectsDirectory(t *testing.T) {
+	app, _ := newTestApp(t)
+	guidePath := filepath.Join(app.configManager.BaseDir(), "modelscope-guide.html")
+	if err := os.MkdirAll(guidePath, 0o755); err != nil {
+		t.Fatalf("mkdir guide dir: %v", err)
+	}
+
+	if got := app.resolveModelScopeGuidePath(); got != "" {
+		t.Fatalf("expected empty guide path when candidate is directory, got %q", got)
+	}
+}
+
+func TestResolveModelScopeGuidePathReturnsEmptyWhenBaseDirMissing(t *testing.T) {
+	cfg := newDefaultAppConfig()
+	cfg.Workdir = t.TempDir()
+	manager := config.NewManager(config.NewLoader("", cfg))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runtime := newStubRuntime()
+	app, err := newApp(tuibootstrap.Container{
+		Config:        *cfg,
+		ConfigManager: manager,
+		Runtime:       runtime,
+		ProviderService: stubProviderService{
+			providers: []configstate.ProviderOption{
+				{ID: cfg.SelectedProvider, Name: cfg.SelectedProvider},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("newApp() error = %v", err)
+	}
+
+	if got := app.resolveModelScopeGuidePath(); got != "" {
+		t.Fatalf("expected empty guide path when base dir is missing, got %q", got)
+	}
+}
+
+func TestHandleModelScopeGuideInputGuardBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if model, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("expected nil guide to ignore input")
+	} else if _, ok := model.(*App); !ok {
+		t.Fatalf("expected *App model when guide is nil, got %T", model)
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{Submitting: true, Step: modelScopeGuideStepPasteToken}
+	if model, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatalf("expected submitting guide to ignore input")
+	} else if _, ok := model.(*App); !ok {
+		t.Fatalf("expected *App model when submitting, got %T", model)
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{Step: modelScopeGuideStepToken}
+	app.state.ActivePicker = pickerModelScope
+	model, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatalf("expected cancel command to be nil")
+	}
+	ptr, ok := model.(*App)
+	if !ok {
+		t.Fatalf("expected *App after cancel, got %T", model)
+	}
+	if ptr.modelScopeGuide != nil || ptr.state.ActivePicker != pickerNone {
+		t.Fatalf("expected guide canceled and picker closed")
+	}
+}
+
+func TestHandleModelScopeGuideInputStepTransitionsAndEditing(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepGuide,
+		GuidePath:  "",
+	}
+
+	var opened []string
+	prevOpen := openExternalResource
+	openExternalResource = func(target string) error {
+		opened = append(opened, target)
+		return nil
+	}
+	t.Cleanup(func() {
+		openExternalResource = prevOpen
+	})
+
+	_, cmd := app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected guide step enter to open target")
+	}
+	_ = cmd()
+	if len(opened) != 1 || opened[0] != modelScopeLoginURL {
+		t.Fatalf("expected guide fallback to login url, got %v", opened)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepLogin
+	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = cmd()
+	if len(opened) != 2 || opened[1] != modelScopeLoginURL {
+		t.Fatalf("expected login step to open login url, got %v", opened)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepToken
+	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = cmd()
+	if len(opened) != 3 || opened[2] != modelScopeTokenURL {
+		t.Fatalf("expected token step to open token url, got %v", opened)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepPasteToken
+	app.modelScopeGuide.Token = ""
+	_, cmd = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected empty token submit to return nil command")
+	}
+	if !strings.Contains(app.modelScopeGuide.Error, "Token is required") {
+		t.Fatalf("expected token required error, got %q", app.modelScopeGuide.Error)
+	}
+
+	app.modelScopeGuide.Token = "abc"
+	_, _ = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyBackspace})
+	if app.modelScopeGuide.Token != "ab" {
+		t.Fatalf("expected backspace to trim token, got %q", app.modelScopeGuide.Token)
+	}
+	_, _ = app.handleModelScopeGuideInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" d ")})
+	if app.modelScopeGuide.Token != "ab d " {
+		t.Fatalf("expected runes sanitized into token, got %q", app.modelScopeGuide.Token)
+	}
+}
+
+func TestRunModelScopeGuideOpenGuardBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	if cmd := app.runModelScopeGuideOpen(" "); cmd != nil {
+		t.Fatalf("expected empty open target to return nil cmd")
+	}
+
+	prevOpen := openExternalResource
+	openExternalResource = func(target string) error {
+		return errors.New("open failed")
+	}
+	t.Cleanup(func() {
+		openExternalResource = prevOpen
+	})
+
+	cmd := app.runModelScopeGuideOpen("https://www.modelscope.cn/")
+	msg, ok := cmd().(modelScopeGuideOpenResultMsg)
+	if !ok {
+		t.Fatalf("expected open result msg, got %T", cmd())
+	}
+	if !strings.Contains(msg.Error, "open failed") {
+		t.Fatalf("expected open failure in message, got %q", msg.Error)
+	}
+}
+
+func TestHandleModelScopeGuideOpenResultMsgTransitionsAndErrors(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeLoginURL})
+
+	app.modelScopeGuide = &modelScopeGuideState{Step: modelScopeGuideStepGuide}
+	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeLoginURL})
+	if app.modelScopeGuide.Step != modelScopeGuideStepLogin {
+		t.Fatalf("expected guide step to move to login, got %v", app.modelScopeGuide.Step)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepLogin
+	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeTokenURL})
+	if app.modelScopeGuide.Step != modelScopeGuideStepToken {
+		t.Fatalf("expected login step to move to token, got %v", app.modelScopeGuide.Step)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepToken
+	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Target: modelScopeTokenURL})
+	if app.modelScopeGuide.Step != modelScopeGuideStepPasteToken {
+		t.Fatalf("expected token step to move to paste token, got %v", app.modelScopeGuide.Step)
+	}
+
+	app.handleModelScopeGuideOpenResultMsg(modelScopeGuideOpenResultMsg{Error: "boom"})
+	if app.state.StatusText != "ModelScope guide open failed" {
+		t.Fatalf("expected status text set on open error, got %q", app.state.StatusText)
+	}
+	if app.state.ExecutionError != "boom" {
+		t.Fatalf("expected execution error set on open error, got %q", app.state.ExecutionError)
+	}
+}
+
+func TestRunModelScopeGuideSubmitValidationAndRollbackErrorAggregation(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	msg := app.runModelScopeGuideSubmit(config.ModelScopeName, "MODELSCOPE_TEST", " ")()
+	result, ok := msg.(modelScopeGuideSubmitResultMsg)
+	if !ok || !strings.Contains(result.Error, "token is empty") {
+		t.Fatalf("expected empty token error, got %#v", msg)
+	}
+
+	msg = app.runModelScopeGuideSubmit(config.ModelScopeName, "bad env", "token")()
+	result, ok = msg.(modelScopeGuideSubmitResultMsg)
+	if !ok || !strings.Contains(strings.ToLower(result.Error), "env") {
+		t.Fatalf("expected env validation error, got %#v", msg)
+	}
+
+	msg = app.runModelScopeGuideSubmit(config.ModelScopeName, "PATH", "token")()
+	result, ok = msg.(modelScopeGuideSubmitResultMsg)
+	if !ok || !strings.Contains(result.Error, "protected") {
+		t.Fatalf("expected protected env error, got %#v", msg)
+	}
+
+	app.providerSvc = stubProviderService{selectErr: errors.New("select failed")}
+	msg = app.runModelScopeGuideSubmit(config.ModelScopeName, "MODELSCOPE_TEST_AGG", "token")()
+	result, ok = msg.(modelScopeGuideSubmitResultMsg)
+	if !ok || !strings.Contains(result.Error, "rollback selection") {
+		t.Fatalf("expected rollback aggregation in error, got %#v", msg)
+	}
+}
+
+func TestRollbackModelScopeGuideSelectionBranches(t *testing.T) {
+	if err := rollbackModelScopeGuideSelection(nil, "openai", "model"); err != nil {
+		t.Fatalf("expected nil provider controller to skip rollback, got %v", err)
+	}
+	if err := rollbackModelScopeGuideSelection(stubProviderService{}, " ", "model"); err != nil {
+		t.Fatalf("expected empty provider id to skip rollback, got %v", err)
+	}
+
+	if err := rollbackModelScopeGuideSelection(stubProviderService{}, "openai", ""); err != nil {
+		t.Fatalf("expected no model rollback to pass, got %v", err)
+	}
+
+	if err := rollbackModelScopeGuideSelection(stubProviderService{selectErr: errors.New("nope")}, "openai", "m1"); err == nil ||
+		!strings.Contains(err.Error(), "rollback provider selection") {
+		t.Fatalf("expected rollback provider selection error, got %v", err)
+	}
+
+	if err := rollbackModelScopeGuideSelection(stubProviderService{setModelErr: errors.New("set-model")}, "openai", "m1"); err == nil ||
+		!strings.Contains(err.Error(), "rollback model selection") {
+		t.Fatalf("expected rollback model selection error, got %v", err)
+	}
+}
+
+func TestHandleModelScopeGuideSubmitResultMsgBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	if cmd := app.handleModelScopeGuideSubmitResultMsg(modelScopeGuideSubmitResultMsg{}); cmd != nil {
+		t.Fatalf("expected nil guide to return nil command")
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "token",
+		Submitting: true,
+	}
+	if cmd := app.handleModelScopeGuideSubmitResultMsg(modelScopeGuideSubmitResultMsg{Error: "network timeout"}); cmd != nil {
+		t.Fatalf("expected non-auth error not to open fallback page")
+	}
+	if app.modelScopeGuide.Step != modelScopeGuideStepPasteToken || app.modelScopeGuide.Submitting {
+		t.Fatalf("expected error to keep paste step and clear submitting")
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "token",
+		Submitting: true,
+	}
+	app.providerSvc = stubProviderService{
+		listErr:       errors.New("list providers failed"),
+		listModelsErr: errors.New("list models failed"),
+	}
+	cmd := app.handleModelScopeGuideSubmitResultMsg(modelScopeGuideSubmitResultMsg{
+		Selection: configstate.Selection{ProviderID: "", ModelID: "m-1"},
+	})
+	if cmd == nil {
+		t.Fatalf("expected catalog refresh command even when picker refresh fails")
+	}
+	if !strings.EqualFold(app.state.CurrentProvider, config.ModelScopeName) || app.state.CurrentModel != "m-1" {
+		t.Fatalf("expected provider/model set from guide+selection, got provider=%q model=%q",
+			app.state.CurrentProvider, app.state.CurrentModel)
+	}
+	var providerRefreshErr, modelRefreshErr bool
+	for _, entry := range app.activities {
+		if entry.Title == "Failed to refresh providers" {
+			providerRefreshErr = true
+		}
+		if entry.Title == "Failed to refresh models" {
+			modelRefreshErr = true
+		}
+	}
+	if !providerRefreshErr || !modelRefreshErr {
+		t.Fatalf("expected refresh failure activities, got %+v", app.activities)
+	}
+}
+
+func TestIsModelScopeAuthOrPermissionError(t *testing.T) {
+	if isModelScopeAuthOrPermissionError("") {
+		t.Fatalf("expected empty error not to be auth/permission error")
+	}
+	if isModelScopeAuthOrPermissionError("network timeout") {
+		t.Fatalf("expected generic timeout not to match auth/permission keywords")
+	}
+	for _, msg := range []string{
+		"401 unauthorized",
+		"forbidden by policy",
+		"需要实名认证",
+		"aliyun binding required",
+	} {
+		if !isModelScopeAuthOrPermissionError(msg) {
+			t.Fatalf("expected auth/permission match for %q", msg)
+		}
+	}
+}
+
 func TestUpdatePickerRoutesToProviderAddFormHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()

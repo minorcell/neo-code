@@ -3,6 +3,7 @@ package infra
 import (
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,5 +213,151 @@ func TestNormalizeOpenResourceTargetRejectsInvalidFileURLTargets(t *testing.T) {
 				t.Fatalf("normalizeOpenResourceTarget(%q) error = %v, want contains %q", tt.target, err, tt.errorPart)
 			}
 		})
+	}
+}
+
+func TestOpenExternalResourceRunsCommandAndReturnsRunError(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "guide.html")
+	if err := os.WriteFile(filePath, []byte("guide"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	oldGOOS := runtimeGOOSForOpenResource
+	oldExec := execCommandForOpenResource
+	runtimeGOOSForOpenResource = "linux"
+	t.Cleanup(func() {
+		runtimeGOOSForOpenResource = oldGOOS
+		execCommandForOpenResource = oldExec
+	})
+
+	var gotName string
+	var gotArgs []string
+	execCommandForOpenResource = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return exec.Command("sh", "-c", "exit 0")
+	}
+
+	if err := OpenExternalResource(filePath); err != nil {
+		t.Fatalf("OpenExternalResource() error = %v", err)
+	}
+	if gotName != "xdg-open" {
+		t.Fatalf("expected command xdg-open, got %q", gotName)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != filePath {
+		t.Fatalf("unexpected args: %v", gotArgs)
+	}
+
+	execCommandForOpenResource = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 7")
+	}
+	err := OpenExternalResource(filePath)
+	if err == nil || !strings.Contains(err.Error(), "open resource") {
+		t.Fatalf("expected wrapped run error, got %v", err)
+	}
+
+	if err := OpenExternalResource(" "); err == nil || !strings.Contains(err.Error(), "target is empty") {
+		t.Fatalf("expected empty target error, got %v", err)
+	}
+}
+
+func TestFileURLToLocalPathGuardBranches(t *testing.T) {
+	if _, err := fileURLToLocalPath(nil); err == nil || !strings.Contains(err.Error(), "invalid file url") {
+		t.Fatalf("expected invalid file url error, got %v", err)
+	}
+
+	oldGOOS := runtimeGOOSForOpenResource
+	runtimeGOOSForOpenResource = "windows"
+	t.Cleanup(func() {
+		runtimeGOOSForOpenResource = oldGOOS
+	})
+
+	parsed := &url.URL{Scheme: "file", Host: "C:", Path: "/Users/test/guide.html"}
+	got, err := fileURLToLocalPath(parsed)
+	if err != nil {
+		t.Fatalf("fileURLToLocalPath() error = %v", err)
+	}
+	if !strings.HasPrefix(got, "C:") || !strings.Contains(got, "Users") {
+		t.Fatalf("unexpected windows path result %q", got)
+	}
+
+	parsed = &url.URL{Scheme: "file", Path: "/D:/workspace/guide.html"}
+	got, err = fileURLToLocalPath(parsed)
+	if err != nil {
+		t.Fatalf("fileURLToLocalPath() windows prefixed path error = %v", err)
+	}
+	if strings.HasPrefix(got, "/D:") || !strings.HasPrefix(got, "D:") {
+		t.Fatalf("expected /D:/... prefix to be normalized, got %q", got)
+	}
+}
+
+func TestWindowsDriveHelperFunctions(t *testing.T) {
+	testsPrefix := []struct {
+		input string
+		want  bool
+	}{
+		{input: "/C:/tmp/a.txt", want: true},
+		{input: "/z:/tmp/a.txt", want: true},
+		{input: "C:/tmp/a.txt", want: false},
+		{input: "/12/tmp", want: false},
+	}
+	for _, tt := range testsPrefix {
+		if got := hasWindowsFileURLDrivePrefix(tt.input); got != tt.want {
+			t.Fatalf("hasWindowsFileURLDrivePrefix(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+
+	testsHost := []struct {
+		input string
+		want  bool
+	}{
+		{input: "C:", want: true},
+		{input: "d:", want: true},
+		{input: "cd", want: false},
+		{input: "C:/", want: false},
+	}
+	for _, tt := range testsHost {
+		if got := hasWindowsDriveHost(tt.input); got != tt.want {
+			t.Fatalf("hasWindowsDriveHost(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeOpenResourceLocalPathGuardBranches(t *testing.T) {
+	if _, err := normalizeOpenResourceLocalPath(" "); err == nil || !strings.Contains(err.Error(), "local path is empty") {
+		t.Fatalf("expected empty local path error, got %v", err)
+	}
+
+	oldAbs := absPathForOpenResource
+	absPathForOpenResource = func(path string) (string, error) {
+		return "", os.ErrInvalid
+	}
+	t.Cleanup(func() {
+		absPathForOpenResource = oldAbs
+	})
+
+	if _, err := normalizeOpenResourceLocalPath("relative/path"); err == nil || !strings.Contains(err.Error(), "resolve absolute path") {
+		t.Fatalf("expected absolute path resolver error, got %v", err)
+	}
+}
+
+func TestFileURLToLocalPathErrorBranches(t *testing.T) {
+	oldGOOS := runtimeGOOSForOpenResource
+	runtimeGOOSForOpenResource = "linux"
+	t.Cleanup(func() {
+		runtimeGOOSForOpenResource = oldGOOS
+	})
+
+	if _, err := fileURLToLocalPath(&url.URL{Scheme: "file", Host: "remote", Path: "/tmp/a.txt"}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported file url host") {
+		t.Fatalf("expected unsupported host error, got %v", err)
+	}
+	if _, err := fileURLToLocalPath(&url.URL{Scheme: "file", Host: "localhost", Path: ""}); err == nil ||
+		!strings.Contains(err.Error(), "file url path is empty") {
+		t.Fatalf("expected empty file url path error, got %v", err)
+	}
+	if _, err := fileURLToLocalPath(&url.URL{Scheme: "file", Path: "/tmp/%zz"}); err == nil ||
+		!strings.Contains(err.Error(), "decode file url path") {
+		t.Fatalf("expected decode file url path error, got %v", err)
 	}
 }
